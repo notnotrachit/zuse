@@ -67,6 +67,9 @@ export interface SessionDomainApi {
 		readonly afterSequence?: number;
 	}) => Stream.Stream<StoredEvent, SessionDomainError>;
 	readonly currentSequence: Effect.Effect<number, SessionDomainError>;
+	readonly currentStreamVersion: (
+		streamId: string,
+	) => Effect.Effect<number, SessionDomainError>;
 }
 
 export class SessionDomain extends Context.Service<
@@ -168,15 +171,25 @@ export const makeSessionDomain = Effect.fn("SessionDomain.make")(function* (
 				// Attach live delivery before observing the durable head. Events that
 				// commit during snapshot/replay are retained by this subscription.
 				const subscription = yield* PubSub.subscribe(eventHub);
-				const captured = yield* dispatchStorage.events(streamId);
 				const throughVersion =
-					captured[captured.length - 1]?.streamVersion ?? 0;
+					yield* dispatchStorage.currentStreamVersion(streamId);
 				const retainedVersion = afterVersion ?? 0;
 				const needsSnapshot =
 					!hasProjection ||
 					afterVersion === undefined ||
 					retainedVersion > throughVersion ||
 					throughVersion - retainedVersion > snapshotGap;
+				const captured = needsSnapshot
+					? yield* dispatchStorage.eventsInVersionRange(
+							streamId,
+							0,
+							throughVersion,
+						)
+					: yield* dispatchStorage.eventsInVersionRange(
+							streamId,
+							retainedVersion,
+							throughVersion,
+						);
 				const prefix: SessionSynchronizationRecord[] = needsSnapshot
 					? [{ kind: "snapshot", throughVersion, events: captured }]
 					: captured
@@ -214,6 +227,8 @@ export const makeSessionDomain = Effect.fn("SessionDomain.make")(function* (
 			SELECT COALESCE(MAX(sequence), 0) AS sequence
 			FROM events WHERE stream_kind = 'session'
 		`.pipe(Effect.map((rows) => rows[0]?.sequence ?? 0)),
+		currentStreamVersion: (streamId) =>
+			dispatchStorage.currentStreamVersion(streamId),
 		dispatch: Effect.fn("SessionDomain.dispatch")(function* (
 			input: DispatchInput,
 		) {
