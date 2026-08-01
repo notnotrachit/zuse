@@ -98,6 +98,13 @@ const supervisor = createConnectionSupervisor<
 							await requestBrowserWebSocketUrl(),
 							WIRE_PROTOCOL_VERSION,
 						),
+						{
+							onClose: (event) => {
+								rendererEntry?.reportFailure(
+									new Error(`WebSocket closed (${event.code}).`),
+								);
+							},
+						},
 					);
 		return instrumentRendererRpcClient(
 			await makeRpcClientSession(protocolLayer, MemoizeRpcs, {
