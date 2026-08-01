@@ -3,7 +3,11 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { NodeHttpServer } from "@effect/platform-node";
 import { AttachmentService } from "@zuse/agents/kernel/attachment-service";
-import { WIRE_PROTOCOL_VERSION } from "@zuse/contracts";
+import { MemoizeRpcs, WIRE_PROTOCOL_VERSION } from "@zuse/contracts";
+import {
+	makeMeasuredJsonRpcSerialization,
+	makeRpcPayloadReporter,
+} from "@zuse/utils/rpc-payload-metrics";
 import { Effect, Layer, Schema } from "effect";
 import {
 	HttpRouter,
@@ -68,6 +72,10 @@ export type WsServerListeningAddress = {
 export type WsServerProtocolOptions = {
 	readonly port: number;
 	readonly host?: string;
+	/** Enables negotiated per-message compression. Defaults to true. */
+	readonly compression?: boolean;
+	/** Maximum inflated WebSocket message size. Defaults to 64 MiB. */
+	readonly maxPayloadBytes?: number;
 	readonly onDiagnostic?: WsDiagnostic;
 	readonly onListening?: (address: WsServerListeningAddress) => void;
 	readonly onPairing?: (pairing: {
@@ -487,6 +495,12 @@ export const wsServerProtocolLayer = (
 					return yield* browserClientApp(request, opts);
 				}
 				const requestUrl = new URL(request.url, "http://localhost");
+				const receivedVersion = Number(
+					requestUrl.searchParams.get("wireVersion"),
+				);
+				const diagnosticWireVersion = Number.isFinite(receivedVersion)
+					? receivedVersion
+					: null;
 				const ticket = requestUrl.searchParams.get("ticket");
 				const ticketCredential =
 					ticket === null ? null : tickets.consume(ticket);
@@ -496,9 +510,15 @@ export const wsServerProtocolLayer = (
 						: (ticketCredential ?? bearerFromRequest(request));
 				yield* Effect.sync(() =>
 					log("ws.request", {
-						url: request.url,
+						path: requestUrl.pathname,
+						wireVersion: diagnosticWireVersion,
 						protected: auth.policy === "protected",
 						hasToken: token !== null,
+						compressionConfigured: opts.compression !== false,
+						compressionOffered:
+							request.headers["sec-websocket-extensions"]?.includes(
+								"permessage-deflate",
+							) ?? false,
 					}),
 				);
 				if (
@@ -515,15 +535,13 @@ export const wsServerProtocolLayer = (
 							.pipe(Effect.orElseSucceed(() => false)));
 					yield* Effect.sync(() =>
 						log(ok ? "ws.auth.ok" : "ws.auth.fail", {
-							url: request.url,
+							path: requestUrl.pathname,
+							wireVersion: diagnosticWireVersion,
 							hasToken: token !== null,
 						}),
 					);
 					if (!ok) return yield* json({ error: "unauthorized" }, 401);
 				}
-				const receivedVersion = Number(
-					requestUrl.searchParams.get("wireVersion"),
-				);
 				if (receivedVersion !== WIRE_PROTOCOL_VERSION) {
 					log("ws.protocol.reject", {
 						expectedVersion: WIRE_PROTOCOL_VERSION,
@@ -696,9 +714,40 @@ export const wsServerProtocolLayer = (
 				{
 					port: opts.port,
 					host: opts.host ?? "127.0.0.1",
+					webSocketServerOptions: {
+						maxPayload: opts.maxPayloadBytes ?? 64 * 1024 * 1024,
+						...(opts.compression === false
+							? {}
+							: {
+									perMessageDeflate: {
+										clientNoContextTakeover: true,
+										concurrencyLimit: 4,
+										serverNoContextTakeover: true,
+										threshold: 2_048,
+										zlibDeflateOptions: { level: 3 },
+									},
+								}),
+					},
 				},
 			),
 		),
-		Layer.provide(RpcSerialization.layerJson),
+		Layer.provide(
+			Layer.succeed(
+				RpcSerialization.RpcSerialization,
+				makeMeasuredJsonRpcSerialization({
+					encodeDirection: "outbound",
+					decodeDirection: "inbound",
+					allowedRpcLabels: MemoizeRpcs.requests,
+					record: makeRpcPayloadReporter({
+						transport: "websocket",
+						onReport: (report) =>
+							opts.onDiagnostic?.("rpc.payload.summary", {
+								...report,
+								compressionConfigured: opts.compression !== false,
+							}),
+					}).record,
+				}),
+			),
+		),
 		Layer.orDie,
 	);

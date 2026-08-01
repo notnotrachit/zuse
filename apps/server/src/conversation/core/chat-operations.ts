@@ -3,6 +3,7 @@ import {
 	type ChatId,
 	ChatNotArchivedError,
 	ChatNotFoundError,
+	type FolderId,
 } from "@zuse/contracts";
 import type { ChatCommand } from "@zuse/domain/chat/commands";
 import { Effect, PubSub, Stream } from "effect";
@@ -11,6 +12,7 @@ import type {
 	ConversationOperations,
 	CreateChatInput,
 } from "../services/conversation-services.ts";
+import type { ChatChangeEvent } from "./chat-change-event.ts";
 import {
 	type ChatRow,
 	chatFromRow,
@@ -25,13 +27,55 @@ export interface ChatOperationsOptions {
 	readonly currentTimestamp: Effect.Effect<number>;
 	readonly createSession: ConversationOperations["createSession"];
 	readonly broadcastChat: (chat: Chat) => Effect.Effect<void>;
-	readonly chatChangesHub: PubSub.PubSub<Chat>;
+	readonly chatChangesHub: PubSub.PubSub<ChatChangeEvent>;
+	readonly currentChatRevision: () => number;
 	readonly dispatchChatCommand: (
 		chatId: ChatId,
 		command: ChatCommand,
 		commandId?: string,
 	) => Effect.Effect<void>;
 }
+
+const sameTimestamp = (left: Date | null, right: Date | null): boolean =>
+	left?.getTime() === right?.getTime();
+
+const sameChatSummary = (left: Chat, right: Chat): boolean =>
+	left.id === right.id &&
+	left.projectId === right.projectId &&
+	left.worktreeId === right.worktreeId &&
+	left.title === right.title &&
+	left.titleProvenance === right.titleProvenance &&
+	left.activeSessionId === right.activeSessionId &&
+	left.originSessionId === right.originSessionId &&
+	sameTimestamp(left.archivedAt, right.archivedAt) &&
+	sameTimestamp(left.lastMessageAt, right.lastMessageAt) &&
+	sameTimestamp(left.lastReadAt, right.lastReadAt) &&
+	left.createdAt.getTime() === right.createdAt.getTime() &&
+	left.updatedAt.getTime() === right.updatedAt.getTime();
+
+const sameChatCatalog = (
+	left: ReadonlyArray<Chat>,
+	right: ReadonlyArray<Chat>,
+): boolean => {
+	if (left.length !== right.length) return false;
+	const rightById = new Map(right.map((chat) => [chat.id, chat]));
+	return left.every((chat) => {
+		const candidate = rightById.get(chat.id);
+		return candidate !== undefined && sameChatSummary(chat, candidate);
+	});
+};
+
+const chatsByProject = (
+	chats: ReadonlyArray<Chat>,
+): ReadonlyMap<FolderId, ReadonlyArray<Chat>> => {
+	const grouped = new Map<FolderId, Chat[]>();
+	for (const chat of chats) {
+		const projectChats = grouped.get(chat.projectId);
+		if (projectChats === undefined) grouped.set(chat.projectId, [chat]);
+		else projectChats.push(chat);
+	}
+	return grouped;
+};
 
 export const makeChatOperations = (options: ChatOperationsOptions) => {
 	const {
@@ -40,6 +84,7 @@ export const makeChatOperations = (options: ChatOperationsOptions) => {
 		createSession,
 		broadcastChat,
 		chatChangesHub,
+		currentChatRevision,
 		dispatchChatCommand,
 	} = options;
 	const lookupChat = (chatId: ChatId): Effect.Effect<Chat, ChatNotFoundError> =>
@@ -77,6 +122,26 @@ export const makeChatOperations = (options: ChatOperationsOptions) => {
             `.pipe(Effect.orDie);
 			return rows.map(chatFromRow);
 		});
+
+	const listAllChats = Effect.fn("ChatOperations.listAllChats")(function* () {
+		const rows = yield* sql<ChatRow>`
+			SELECT id, project_id, worktree_id, title, title_provenance, active_session_id, origin_session_id,
+			       archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at
+			FROM chats
+			WHERE archived_at IS NULL
+			ORDER BY project_id ASC, updated_at DESC, id ASC
+		`;
+		return rows.map(chatFromRow);
+	});
+
+	const readCatalogRevision = Effect.fn("ChatOperations.readCatalogRevision")(
+		function* () {
+			const rows = yield* sql<{ readonly revision: number }>`
+				SELECT revision FROM chat_catalog_revision WHERE id = 1
+			`;
+			return rows[0]?.revision ?? 0;
+		},
+	);
 
 	const getChat: ConversationOperations["getChat"] = (chatId) =>
 		lookupChat(chatId);
@@ -123,14 +188,77 @@ export const makeChatOperations = (options: ChatOperationsOptions) => {
 				const sub = yield* PubSub.subscribe(chatChangesHub);
 				// Subscribe before reading the snapshot. A mutation that lands during
 				// the query is present in the snapshot, queued in the subscription, or
-				// both; renderer upserts make the duplicate harmless.
+				// both; the ordered concat ensures a queued fresh patch always lands
+				// after the possibly older snapshot.
 				const snapshot = yield* listChats(projectId, false);
 				const live = Stream.fromSubscription(sub).pipe(
-					Stream.filter((chat) => chat.projectId === projectId),
+					Stream.filter((event) => event.projectId === projectId),
+					Stream.map((event) => event.change),
 				);
-				return Stream.concat(Stream.fromIterable(snapshot), live);
+				return Stream.concat(
+					Stream.succeed({
+						_tag: "snapshot" as const,
+						chats: snapshot,
+					}),
+					live,
+				);
 			}),
 		);
+
+	const runChatReconciliation = Effect.fn(
+		"ChatOperations.runChatReconciliation",
+	)(function* () {
+		let previous: ReadonlyMap<FolderId, ReadonlyArray<Chat>> = new Map();
+		let previousCatalogRevision: number | null = null;
+		yield* Effect.forever(
+			Effect.gen(function* () {
+				const catalogRevisionResult = yield* readCatalogRevision().pipe(
+					Effect.result,
+				);
+				if (catalogRevisionResult._tag === "Failure") {
+					yield* Effect.logWarning(
+						"Chat reconciliation revision query failed; retrying",
+					).pipe(Effect.annotateLogs("error", catalogRevisionResult.failure));
+					yield* Effect.sleep("1 second");
+					return;
+				}
+				const catalogRevision = catalogRevisionResult.success;
+				if (previousCatalogRevision === catalogRevision) {
+					yield* Effect.sleep("1 second");
+					return;
+				}
+				const revision = currentChatRevision();
+				const result = yield* listAllChats().pipe(Effect.result);
+				if (result._tag === "Failure") {
+					yield* Effect.logWarning(
+						"Chat reconciliation query failed; retrying",
+					).pipe(Effect.annotateLogs("error", result.failure));
+					yield* Effect.sleep("1 second");
+					return;
+				}
+				const current = chatsByProject(result.success);
+				// A local mutation published a precise patch while the catalog query
+				// was in flight. Discard this potentially older snapshot; the next
+				// pass will reconcile from the durable state.
+				yield* Effect.sync(() => {
+					if (currentChatRevision() !== revision) return;
+					const projectIds = new Set([...previous.keys(), ...current.keys()]);
+					for (const projectId of projectIds) {
+						const before = previous.get(projectId) ?? [];
+						const after = current.get(projectId) ?? [];
+						if (sameChatCatalog(before, after)) continue;
+						PubSub.publishUnsafe(chatChangesHub, {
+							projectId,
+							change: { _tag: "snapshot", chats: after },
+						});
+					}
+					previous = current;
+					previousCatalogRevision = catalogRevision;
+				});
+				yield* Effect.sleep("1 second");
+			}),
+		);
+	});
 
 	/**
 	 * Create a chat row AND its initial session in one effect. Both rows
@@ -227,7 +355,6 @@ export const makeChatOperations = (options: ChatOperationsOptions) => {
 			const initialMessage = hasInitial
 				? yield* lookupInitialMessage(initialSession.id)
 				: null;
-			yield* broadcastChat(chat);
 			return { chat, initialSession, initialMessage };
 		});
 
@@ -237,6 +364,7 @@ export const makeChatOperations = (options: ChatOperationsOptions) => {
 		getChat,
 		getArchivePreview,
 		streamChatChanges,
+		runChatReconciliation,
 		createChat,
 	};
 };

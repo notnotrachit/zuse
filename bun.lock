@@ -40,6 +40,7 @@
         "@types/node": "catalog:",
         "@zuse/contracts": "*",
         "@zuse/ssh": "*",
+        "@zuse/utils": "*",
         "@zusehq/server": "*",
         "effect": "catalog:",
         "electron": "42.4.1",
@@ -242,6 +243,7 @@
         "@types/node": "catalog:",
         "@zuse/agents": "*",
         "@zuse/analytics": "*",
+        "@zuse/client-runtime": "*",
         "@zuse/contracts": "*",
         "@zuse/domain": "*",
         "@zuse/git": "*",
@@ -475,10 +477,10 @@
       "name": "@zusehq/serve",
       "version": "0.1.0",
       "bin": {
-        "zuse": "./dist/bin.mjs",
+        "zuse": "dist/bin.mjs",
       },
       "dependencies": {
-        "@zusehq/server": "0.0.0",
+        "@zusehq/server": "0.1.0",
       },
       "devDependencies": {
         "@repo/typescript-config": "*",
@@ -567,10 +569,10 @@
       "name": "zusehq",
       "version": "0.1.0",
       "bin": {
-        "zusehq": "./dist/bin.mjs",
+        "zusehq": "dist/bin.mjs",
       },
       "dependencies": {
-        "@zusehq/serve": "0.0.0",
+        "@zusehq/serve": "0.1.0",
       },
       "devDependencies": {
         "@repo/typescript-config": "*",
@@ -625,6 +627,7 @@
   },
   "patchedDependencies": {
     "@legendapp/list@3.3.3": "patches/@legendapp%2Flist@3.3.3.patch",
+    "@effect/platform-node@4.0.0-beta.97": "patches/@effect%2Fplatform-node@4.0.0-beta.97.patch",
   },
   "overrides": {
     "@effect/platform-node": "4.0.0-beta.97",
@@ -5315,8 +5318,6 @@
     "vitest/vite": ["vite@6.4.2", "http://registry.npmjs.org/vite/-/vite-6.4.2.tgz", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-2N/55r4JDJ4gdrCvGgINMy+HH3iRpNIz8K6SFwVsA+JbQScLiC+clmAxBgwiSPgcG9U15QmvqCGWzMbqda5zGQ=="],
 
     "web/@types/node": ["@types/node@20.19.39", "http://registry.npmjs.org/@types/node/-/node-20.19.39.tgz", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-orrrD74MBUyK8jOAD/r0+lfa1I2MO6I+vAkmAWzMYbCcgrN4lCrmK52gRFQq/JRxfYPfonkr4b0jcY7Olqdqbw=="],
-
-    "web/tailwindcss": ["tailwindcss@4.3.1", "", {}, "sha512-hk+TB1m+K8CYNrP6rjQaq/Y+4Zylwpa87mLYBKCunwnnQ9p+fHb7kmSfGqyEJoxF/O6CDyABWVFEafNSYKll+Q=="],
 
     "wrap-ansi/strip-ansi": ["strip-ansi@6.0.1", "http://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A=="],
 

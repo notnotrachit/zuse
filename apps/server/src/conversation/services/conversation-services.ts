@@ -14,6 +14,7 @@ import type {
 	ChatId,
 	ChatNotArchivedError,
 	ChatNotFoundError,
+	ChatSummaryChange,
 	ChatUnarchiveResult,
 	ComposerAnnotation,
 	ComposerInput,
@@ -379,12 +380,13 @@ export interface ConversationOperations {
 	) => Effect.Effect<Chat, ChatNotFoundError>;
 
 	/**
-	 * Live feed of chat-row changes (title / worktree) for one project. Emits
-	 * only live patches — no backfill — so the renderer keeps its `chat.list`
-	 * snapshot and applies updates (e.g. the background auto-namer rewriting a
-	 * title) on top. Never fails.
+	 * Snapshot-plus-live feed of chat-row changes for one project. Immediate
+	 * in-process patches keep local mutations fast; periodic catalog snapshots
+	 * reconcile durable writes made by another protocol runtime or process.
 	 */
-	readonly streamChatChanges: (projectId: FolderId) => Stream.Stream<Chat>;
+	readonly streamChatChanges: (
+		projectId: FolderId,
+	) => Stream.Stream<ChatSummaryChange>;
 
 	/**
 	 * Update the chat's worktree. Allowed only when no session in the chat

@@ -45,6 +45,7 @@ import { Migration0041ChatArchiveJobs } from "./migrations/0041_chat_archive_job
 import { Migration0042AnalyticsOutbox } from "./migrations/0042_analytics_outbox.ts";
 import { Migration0043NameProvenance } from "./migrations/0043_name_provenance.ts";
 import { Migration0044ChatCreationOperations } from "./migrations/0044_chat_creation_operations.ts";
+import { Migration0045ChatCatalogRevision } from "./migrations/0045_chat_catalog_revision.ts";
 
 /**
  * Runs every numbered migration on boot. `fromRecord` keys must match
@@ -106,6 +107,7 @@ const MigrationDefinitions = {
 	"0042_analytics_outbox": Migration0042AnalyticsOutbox,
 	"0043_name_provenance": Migration0043NameProvenance,
 	"0044_chat_creation_operations": Migration0044ChatCreationOperations,
+	"0045_chat_catalog_revision": Migration0045ChatCatalogRevision,
 } as const;
 
 export const MigrationsLive = Layer.effectDiscard(

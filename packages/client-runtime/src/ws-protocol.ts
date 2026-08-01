@@ -27,7 +27,13 @@ export type WsProtocolLayerOptions = {
 		url: string,
 		protocols?: string | Array<string>,
 	) => globalThis.WebSocket;
-	readonly onClose?: (event: CloseEvent) => void;
+	readonly onClose?: (event: WebSocketCloseInfo) => void;
+};
+
+export type WebSocketCloseInfo = {
+	readonly code: number;
+	readonly reason: string;
+	readonly wasClean: boolean;
 };
 
 type WebSocketConstructor = NonNullable<
@@ -37,11 +43,22 @@ type WebSocketConstructor = NonNullable<
 export const observeWebSocketConstructor =
 	(
 		makeWebSocket: WebSocketConstructor,
-		onClose: (event: CloseEvent) => void,
+		onClose: (event: WebSocketCloseInfo) => void,
 	): WebSocketConstructor =>
 	(url, protocols) => {
 		const socket = makeWebSocket(url, protocols);
-		socket.addEventListener("close", onClose, { once: true });
+		socket.addEventListener(
+			"close",
+			(event) => {
+				const close = event as unknown as WebSocketCloseInfo;
+				onClose({
+					code: close.code,
+					reason: close.reason,
+					wasClean: close.wasClean,
+				});
+			},
+			{ once: true },
+		);
 		return socket;
 	};
 

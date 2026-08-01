@@ -2,6 +2,7 @@ import type { ConnectionSnapshot } from "@zuse/client-runtime/supervisor";
 import type {
 	Chat,
 	ChatId,
+	ChatSummaryChange,
 	Folder,
 	FolderId,
 	Session,
@@ -652,6 +653,139 @@ describe("chats store live changes", () => {
 		await stopChatChangeStream(reconnectProjectId);
 	});
 
+	it("hydrates from chat.list without waiting for the live stream snapshot", async () => {
+		subscribeRendererRpcConnection.mockImplementation((listener) => {
+			listener({
+				key: "renderer",
+				status: "connected",
+				generation: 1,
+				attempt: 0,
+				error: null,
+			});
+			return vi.fn();
+		});
+		rpcClientFactory.mockReturnValue({
+			"chat.list": () => Effect.succeed([reconnectChat]),
+			"chat.streamChanges": () => Stream.never,
+		});
+		useChatsStore.setState({
+			chatsByProject: {},
+			loadingByProject: {},
+			error: null,
+		});
+
+		await useChatsStore.getState().hydrate(reconnectProjectId);
+
+		await vi.waitFor(
+			() =>
+				expect(
+					useChatsStore.getState().chatsByProject[reconnectProjectId],
+				).toEqual([reconnectChat]),
+			{ timeout: 1_500 },
+		);
+		expect(useChatsStore.getState().loadingByProject[reconnectProjectId]).toBe(
+			false,
+		);
+	});
+
+	it("does not let a stale fallback replace a newer stream snapshot", async () => {
+		let publishSnapshot: ((chats: ReadonlyArray<Chat>) => void) | undefined;
+		const fallback = deferred<ReadonlyArray<Chat>>();
+		const listChats = vi.fn(() => Effect.promise(() => fallback.promise));
+		subscribeRendererRpcConnection.mockImplementation((listener) => {
+			listener({
+				key: "renderer",
+				status: "connected",
+				generation: 1,
+				attempt: 0,
+				error: null,
+			});
+			return vi.fn();
+		});
+		rpcClientFactory.mockReturnValue({
+			"chat.list": listChats,
+			"chat.streamChanges": () =>
+				Stream.callback<ChatSummaryChange>((queue) =>
+					Effect.sync(() => {
+						publishSnapshot = (chats) =>
+							Queue.offerUnsafe(queue, { _tag: "snapshot", chats });
+					}),
+				),
+		});
+		useChatsStore.setState({
+			chatsByProject: {},
+			loadingByProject: {},
+			error: null,
+		});
+
+		await useChatsStore.getState().hydrate(reconnectProjectId);
+		await vi.waitFor(() => expect(listChats).toHaveBeenCalledTimes(1), {
+			timeout: 1_500,
+		});
+		publishSnapshot?.([reconnectChat]);
+		await vi.waitFor(() =>
+			expect(
+				useChatsStore.getState().chatsByProject[reconnectProjectId],
+			).toEqual([reconnectChat]),
+		);
+
+		fallback.resolve([]);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(useChatsStore.getState().chatsByProject[reconnectProjectId]).toEqual(
+			[reconnectChat],
+		);
+	});
+
+	it("ignores a fallback error after a newer stream snapshot", async () => {
+		let publishSnapshot: ((chats: ReadonlyArray<Chat>) => void) | undefined;
+		const fallback = deferred<ReadonlyArray<Chat>>();
+		const listChats = vi.fn(() => Effect.promise(() => fallback.promise));
+		subscribeRendererRpcConnection.mockImplementation((listener) => {
+			listener({
+				key: "renderer",
+				status: "connected",
+				generation: 1,
+				attempt: 0,
+				error: null,
+			});
+			return vi.fn();
+		});
+		rpcClientFactory.mockReturnValue({
+			"chat.list": listChats,
+			"chat.streamChanges": () =>
+				Stream.callback<ChatSummaryChange>((queue) =>
+					Effect.sync(() => {
+						publishSnapshot = (chats) =>
+							Queue.offerUnsafe(queue, { _tag: "snapshot", chats });
+					}),
+				),
+		});
+		useChatsStore.setState({
+			chatsByProject: {},
+			loadingByProject: {},
+			error: null,
+		});
+
+		await useChatsStore.getState().hydrate(reconnectProjectId);
+		await vi.waitFor(() => expect(listChats).toHaveBeenCalledTimes(1), {
+			timeout: 1_500,
+		});
+		publishSnapshot?.([reconnectChat]);
+		await vi.waitFor(() =>
+			expect(
+				useChatsStore.getState().chatsByProject[reconnectProjectId],
+			).toEqual([reconnectChat]),
+		);
+
+		fallback.reject(new Error("stale fallback failed"));
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(useChatsStore.getState().error).toBeNull();
+	});
+
 	it("reconnects a completed change stream and reconciles its snapshot", async () => {
 		let streamAttempts = 0;
 		let observeConnection: ((snapshot: ConnectionSnapshot) => void) | undefined;
@@ -671,14 +805,15 @@ describe("chats store live changes", () => {
 			return unsubscribeConnection;
 		});
 		rpcClientFactory.mockReturnValue({
-			"chat.list": () => Effect.fail(new Error("initial list failed")),
 			"chat.streamChanges": () => {
 				streamAttempts += 1;
 				return streamAttempts === 1
 					? Stream.fail(new Error("connection dropped"))
-					: Stream.make(reconnectChat);
+					: Stream.make({
+							_tag: "snapshot" as const,
+							chats: [reconnectChat],
+						});
 			},
-			"session.list": listSessions,
 		});
 		useChatsStore.setState({
 			chatsByProject: {},
@@ -709,10 +844,7 @@ describe("chats store live changes", () => {
 		);
 
 		expect(streamAttempts).toBe(2);
-		expect(
-			useSessionsStore.getState().sessionsByProject[reconnectProjectId],
-		).toEqual([reconnectSession]);
-		expect(listSessions).toHaveBeenCalledTimes(1);
+		expect(listSessions).not.toHaveBeenCalled();
 		await stopChatChangeStream(reconnectProjectId);
 		expect(unsubscribeConnection).toHaveBeenCalledTimes(1);
 		expect(observeConnection).toBeUndefined();
@@ -733,12 +865,18 @@ describe("chats store live changes", () => {
 			return vi.fn();
 		});
 		rpcClientFactory.mockReturnValue({
-			"chat.list": listChats,
 			"chat.streamChanges": () =>
-				Stream.callback<Chat>((queue) =>
-					Effect.sync(() => {
-						publishChat = (chat) => Queue.offerUnsafe(queue, chat);
+				Stream.concat(
+					Stream.make({
+						_tag: "snapshot" as const,
+						chats: [] as ReadonlyArray<Chat>,
 					}),
+					Stream.callback<ChatSummaryChange>((queue) =>
+						Effect.sync(() => {
+							publishChat = (chat) =>
+								Queue.offerUnsafe(queue, { _tag: "change", chat });
+						}),
+					),
 				),
 			"session.list": listSessions,
 		});
@@ -758,8 +896,11 @@ describe("chats store live changes", () => {
 				useChatsStore.getState().chatsByProject[reconnectProjectId],
 			).toEqual([reconnectChat]),
 		);
-		expect(listChats).toHaveBeenCalledTimes(1);
-		expect(listSessions).toHaveBeenCalledTimes(1);
+		expect(listChats).not.toHaveBeenCalled();
+		await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+		expect(
+			useSessionsStore.getState().sessionsByProject[reconnectProjectId],
+		).toEqual([reconnectSession]);
 	});
 
 	it("applies an automatic title change without reloading the sidebar", async () => {
@@ -775,14 +916,19 @@ describe("chats store live changes", () => {
 			return vi.fn();
 		});
 		rpcClientFactory.mockReturnValue({
-			"chat.list": () => Effect.succeed([reconnectChat]),
 			"chat.streamChanges": () =>
-				Stream.callback<Chat>((queue) =>
-					Effect.sync(() => {
-						publishChat = (chat) => Queue.offerUnsafe(queue, chat);
+				Stream.concat(
+					Stream.make({
+						_tag: "snapshot" as const,
+						chats: [reconnectChat],
 					}),
+					Stream.callback<ChatSummaryChange>((queue) =>
+						Effect.sync(() => {
+							publishChat = (chat) =>
+								Queue.offerUnsafe(queue, { _tag: "change", chat });
+						}),
+					),
 				),
-			"session.list": () => Effect.succeed([reconnectSession]),
 		});
 		useChatsStore.setState({
 			chatsByProject: {},
@@ -810,12 +956,29 @@ describe("chats store live changes", () => {
 	});
 
 	it("does not restore chat state or its stream when hydration settles after workspace removal", async () => {
-		const listResult = deferred<ReadonlyArray<Chat>>();
-		const listChats = vi.fn(() => Effect.promise(() => listResult.promise));
-		subscribeRendererRpcConnection.mockClear();
+		let publishSnapshot: (() => void) | undefined;
+		const unsubscribe = vi.fn();
+		subscribeRendererRpcConnection.mockImplementation((listener) => {
+			listener({
+				key: "renderer",
+				status: "connected",
+				generation: 1,
+				attempt: 0,
+				error: null,
+			});
+			return unsubscribe;
+		});
 		rpcClientFactory.mockReturnValue({
-			"chat.list": listChats,
-			"chat.streamChanges": () => Stream.make(reconnectChat),
+			"chat.streamChanges": () =>
+				Stream.callback<ChatSummaryChange>((queue) =>
+					Effect.sync(() => {
+						publishSnapshot = () =>
+							Queue.offerUnsafe(queue, {
+								_tag: "snapshot",
+								chats: [reconnectChat],
+							});
+					}),
+				),
 			"workspace.remove": () => Effect.void,
 			"workspace.setSelected": () => Effect.void,
 		});
@@ -830,16 +993,15 @@ describe("chats store live changes", () => {
 			error: null,
 		});
 
-		const hydration = useChatsStore.getState().hydrate(reconnectProjectId);
-		await vi.waitFor(() => expect(listChats).toHaveBeenCalledTimes(1));
+		await useChatsStore.getState().hydrate(reconnectProjectId);
+		await vi.waitFor(() => expect(publishSnapshot).toBeDefined());
 		await useWorkspaceStore.getState().remove(reconnectProjectId);
-		listResult.resolve([reconnectChat]);
-		await hydration;
+		publishSnapshot?.();
 
 		expect(
 			useChatsStore.getState().chatsByProject[reconnectProjectId],
 		).toBeUndefined();
-		expect(subscribeRendererRpcConnection).not.toHaveBeenCalled();
+		expect(unsubscribe).toHaveBeenCalledTimes(1);
 	});
 });
 

@@ -55,7 +55,6 @@ import {
 	wsServerProtocolLayer,
 } from "@zusehq/server";
 import { Cause, Effect, Fiber, Layer, Schema } from "effect";
-import { RpcSerialization } from "effect/unstable/rpc";
 import {
 	app,
 	BrowserWindow,
@@ -98,6 +97,7 @@ if (
 	fixPath();
 }
 
+import { makeBatchedLogWriter } from "./batched-log-writer.ts";
 import { type BatteryStatus, readBatteryStatus } from "./battery-status.ts";
 import {
 	BROWSER_PARTITION,
@@ -140,6 +140,10 @@ import {
 } from "./power-monitor.ts";
 import { installPowerMonitorEventSampling } from "./power-monitor-events.ts";
 import { resolveDesktopRelayPort } from "./relay-port.ts";
+import {
+	sanitizeRemoteConnectionLog,
+	sanitizeRemoteDiagnosticValue,
+} from "./remote-diagnostic-sanitizer.ts";
 import {
 	ensureSshEnvironment,
 	listSshHosts,
@@ -1099,34 +1103,76 @@ app.on("second-instance", (_event, argv) => {
 });
 const USER_APPLICATIONS_DIR = Path.join(homedir(), "Applications");
 const execFileAsync = promisify(execFile);
+const appLogPreflights = new Map<string, Promise<void>>();
+let remoteConnectionLogScrubScheduled = false;
+
+const appLogWriter = makeBatchedLogWriter({
+	writeBatch: async (filePath, lines) => {
+		try {
+			const preflight = appLogPreflights.get(filePath);
+			if (preflight !== undefined) {
+				await preflight;
+				if (appLogPreflights.get(filePath) === preflight) {
+					appLogPreflights.delete(filePath);
+				}
+			}
+			await fs.mkdir(Path.dirname(filePath), { recursive: true });
+			await fs.appendFile(filePath, `${lines.join("\n")}\n`, "utf8");
+		} catch {
+			// Logging must never affect app behavior.
+		}
+	},
+});
 
 const appendAppLog = (fileName: string, line: string): void => {
-	try {
-		const filePath = Path.join(app.getPath("userData"), "logs", fileName);
-		fsSync.mkdirSync(Path.dirname(filePath), { recursive: true });
-		fsSync.appendFileSync(filePath, `${line}\n`, "utf8");
-	} catch {
-		// Logging must never affect app behavior.
-	}
+	const filePath = Path.join(app.getPath("userData"), "logs", fileName);
+	appLogWriter.append(filePath, line);
 };
 
 const appendRemoteConnectionLog = (
 	event: string,
 	fields: Record<string, unknown> = {},
 ): void => {
+	const logFilePath = Path.join(
+		app.getPath("userData"),
+		"logs",
+		"remote-connection.log",
+	);
+	if (!remoteConnectionLogScrubScheduled) {
+		remoteConnectionLogScrubScheduled = true;
+		const scrub = (async () => {
+			try {
+				const contents = await fs.readFile(logFilePath, "utf8");
+				const sanitized = sanitizeRemoteConnectionLog(contents);
+				if (sanitized === contents) return;
+				const temporaryPath = `${logFilePath}.${process.pid}.tmp`;
+				await fs.writeFile(temporaryPath, sanitized, {
+					encoding: "utf8",
+					mode: 0o600,
+				});
+				await fs.rename(temporaryPath, logFilePath);
+			} catch {
+				// A missing or unreadable old log is safe to ignore. Diagnostics
+				// cleanup must never affect app behavior.
+			}
+		})();
+		appLogPreflights.set(logFilePath, scrub);
+	}
 	appendAppLog(
 		"remote-connection.log",
 		JSON.stringify({
 			ts: new Date().toISOString(),
 			event,
-			...Object.fromEntries(
-				Object.entries(fields).map(([key, value]) => [
-					key,
-					value instanceof Error
-						? { name: value.name, message: value.message }
-						: value,
-				]),
-			),
+			...(sanitizeRemoteDiagnosticValue(
+				Object.fromEntries(
+					Object.entries(fields).map(([key, value]) => [
+						key,
+						value instanceof Error
+							? { name: value.name, message: value.message }
+							: value,
+					]),
+				),
+			) as Record<string, unknown>),
 		}),
 	);
 };
@@ -2632,7 +2678,8 @@ async function createMainWindow() {
 	// a fresh runtime — the only Effect.runFork in the main process.
 	const serverProtocol = electronServerProtocolLayer(
 		mainWindow.webContents,
-	).pipe(Layer.provide(RpcSerialization.layerJson));
+		appendRemoteConnectionLog,
+	);
 	const relayWsPort = relayPort.port;
 	const relayWsProtocol = wsServerProtocolLayer({
 		port: relayWsPort,
@@ -2772,13 +2819,14 @@ async function createMainWindow() {
 			}),
 		).pipe(
 			Effect.catchCause((cause) =>
-				Effect.sync(() => {
+				Effect.gen(function* () {
 					// Boot-time layer failures (sqlite open, migrator, config) are
 					// unrecoverable — surface the cause and bail. Quiet
 					// success-after-restart is preferable to a half-running app.
 					const detail = Cause.pretty(cause);
 					appendRemoteConnectionLog("desktop.runtime.fatal", { cause: detail });
 					console.error("[zuse] fatal boot error\n", detail);
+					yield* Effect.promise(() => appLogWriter.flush());
 					app.exit(1);
 				}),
 			),

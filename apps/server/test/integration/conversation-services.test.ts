@@ -49,7 +49,7 @@ import {
 import { SqlClient } from "effect/unstable/sql";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ConfigStoreService } from "../../src/config-store/services/config-store-service.ts";
-import { loadSettledProviderTurnKeys } from "../../src/conversation/core/conversation-reactors.ts";
+import { loadTerminalProviderTurnKeys } from "../../src/conversation/core/conversation-reactors.ts";
 import { ConversationState } from "../../src/conversation/core/conversation-state.ts";
 import { ConversationServicesLive } from "../../src/conversation/layers/conversation-services.ts";
 import {
@@ -91,6 +91,7 @@ import { Migration0037ProviderEventCursor } from "../../src/persistence/migratio
 import { Migration0038QueuedMessageReady } from "../../src/persistence/migrations/0038_queued_message_ready.ts";
 import { Migration0041ChatArchiveJobs } from "../../src/persistence/migrations/0041_chat_archive_jobs.ts";
 import { Migration0043NameProvenance } from "../../src/persistence/migrations/0043_name_provenance.ts";
+import { Migration0045ChatCatalogRevision } from "../../src/persistence/migrations/0045_chat_catalog_revision.ts";
 import { NdjsonLogger } from "../../src/persistence/ndjson-logger.ts";
 import { ProviderService } from "../../src/provider/services/provider-service.ts";
 import { TitleGenerator } from "../../src/provider/title-generator.ts";
@@ -520,6 +521,7 @@ const runAllMigrations = Effect.all(
 		Migration0038QueuedMessageReady,
 		Migration0041ChatArchiveJobs,
 		Migration0043NameProvenance,
+		Migration0045ChatCatalogRevision,
 	],
 	{ discard: true },
 );
@@ -578,6 +580,7 @@ const withRuntime = async <A>(
 				| ConversationState
 			>,
 		) => Promise<X>,
+		dbPath: string,
 	) => Promise<A>,
 ): Promise<A> => {
 	const dir = mkdtempSync(join(tmpdir(), "mz-msgstore-"));
@@ -618,7 +621,7 @@ const withRuntime = async <A>(
         `;
 			}),
 		);
-		return await fn(run);
+		return await fn(run, dbPath);
 	} finally {
 		await runtime.dispose();
 		rmSync(dir, { recursive: true, force: true });
@@ -1737,6 +1740,11 @@ describe("ConversationServices — chat & session lifecycle", () => {
 			const replayed = await run(
 				Effect.flatMap(store, (s) =>
 					s.streamChatChanges(PROJECT_ID).pipe(
+						Stream.flatMap((change) =>
+							change._tag === "snapshot"
+								? Stream.fromIterable(change.chats)
+								: Stream.succeed(change.chat),
+						),
 						Stream.filter((chat) => chat.id === parent.chat.id),
 						Stream.take(1),
 						Stream.runCollect,
@@ -1810,6 +1818,11 @@ describe("ConversationServices — chat & session lifecycle", () => {
 			const replayed = await run(
 				Effect.flatMap(store, (s) =>
 					s.streamChatChanges(PROJECT_ID).pipe(
+						Stream.flatMap((change) =>
+							change._tag === "snapshot"
+								? Stream.fromIterable(change.chats)
+								: Stream.succeed(change.chat),
+						),
 						Stream.filter((chat) => (chat.id as string) === created.chatId),
 						Stream.take(1),
 						Stream.runCollect,
@@ -1828,9 +1841,16 @@ describe("ConversationServices — chat & session lifecycle", () => {
 			const result = await run(
 				Effect.gen(function* () {
 					const s = yield* store;
-					const streamFiber = yield* s
-						.streamChatChanges(PROJECT_ID)
-						.pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+					const streamFiber = yield* s.streamChatChanges(PROJECT_ID).pipe(
+						Stream.flatMap((change) =>
+							change._tag === "snapshot"
+								? Stream.fromIterable(change.chats)
+								: Stream.succeed(change.chat),
+						),
+						Stream.take(1),
+						Stream.runCollect,
+						Effect.forkChild,
+					);
 					yield* Effect.sleep("10 millis");
 					const created = yield* s.createChat({
 						projectId: PROJECT_ID,
@@ -1849,6 +1869,148 @@ describe("ConversationServices — chat & session lifecycle", () => {
 		});
 	});
 
+	it("reconciles chats persisted outside the in-memory change hub", async () => {
+		await withRuntime(async (run, dbPath) => {
+			const externalChatId = ChatId.make("chat-external-runtime");
+			const observed = await run(
+				Effect.gen(function* () {
+					const s = yield* store;
+					yield* s.createChat({
+						projectId: PROJECT_ID,
+						providerId: "claude",
+						model: "claude-opus-4-8",
+					});
+					const streamFiber = yield* s.streamChatChanges(PROJECT_ID).pipe(
+						Stream.filter(
+							(change) =>
+								change._tag === "snapshot" &&
+								change.chats.some((chat) => chat.id === externalChatId),
+						),
+						Stream.take(1),
+						Stream.runCollect,
+						Effect.timeout(1_500),
+						Effect.forkChild,
+					);
+					yield* Effect.sleep("10 millis");
+					const timestamp = new Date().toISOString();
+					const externalRuntime = ManagedRuntime.make(
+						sqliteLayer({ filename: dbPath }),
+					);
+					yield* Effect.tryPromise({
+						try: () =>
+							externalRuntime.runPromise(
+								Effect.gen(function* () {
+									const sql = yield* SqlClient.SqlClient;
+									yield* sql`
+										INSERT INTO chats (
+											id, project_id, title, title_provenance, created_at, updated_at
+										) VALUES (
+											${externalChatId},
+											${PROJECT_ID},
+											${"External runtime chat"},
+											${"manual"},
+											${timestamp},
+											${timestamp}
+										)
+									`;
+								}),
+							),
+						catch: (cause) => cause,
+					}).pipe(
+						Effect.ensuring(
+							Effect.promise(() => externalRuntime.dispose()).pipe(
+								Effect.ignore,
+							),
+						),
+					);
+					return yield* Fiber.join(streamFiber);
+				}),
+			);
+
+			expect(observed).toHaveLength(1);
+		});
+	});
+
+	it("reconciles local chat commands without a precise live patch", async () => {
+		await withRuntime(async (run) => {
+			const observed = await run(
+				Effect.gen(function* () {
+					const s = yield* store;
+					const created = yield* s.createChat({
+						projectId: PROJECT_ID,
+						providerId: "claude",
+						model: "claude-opus-4-8",
+					});
+					const streamFiber = yield* s.streamChatChanges(PROJECT_ID).pipe(
+						Stream.filter(
+							(change) =>
+								change._tag === "snapshot" &&
+								change.chats.some(
+									(chat) =>
+										chat.id === created.chat.id &&
+										chat.worktreeId === TEST_WORKTREE_ID,
+								),
+						),
+						Stream.take(1),
+						Stream.runCollect,
+						Effect.timeout(1_500),
+						Effect.forkChild,
+					);
+					yield* Effect.sleep("10 millis");
+					yield* s.setChatWorktree(created.chat.id, TEST_WORKTREE_ID);
+					return yield* Fiber.join(streamFiber);
+				}),
+			);
+
+			expect(observed).toHaveLength(1);
+		});
+	});
+
+	it("advances the chat catalog cursor only for effective chat changes", async () => {
+		await withRuntime(async (run) => {
+			const revisions = await run(
+				Effect.gen(function* () {
+					const s = yield* store;
+					const sql = yield* SqlClient.SqlClient;
+					const created = yield* s.createChat({
+						projectId: PROJECT_ID,
+						providerId: "claude",
+						model: "claude-opus-4-8",
+					});
+					const readRevision = Effect.map(
+						sql<{ readonly revision: number }>`
+							SELECT revision FROM chat_catalog_revision WHERE id = 1
+						`,
+						(rows) => rows[0]?.revision ?? -1,
+					);
+					const afterCreate = yield* readRevision;
+					yield* sql`
+						UPDATE projects SET name = ${"Unrelated"} WHERE id = ${PROJECT_ID}
+					`;
+					const afterUnrelatedWrite = yield* readRevision;
+					yield* sql`
+						UPDATE chats SET title = title WHERE id = ${created.chat.id}
+					`;
+					const afterNoopChatWrite = yield* readRevision;
+					yield* sql`
+						UPDATE chats SET title = ${"Changed"} WHERE id = ${created.chat.id}
+					`;
+					const afterChatWrite = yield* readRevision;
+					return {
+						afterCreate,
+						afterUnrelatedWrite,
+						afterNoopChatWrite,
+						afterChatWrite,
+					};
+				}),
+			);
+
+			expect(revisions.afterUnrelatedWrite).toBe(revisions.afterCreate);
+			expect(revisions.afterNoopChatWrite).toBe(revisions.afterCreate);
+			expect(revisions.afterChatWrite).toBe(revisions.afterCreate + 1);
+		});
+	});
+
 	it("createSession publishes the updated active session to live chat streams", async () => {
 		await withRuntime(async (run) => {
 			const result = await run(
@@ -1860,6 +2022,11 @@ describe("ConversationServices — chat & session lifecycle", () => {
 						model: "claude-opus-4-8",
 					});
 					const streamFiber = yield* s.streamChatChanges(PROJECT_ID).pipe(
+						Stream.flatMap((change) =>
+							change._tag === "snapshot"
+								? Stream.fromIterable(change.chats)
+								: Stream.succeed(change.chat),
+						),
 						Stream.filter(
 							(chat) =>
 								chat.id === created.chat.id &&
@@ -2225,9 +2392,7 @@ describe("ConversationServices — chat & session lifecycle", () => {
 						s.sendMessage(initialSession.id, "trigger provider recovery"),
 					),
 				),
-			).rejects.toThrow(
-				"Provider turn could not be started after durable intent",
-			);
+			).rejects.toThrow("scripted start failure");
 
 			const evidence = await run(
 				Effect.gen(function* () {
@@ -2254,7 +2419,7 @@ describe("ConversationServices — chat & session lifecycle", () => {
 			const settledTurnKeys = await run(
 				Effect.gen(function* () {
 					const sql = yield* SqlClient.SqlClient;
-					return yield* loadSettledProviderTurnKeys(sql);
+					return yield* loadTerminalProviderTurnKeys(sql);
 				}),
 			);
 			expect(
@@ -2269,6 +2434,64 @@ describe("ConversationServices — chat & session lifecycle", () => {
 				Effect.flatMap(store, (s) => s.resumeSession(initialSession.id)),
 			);
 			expect(providerSentTexts).toContain("trigger provider recovery");
+		});
+	});
+
+	it("does not replay a durable provider turn after its session is archived", async () => {
+		await withRuntime(async (run) => {
+			const { initialSession } = await run(
+				Effect.flatMap(store, (service) =>
+					service.createChat({
+						projectId: PROJECT_ID,
+						providerId: "claude",
+						model: "claude-opus-4-8",
+					}),
+				),
+			);
+			await expect
+				.poll(() =>
+					run(
+						Effect.flatMap(store, (service) =>
+							service.getSession(initialSession.id),
+						),
+					),
+				)
+				.toMatchObject({ status: "idle" });
+
+			failProviderSend = true;
+			failProviderStart = true;
+			await expect(
+				run(
+					Effect.flatMap(store, (service) =>
+						service.sendMessage(initialSession.id, "archive failed turn"),
+					),
+				),
+			).rejects.toThrow("scripted start failure");
+
+			await run(
+				Effect.flatMap(SessionDomain, (domain) =>
+					domain.dispatch({
+						commandId: "test:archive-failed-turn",
+						streamId: initialSession.id,
+						command: {
+							_tag: "ArchiveSession",
+							archivedAt: Date.now(),
+						},
+					}),
+				),
+			);
+
+			const terminalTurnKeys = await run(
+				Effect.gen(function* () {
+					const sql = yield* SqlClient.SqlClient;
+					return yield* loadTerminalProviderTurnKeys(sql);
+				}),
+			);
+			expect(
+				[...terminalTurnKeys].some((key) =>
+					key.startsWith(`${initialSession.id}\u0000turn_`),
+				),
+			).toBe(true);
 		});
 	});
 
@@ -3582,7 +3805,7 @@ describe("ConversationServices — chat & session lifecycle", () => {
 				const settled = await runRestarted(
 					Effect.gen(function* () {
 						const sql = yield* SqlClient.SqlClient;
-						return yield* loadSettledProviderTurnKeys(sql);
+						return yield* loadTerminalProviderTurnKeys(sql);
 					}),
 				);
 				expect(settled.has(`${initialSession.id}\u0000${turnId}`)).toBe(false);
@@ -4001,6 +4224,11 @@ describe("ConversationServices — provider event persistence", () => {
 						const liveRenameFiber = yield* service
 							.streamChatChanges(PROJECT_ID)
 							.pipe(
+								Stream.flatMap((change) =>
+									change._tag === "snapshot"
+										? Stream.fromIterable(change.chats)
+										: Stream.succeed(change.chat),
+								),
 								Stream.filter((chat) => chat.titleProvenance === "automatic"),
 								Stream.take(1),
 								Stream.runCollect,

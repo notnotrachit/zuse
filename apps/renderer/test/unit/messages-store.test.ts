@@ -646,7 +646,7 @@ describe("messages store queue actions", () => {
 		await expect.poll(runtimeStateForTest).toBe("idle");
 
 		useSessionRuntimeStore.getState().beginOptimisticTurn(sessionId);
-		expect(runtimeStateForTest()).toBe("running");
+		expect(runtimeStateForTest()).toBe("starting");
 		await Effect.runPromise(Queue.shutdown(frames));
 
 		await expect.poll(runtimeStateForTest).toBe("idle");

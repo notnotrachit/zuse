@@ -21,6 +21,7 @@ import type { NdjsonLoggerShape } from "../../persistence/ndjson-logger.ts";
 import type { ProviderServiceShape } from "../../provider/services/provider-service.ts";
 import type { RelayActivityPublisherApi } from "../../relay/activity-publisher.ts";
 import type { ConversationOperations } from "../services/conversation-services.ts";
+import type { ChatChangeEvent } from "./chat-change-event.ts";
 import { makeConversationEventRuntime } from "./conversation-event-runtime.ts";
 import type { ConversationGoalState } from "./conversation-goal-state.ts";
 import { makeConversationGoalState } from "./conversation-goal-state.ts";
@@ -75,8 +76,9 @@ export interface ConversationStoreRuntime {
 		persisted: PersistedMessage,
 	) => Effect.Effect<void>;
 	readonly goalState: ConversationGoalState;
-	readonly chatChangesHub: PubSub.PubSub<Chat>;
+	readonly chatChangesHub: PubSub.PubSub<ChatChangeEvent>;
 	readonly broadcastChat: (chat: Chat) => Effect.Effect<void>;
+	readonly currentChatRevision: () => number;
 	readonly lookupSession: ConversationOperations["getSession"];
 	readonly agentsFor: ConversationStateApi["agents"];
 	readonly persistMessage: (
@@ -256,9 +258,17 @@ export const makeConversationStoreRuntime = Effect.fn(
 	// Chats are few and updates rare, so one project-filtered hub keeps it
 	// simple. `streamChatChanges` subscribes to this hub before reading its SQL
 	// snapshot, closing the backfill-to-live gap for orchestrated creates.
-	const chatChangesHub = yield* PubSub.unbounded<Chat>();
+	const chatChangesHub = yield* PubSub.unbounded<ChatChangeEvent>();
+	let chatRevision = 0;
+	const currentChatRevision = (): number => chatRevision;
 	const broadcastChat = (chat: Chat): Effect.Effect<void> =>
-		PubSub.publish(chatChangesHub, chat).pipe(Effect.asVoid);
+		Effect.sync(() => {
+			chatRevision += 1;
+			PubSub.publishUnsafe(chatChangesHub, {
+				projectId: chat.projectId,
+				change: { _tag: "change", chat },
+			});
+		});
 
 	// Chats whose LLM auto-name is in flight — cleared when the fiber ends.
 	// Chats that already received a successful LLM title this process lifetime.
@@ -583,6 +593,7 @@ export const makeConversationStoreRuntime = Effect.fn(
 		goalState,
 		chatChangesHub,
 		broadcastChat,
+		currentChatRevision,
 		lookupSession,
 		agentsFor,
 		persistMessage,
