@@ -2,7 +2,46 @@
 
 A chat-first desktop app for developers who work with AI coding agents. Wraps Claude Code, Codex, Grok, Gemini, Cursor, and OpenCode in a persistent, project-aware interface — structured chat history, rich composer, file viewer, integrated terminal, git worktrees, and session management, all stored locally.
 
-> macOS only. Requires at least one supported agent CLI installed.
+> Supports macOS and x64 Linux. Requires at least one supported agent CLI installed.
+
+---
+
+## Install on Linux
+
+Zuse currently ships x64 builds for Debian/Ubuntu and other Linux distributions
+that can run AppImages.
+
+### Debian and Ubuntu
+
+Install the latest `.deb` release directly from a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/swarajbachu/zuse/main/scripts/install-linux.sh | sh
+```
+
+The installer downloads the `.deb` attached to the latest GitHub release,
+verifies its GitHub-published SHA-256 digest, and uses `apt`, which installs
+Zuse's Secret Service and Avahi runtime dependencies. You may be prompted for
+your `sudo` password.
+
+### Other distributions
+
+Download the latest x64 `.AppImage` from
+[GitHub Releases](https://github.com/swarajbachu/zuse/releases/latest), then run:
+
+```bash
+chmod +x Zuse-*-linux-x86_64.AppImage
+./Zuse-*-linux-x86_64.AppImage
+```
+
+AppImage users must provide a Secret Service implementation, such as GNOME
+Keyring or KWallet. Install `avahi-publish-service` if you want nearby-device
+discovery.
+
+Before starting an agent session, install and authenticate at least one of the
+[supported agent CLIs](#supported-agents). If a CLI installed through a version
+manager is not detected, set its absolute binary path in Zuse's provider
+settings.
 
 ---
 
@@ -73,6 +112,7 @@ A chat-first desktop app for developers who work with AI coding agents. Wraps Cl
 - SQLite stores projects, sessions, messages, tool calls across restarts
 - Keychain-backed API keys (no plaintext storage)
 - Signed + notarized macOS universal `.dmg` (Apple Silicon + Intel)
+- Linux x64 `.AppImage` and Debian/Ubuntu `.deb`
 - In-app auto-update via GitHub Releases
 
 ---
@@ -81,7 +121,7 @@ A chat-first desktop app for developers who work with AI coding agents. Wraps Cl
 
 | | |
 |---|---|
-| Shell | Electron 33 |
+| Shell | Electron 42 |
 | Renderer | React 19 + TypeScript + Vite |
 | Styling | Tailwind CSS v4 + shadcn/ui (zinc dark) |
 | State | Zustand (ephemeral) + SQLite (persistent) |
@@ -121,7 +161,7 @@ specs/
 bun install
 
 # Dev (renderer + Electron)
-turbo dev --filter=renderer --filter=desktop
+bun dev
 
 # Build
 turbo build
@@ -131,9 +171,18 @@ bun run dist:mac
 
 # Package macOS DMG (unsigned, local testing)
 bun run dist:mac:unsigned
+
+# Package Linux AppImage and deb
+bun run dist:linux
+
+# Package Linux without publishing
+bun run dist:linux:unsigned
 ```
 
-Requires: Bun 1.3.10+, Node.js ≥ 18, macOS.
+Requires: Bun 1.3.10+, Node.js ≥ 22.13, and macOS or x64 Linux.
+
+The packaging commands build x64 artifacts into `dist/`. End-user installation
+instructions are in [Install on Linux](#install-on-linux).
 
 ---
 

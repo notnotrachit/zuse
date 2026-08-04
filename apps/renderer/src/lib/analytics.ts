@@ -7,6 +7,7 @@ import {
 import type { AnalyticsContext } from "@zuse/contracts";
 import { Effect, Fiber, Stream } from "effect";
 
+import { hostDescriptor } from "./host-platform.ts";
 import { createDeferredRuntime } from "./deferred-runtime.ts";
 import { sanitizePostHogEvent } from "./posthog-event.ts";
 import { getRpcClient } from "./rpc-client.ts";
@@ -33,17 +34,16 @@ let cleanupRuntime: (() => void) | null = null;
 
 const common = (context: AnalyticsContext) => {
 	const now = new Date();
-	const platform = navigator.platform.toLowerCase();
+	const host = hostDescriptor();
 	return {
 		surface: "desktop",
-		os: platform.includes("mac")
-			? "macos"
-			: platform.includes("win")
-				? "windows"
-				: platform.includes("linux")
-					? "linux"
-					: "unknown",
-		architecture: "unknown",
+		os:
+			host.platform === "darwin"
+				? "macos"
+				: host.platform === "win32"
+					? "windows"
+					: "linux",
+		architecture: host.arch,
 		app_version: import.meta.env.VITE_APP_VERSION ?? "unknown",
 		release_channel: import.meta.env.MODE,
 		identity_kind: context.identityKind,
