@@ -1,9 +1,10 @@
 import { createPatch, structuredPatch } from "diff";
 import { lazy, Suspense, useMemo } from "react";
+import { useZuseDiffTheme } from "../lib/diffs-theme.ts";
 import { isPatchDiffRenderable } from "../lib/patch-diff.ts";
 import { FileIcon } from "./file-icon.tsx";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip.tsx";
 
-const UNIFIED_DIFF_OPTIONS = { diffStyle: "unified" } as const;
 const PatchDiff = lazy(() =>
 	import("@pierre/diffs/react").then((module) => ({
 		default: module.PatchDiff,
@@ -211,13 +212,12 @@ export function UnifiedPatchDiff({
   path,
   patch,
   kind = "edit",
-  showHeader = false,
 }: {
   path: string;
   patch: string;
   kind?: string;
-  showHeader?: boolean;
 }) {
+  const diffTheme = useZuseDiffTheme();
   if (patch.trim().length === 0) {
     return (
       <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
@@ -227,31 +227,51 @@ export function UnifiedPatchDiff({
   }
 
   const name = basename(path);
+  const stats = patchStats([{ file_path: path, kind, patch }]);
   const renderable = isPatchDiffRenderable(patch);
   const normalizedPatch = normalizePatchForDiffViewer(path, patch);
   return (
     <div className="overflow-hidden rounded-md border border-border/60">
-      {showHeader ? (
-        <div className="flex items-center gap-2 border-b border-border/40 bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-2 border-b border-border/40 bg-muted px-2 py-1 text-[11px] text-muted-foreground">
           <FileIcon
             name={name}
             kind="file"
             className="inline-flex size-3.5 shrink-0"
           />
-          <span className="truncate font-mono text-foreground/80">{name}</span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="truncate font-mono text-foreground/80">
+                  {name}
+                </span>
+              }
+            />
+            <TooltipPopup>{path}</TooltipPopup>
+          </Tooltip>
           <span className="text-muted-foreground">{kind}</span>
-        </div>
-      ) : null}
+          {stats.added > 0 ? (
+            <span className="ml-auto text-emerald-400 tabular-nums">
+              +{stats.added}
+            </span>
+          ) : null}
+          {stats.removed > 0 ? (
+            <span className="text-red-400 tabular-nums">-{stats.removed}</span>
+          ) : null}
+      </div>
 
       <div
-        className="fz-diff code-block-scroll overflow-auto bg-muted/15 text-[12px] leading-[1.45]"
+        className="fz-diff code-block-scroll overflow-auto text-[12px] leading-[1.45]"
         style={{ maxHeight: 420 }}
       >
         {renderable ? (
 					<Suspense fallback={<RawPatchBlock patch={normalizedPatch} />}>
           <PatchDiff
             patch={normalizedPatch}
-            options={UNIFIED_DIFF_OPTIONS}
+            options={{
+              ...diffTheme,
+              diffStyle: "unified",
+              disableFileHeader: true,
+            }}
             disableWorkerPool
           />
 					</Suspense>
@@ -274,11 +294,10 @@ export function UnifiedPatchDiff({
  */
 export function EditDiff({
   edit,
-  showHeader = false,
 }: {
   edit: FileEdit;
-  showHeader?: boolean;
 }) {
+  const diffTheme = useZuseDiffTheme();
   const patchText = useMemo(() => editToPatch(edit), [edit]);
   if (patchText.trim().length === 0 || edit.oldText === edit.newText) {
     return (
@@ -293,14 +312,23 @@ export function EditDiff({
 
   return (
     <div className="overflow-hidden rounded-md border border-border/60">
-      {showHeader ? (
-        <div className="flex items-center gap-2 border-b border-border/40 bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-2 border-b border-border/40 bg-muted px-2 py-1 text-[11px] text-muted-foreground">
           <FileIcon
             name={name}
             kind="file"
             className="inline-flex size-3.5 shrink-0"
           />
-          <span className="truncate font-mono text-foreground/80">{name}</span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="truncate font-mono text-foreground/80">
+                  {name}
+                </span>
+              }
+            />
+            <TooltipPopup>{edit.path}</TooltipPopup>
+          </Tooltip>
+          <span className="text-muted-foreground">{edit.mode === "create" ? "add" : "update"}</span>
           {stats.added > 0 ? (
             <span className="ml-auto text-emerald-400 tabular-nums">
               +{stats.added}
@@ -309,17 +337,20 @@ export function EditDiff({
           {stats.removed > 0 ? (
             <span className="text-red-400 tabular-nums">-{stats.removed}</span>
           ) : null}
-        </div>
-      ) : null}
+      </div>
 
       <div
-        className="fz-diff code-block-scroll overflow-auto bg-muted/15 text-[12px] leading-[1.45]"
+        className="fz-diff code-block-scroll overflow-auto text-[12px] leading-[1.45]"
         style={{ maxHeight: 420 }}
       >
 				<Suspense fallback={<RawPatchBlock patch={patchText} />}>
         <PatchDiff
           patch={patchText}
-          options={UNIFIED_DIFF_OPTIONS}
+          options={{
+            ...diffTheme,
+            diffStyle: "unified",
+            disableFileHeader: true,
+          }}
           disableWorkerPool
         />
 				</Suspense>

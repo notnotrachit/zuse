@@ -11,7 +11,7 @@ import type {
 	SelectedLineRange,
 	UnresolvedFile as UnresolvedFileInstance,
 } from "@pierre/diffs";
-import { DEFAULT_THEMES, processFile } from "@pierre/diffs";
+import { processFile } from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/edit";
 import {
 	CodeView,
@@ -40,6 +40,7 @@ import {
 	Copy,
 	EyeOff,
 	FilePenLine,
+	LoaderCircle,
 	MoreHorizontal,
 	PanelTop,
 	RotateCcw,
@@ -50,6 +51,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../hooks/use-auth.ts";
+import { useZuseDiffTheme, ZUSE_DIFF_THEMES } from "../lib/diffs-theme.ts";
 import { formatError } from "../lib/format-error.ts";
 import {
 	getReviewAnnotationAnchor,
@@ -77,7 +79,6 @@ type ReviewPreferences = {
 	readonly diffStyle: "split" | "unified";
 	readonly wrap: boolean;
 	readonly lineNumbers: boolean;
-	readonly backgrounds: boolean;
 	readonly indicators: "bars" | "classic" | "none";
 };
 
@@ -87,7 +88,6 @@ const DEFAULT_PREFERENCES: ReviewPreferences = {
 	diffStyle: "split",
 	wrap: true,
 	lineNumbers: true,
-	backgrounds: true,
 	indicators: "bars",
 };
 
@@ -101,7 +101,7 @@ const REVIEW_POOL_OPTIONS: WorkerPoolOptions = {
 };
 
 const REVIEW_HIGHLIGHTER_OPTIONS: WorkerInitializationRenderOptions = {
-	theme: DEFAULT_THEMES,
+	theme: ZUSE_DIFF_THEMES,
 	langs: ["css", "go", "python", "rust", "sh", "swift", "tsx", "typescript"],
 	preferredHighlighter: "shiki-wasm",
 };
@@ -274,6 +274,7 @@ function ChangesReviewReady({
 		(state) => state.selectedSessionId,
 	);
 	const { user: authUser, name: authName } = useAuth();
+	const diffTheme = useZuseDiffTheme();
 	const [repositoryAuthor, setRepositoryAuthor] =
 		useState<AnnotationAuthor | null>(null);
 	useEffect(() => {
@@ -872,10 +873,10 @@ function ChangesReviewReady({
 
 	const reviewOptions = useMemo<CodeViewOptions<AnnotationMetadata>>(
 		() => ({
+			...diffTheme,
 			diffStyle: preferences.diffStyle,
 			overflow: preferences.wrap ? "wrap" : "scroll",
 			disableLineNumbers: !preferences.lineNumbers,
-			disableBackground: !preferences.backgrounds,
 			diffIndicators: preferences.indicators,
 			stickyHeaders: true,
 			enableLineSelection: true,
@@ -883,17 +884,18 @@ function ChangesReviewReady({
 			controlledSelection: true,
 			lineHoverHighlight: "number",
 			hunkSeparators: "line-info",
+			layout: { paddingTop: 0, paddingBottom: 12, gap: 8 },
 			onGutterUtilityClick(range, context) {
 				if (context.item.type === "diff") {
 					createAnnotationDraft(range, context.item.id);
 				}
 			},
 		}),
-		[createAnnotationDraft, preferences],
+		[createAnnotationDraft, diffTheme, preferences],
 	);
 
 	if (summary === null && loading) {
-		return <ReviewState title="Preparing branch review…" />;
+		return <ReviewState title="Preparing review" loading />;
 	}
 	if (summary === null) {
 		return <ReviewState title={error ?? "No review is available."} />;
@@ -1011,7 +1013,7 @@ function ChangesReviewReady({
 						renderHeaderMetadata={renderHeaderMetadata}
 						renderAnnotation={renderAnnotation}
 						options={reviewOptions}
-						className="h-full overflow-auto overscroll-contain px-3 py-3"
+						className="fz-diff h-full overflow-auto overscroll-contain px-3"
 					/>
 				)}
 				{selectedConflict !== null ? (
@@ -1042,6 +1044,7 @@ function ConflictReview({
 	readonly onResolved: () => Promise<void>;
 	readonly onClose: () => void;
 }) {
+	const diffTheme = useZuseDiffTheme();
 	const [contents, setContents] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [remaining, setRemaining] = useState(0);
@@ -1110,16 +1113,17 @@ function ConflictReview({
 	);
 	const conflictOptions = useMemo<UnresolvedFileReactOptions<undefined>>(
 		() => ({
+			...diffTheme,
 			diffIndicators: "bars",
 			overflow: "wrap",
 			hunkSeparators: "line-info",
 		}),
-		[],
+		[diffTheme],
 	);
 
 	return (
 		<div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-background">
-			<div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-3">
+			<div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 px-3">
 				<button
 					type="button"
 					onClick={onClose}
@@ -1129,9 +1133,16 @@ function ConflictReview({
 				>
 					<ChevronRight className="size-4 rotate-180" />
 				</button>
-				<CircleAlert className="size-3.5 shrink-0 text-amber-400" />
-				<span className="min-w-0 truncate font-mono text-xs">{file.path}</span>
-				<span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
+				<CircleAlert className="size-3.5 shrink-0 text-rose-400" />
+				<div className="min-w-0">
+					<div className="truncate text-xs font-medium">
+						Resolve {file.path.slice(file.path.lastIndexOf("/") + 1)}
+					</div>
+					<div className="truncate text-[10px] text-muted-foreground">
+						{file.path}
+					</div>
+				</div>
+				<span className="ml-auto shrink-0 rounded-md bg-foreground/5 px-2 py-1 text-[10px] tabular-nums text-muted-foreground">
 					{saving
 						? "Saving resolution…"
 						: `${remaining} conflict${remaining === 1 ? "" : "s"} remaining`}
@@ -1146,7 +1157,7 @@ function ConflictReview({
 				{error !== null && contents === null ? (
 					<ReviewState title={error} />
 				) : contents === null ? (
-					<ReviewState title="Loading conflict…" />
+					<ReviewState title="Loading conflict" loading />
 				) : (
 					<UnresolvedFile
 						file={{ name: file.path, contents }}
@@ -1187,22 +1198,20 @@ function ConflictReview({
 								}
 							};
 							return (
-								<div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-muted-foreground">
+								<div className="m-1.5 flex w-fit items-center rounded-md bg-background/80 p-0.5 shadow-sm ring-1 ring-border/60">
 									<ConflictAction onClick={() => resolve("current")}>
-										Accept current
+										Keep current
 									</ConflictAction>
-									<span className="text-border">|</span>
 									<ConflictAction onClick={() => resolve("incoming")}>
-										Accept incoming
+										Keep incoming
 									</ConflictAction>
-									<span className="text-border">|</span>
 									<ConflictAction onClick={() => resolve("both")}>
-										Accept both
+										Keep both
 									</ConflictAction>
 								</div>
 							);
 						}}
-						className="mx-auto block w-full max-w-[1400px] overflow-hidden rounded-lg border border-border/60"
+						className="fz-diff mx-auto block w-full max-w-[1400px] overflow-hidden rounded-lg bg-card/30 shadow-sm ring-1 ring-border/50"
 					/>
 				)}
 			</div>
@@ -1221,17 +1230,28 @@ function ConflictAction({
 		<button
 			type="button"
 			onClick={onClick}
-			className="rounded px-1 py-0.5 text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+			className="h-7 rounded px-2 text-[10px] font-medium text-muted-foreground outline-none hover:bg-foreground/5 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
 		>
 			{children}
 		</button>
 	);
 }
 
-function ReviewState({ title }: { readonly title: string }) {
+function ReviewState({
+	title,
+	loading = false,
+}: {
+	readonly title: string;
+	readonly loading?: boolean;
+}) {
 	return (
-		<div className="grid h-full place-items-center px-8 text-center text-sm text-muted-foreground">
-			{title}
+		<div className="grid h-full min-h-40 place-items-center px-8 text-center">
+			<div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+				{loading ? (
+					<LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+				) : null}
+				<span>{title}</span>
+			</div>
 		</div>
 	);
 }
@@ -1337,11 +1357,6 @@ function DisplaySettings({
 				>
 					<PopoverPrimitive.Popup className="w-60 rounded-lg border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl/15 outline-none">
 						<div className="flex flex-col gap-1">
-							<DisplaySwitch
-								label="Backgrounds"
-								checked={preferences.backgrounds}
-								onCheckedChange={(backgrounds) => onChange({ backgrounds })}
-							/>
 							<DisplaySwitch
 								label="Line numbers"
 								checked={preferences.lineNumbers}
