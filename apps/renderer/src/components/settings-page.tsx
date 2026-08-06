@@ -184,8 +184,8 @@ export function SettingsPage() {
 	}, [folders.length, loadFolders]);
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<header className="flex h-9 shrink-0 items-center px-3 text-xs text-muted-foreground [-webkit-app-region:drag]">
+		<div className="settings-surface flex min-h-0 flex-1 flex-col bg-background [&_button[data-slot=button]:not([class*='size-'])]:h-7 [&_button[data-slot=button]:not([class*='size-'])]:text-[11px]">
+			<header className="flex h-8 shrink-0 items-center px-3 text-xs text-muted-foreground [-webkit-app-region:drag]">
 				<div className="w-16 shrink-0" />
 				<button
 					type="button"
@@ -199,10 +199,10 @@ export function SettingsPage() {
 			</header>
 			<div className="flex min-h-0 flex-1">
 				<Rail section={section} onSelect={setSection} folders={folders} />
-				<div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-10 py-8">
+				<div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-5">
 					<div
 						className={cn(
-							"mx-auto flex w-full flex-col gap-10",
+							"mx-auto flex w-full flex-col gap-4",
 							section.kind === "diagnostics"
 								? "max-w-6xl"
 								: section.kind === "pokedex"
@@ -229,7 +229,7 @@ function Rail({
 	folders: ReadonlyArray<Folder>;
 }) {
 	return (
-		<nav className="flex w-56 shrink-0 flex-col gap-5 border-r border-border/40 bg-sidebar px-2.5 py-4 text-sm text-sidebar-foreground">
+		<nav className="flex w-52 shrink-0 flex-col gap-3 border-r border-border/40 bg-sidebar px-2.5 py-3 text-xs text-sidebar-foreground">
 			<div className="flex flex-col gap-0.5">
 				{VISIBLE_RAIL.map((item) => {
 					const active =
@@ -301,7 +301,7 @@ function RailButton({
 			onClick={onClick}
 			title={title}
 			className={cn(
-				"flex min-h-7 items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+				"flex min-h-7 items-center gap-2 rounded-md px-2.5 py-1 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 				active
 					? "bg-sidebar-accent text-sidebar-accent-foreground"
 					: "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
@@ -395,7 +395,7 @@ function SectionTitle({
 	}, [section, folders]);
 	return (
 		<div className="flex min-w-0 items-center gap-1.5">
-			<h1 className="truncate text-base font-semibold tracking-tight text-foreground">
+			<h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
 				{title}
 			</h1>
 			{subtitle && <InfoTip content={subtitle} />}
@@ -917,8 +917,6 @@ function GeneralPane() {
 	const setCompletionSoundPreset = useSettingsStore(
 		(s) => s.setCompletionSoundPreset,
 	);
-	const analyticsEnabled = useSettingsStore((s) => s.analyticsEnabled);
-	const setAnalyticsEnabled = useSettingsStore((s) => s.setAnalyticsEnabled);
 	const branchNamingStyle = useSettingsStore((s) => s.branchNamingStyle);
 	const setBranchNamingStyle = useSettingsStore((s) => s.setBranchNamingStyle);
 	const branchNamingPrefix = useSettingsStore((s) => s.branchNamingPrefix);
@@ -1184,48 +1182,6 @@ function GeneralPane() {
 			</SettingsGroup>
 
 			<SettingsGroup
-				title="Privacy"
-				description="Control pseudonymous product and reliability analytics."
-			>
-				<button
-					type="button"
-					role="switch"
-					aria-checked={analyticsEnabled}
-					data-analytics-id="settings.share-usage-analytics"
-					onClick={() => setAnalyticsEnabled(!analyticsEnabled)}
-					className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/70"
-				>
-					<div className="min-w-0 flex-1">
-						<div className="text-sm font-medium text-foreground">
-							Share usage analytics
-						</div>
-						<div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-							Share pseudonymous feature use, model choices, active time, and
-							reliability data. Prompts, responses, code, paths, and account
-							details are never included. Standard geographic enrichment is
-							applied by our analytics processor.
-						</div>
-					</div>
-					<span
-						aria-hidden
-						className={cn(
-							"relative h-5 w-8 shrink-0 rounded-full p-0.5 ring-1 transition-colors",
-							analyticsEnabled
-								? "bg-primary ring-primary/60"
-								: "bg-[#1f2123] ring-white/10",
-						)}
-					>
-						<span
-							className={cn(
-								"block size-3.5 rounded-full bg-white ring-1 ring-black/10 transition-transform dark:bg-[#484a4d]",
-								analyticsEnabled && "translate-x-[14px]",
-							)}
-						/>
-					</span>
-				</button>
-			</SettingsGroup>
-
-			<SettingsGroup
 				title="Workspace naming"
 				description="Controls how Zuse (Beta) names new worktree-backed branches."
 			>
@@ -1418,7 +1374,7 @@ function ProvidersPane() {
 									aria-selected={selected}
 									onClick={() => setSelectedProvider(pid)}
 									className={cn(
-										"flex min-h-9 shrink-0 items-center gap-2 border-b px-2.5 text-sm transition-colors",
+										"flex min-h-7 shrink-0 items-center gap-1.5 border-b px-2 text-xs transition-colors",
 										selected
 											? "border-primary text-foreground"
 											: "border-transparent text-muted-foreground hover:text-foreground",
@@ -1482,10 +1438,10 @@ function ProvidersPane() {
 									role="radio"
 									aria-checked={selected}
 									onClick={() => setDefaultProvider(pid)}
-									className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
+									className="group flex min-h-9 w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted/40"
 								>
 									<ProviderIcon providerId={pid} className="size-4 shrink-0" />
-									<span className="flex-1 truncate text-sm font-medium text-foreground">
+									<span className="flex-1 truncate text-xs font-medium text-foreground">
 										{PROVIDER_LABEL[pid]}
 									</span>
 									<RadioCheck active={selected} />
@@ -1641,7 +1597,7 @@ export function SettingsCardHeader({
 	trailing?: React.ReactNode;
 }) {
 	return (
-		<header className="flex h-10 shrink-0 items-center gap-2 px-4 text-muted-foreground">
+		<header className="flex h-8 shrink-0 items-center gap-2 px-3 text-muted-foreground">
 			{Icon && <HugeiconsIcon icon={Icon} className="size-3.5" aria-hidden />}
 			<span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">
 				{title}
@@ -1674,8 +1630,8 @@ export function SettingsRow({
 	children?: React.ReactNode;
 }) {
 	return (
-		<div className={cn("flex flex-col gap-3 px-4 py-3", className)}>
-			<div className="flex items-start gap-3">
+		<div className={cn("flex flex-col gap-2 px-3 py-2.5", className)}>
+			<div className="flex items-start gap-2.5">
 				{Icon && (
 					<HugeiconsIcon
 						icon={Icon}
@@ -1684,14 +1640,14 @@ export function SettingsRow({
 					/>
 				)}
 				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<div className="text-sm font-medium text-foreground">{title}</div>
+					<div className="text-xs font-medium text-foreground">{title}</div>
 					{description && (
 						<div className="text-[11px] leading-snug text-muted-foreground">
 							{description}
 						</div>
 					)}
 				</div>
-				{action && <div className="shrink-0 pt-0.5">{action}</div>}
+				{action && <div className="shrink-0">{action}</div>}
 			</div>
 			{children}
 		</div>
