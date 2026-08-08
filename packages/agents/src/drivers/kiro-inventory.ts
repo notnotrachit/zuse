@@ -46,15 +46,31 @@ interface CliListModelsResponse {
 }
 
 const humanizeModelId = (id: string): string => {
-	// claude-opus-4.8 → Claude Opus 4.8; gpt-5.6-sol → Gpt 5.6 Sol
-	return id
-		.split(/[-_]/)
-		.map((part) => {
-			if (part.length === 0) return part;
-			if (/^\d/.test(part)) return part;
-			return part.charAt(0).toUpperCase() + part.slice(1);
-		})
-		.join(" ");
+	// claude-opus-4.8 → Claude Opus 4.8; gpt-5.6-sol → GPT-5.6 Sol
+	const acronyms = new Set(["gpt", "glm"]);
+	const parts = id.split(/[-_]/).filter((part) => part.length > 0);
+	const words: string[] = [];
+	for (let i = 0; i < parts.length; i++) {
+		const part = parts[i];
+		if (part === undefined) continue;
+		if (acronyms.has(part.toLowerCase())) {
+			const next = parts[i + 1];
+			// Keep "GPT-5.6" as one token when the next segment is a version.
+			if (next !== undefined && /^\d/.test(next)) {
+				words.push(`${part.toUpperCase()}-${next}`);
+				i += 1;
+				continue;
+			}
+			words.push(part.toUpperCase());
+			continue;
+		}
+		if (/^\d/.test(part)) {
+			words.push(part);
+			continue;
+		}
+		words.push(part.charAt(0).toUpperCase() + part.slice(1));
+	}
+	return words.join(" ");
 };
 
 const fromApiModel = (model: ListModelsApiModel): KiroInventoryModel | null => {

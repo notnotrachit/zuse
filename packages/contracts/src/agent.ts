@@ -1306,21 +1306,18 @@ export const MODELS_BY_PROVIDER: Record<
       id: "gpt-5.6-sol",
       label: "GPT-5.6 Sol",
       badgeLabel: "Experimental",
-      defaultVisible: false,
       supportsPlanMode: true,
     },
     {
       id: "gpt-5.6-terra",
       label: "GPT-5.6 Terra",
       badgeLabel: "Experimental",
-      defaultVisible: false,
       supportsPlanMode: true,
     },
     {
       id: "gpt-5.6-luna",
       label: "GPT-5.6 Luna",
       badgeLabel: "Experimental",
-      defaultVisible: false,
       supportsPlanMode: true,
     },
     {

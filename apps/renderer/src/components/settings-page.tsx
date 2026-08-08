@@ -1383,7 +1383,7 @@ function ProvidersPane() {
 								>
 									<ProviderIcon providerId={pid} className="size-3.5" />
 									<span>{PROVIDER_LABEL[pid]}</span>
-									{pid === "opencode" && (
+									{(pid === "opencode" || pid === "kiro") && (
 										<span className="rounded border border-border/60 bg-muted/70 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
 											New
 										</span>

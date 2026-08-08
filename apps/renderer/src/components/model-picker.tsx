@@ -43,8 +43,8 @@ import {
 	topRecents,
 } from "~/lib/model-picker-recents";
 import { cn } from "~/lib/utils";
-import { useMessagesStore } from "~/store/messages";
 import { useKiroInventory } from "~/store/kiro-inventory";
+import { useMessagesStore } from "~/store/messages";
 import { useOpencodeInventory } from "~/store/opencode-inventory";
 import { useProvidersStore } from "~/store/providers";
 import { useSessionsStore } from "~/store/sessions";
@@ -197,17 +197,39 @@ export function ModelPicker(props: ModelPickerProps) {
 	const modelsForProvider = useCallback(
 		(
 			pid: ProviderId,
-		): ReadonlyArray<Pick<ModelOption, "id" | "label" | "badgeLabel">> => {
+		): ReadonlyArray<
+			Pick<ModelOption, "id" | "label" | "badgeLabel"> & {
+				contextWindowLabel?: string;
+			}
+		> => {
 			if (pid === "kiro" && kiroInventory !== null) {
 				// Live Kiro catalog from control-plane / CLI. Prefer it over the
 				// static seed so tier/region-gated models appear correctly.
-				return kiroInventory.models.map((m) => ({
-					id: m.id,
-					label: m.label,
-					...(m.rateMultiplier !== null && m.rateMultiplier !== 1
-						? { badgeLabel: `${m.rateMultiplier}× credits` }
-						: {}),
-				}));
+				// Keep curated labels from the seed when present (e.g. "GPT-5.6 Sol"
+				// instead of inventory's "Gpt 5.6 Sol").
+				const seedById = new Map(
+					(MODELS_BY_PROVIDER.kiro ?? []).map((m) => [m.id, m] as const),
+				);
+				return kiroInventory.models.map((m) => {
+					const seed = seedById.get(m.id);
+					const contextWindowLabel =
+						typeof m.contextWindow === "number" && m.contextWindow >= 1_000_000
+							? "1M"
+							: undefined;
+					// Live inventory owns the badge column: credit multipliers only.
+					// Do not fall back to seed "Experimental" — that mixed badge types
+					// (2.4× next to EXPERIMENTAL) when a model had a 1× / missing rate.
+					const badgeLabel =
+						m.rateMultiplier !== null && m.rateMultiplier !== 1
+							? `${m.rateMultiplier}×`
+							: undefined;
+					return {
+						id: m.id,
+						label: seed?.label ?? m.label,
+						...(badgeLabel !== undefined ? { badgeLabel } : {}),
+						...(contextWindowLabel !== undefined ? { contextWindowLabel } : {}),
+					};
+				});
 			}
 			if (pid !== "opencode" || opencodeInventory === null) {
 				return MODELS_BY_PROVIDER[pid] ?? [];
@@ -263,20 +285,26 @@ export function ModelPicker(props: ModelPickerProps) {
 				const visible = isModelVisible(pid, m.id, modelEnabledByProvider);
 				const selectedHidden = pid === providerId && m.id === currentModel;
 				if (!visible && !selectedHidden) continue;
-				const descriptor = findModelDescriptor(pid, m.id);
-				const ctxDescriptor = descriptor?.optionDescriptors?.find(
-					(d): d is SelectOptionDescriptor =>
-						d.kind === "select" && d.id === "contextWindow",
-				);
-				const ctxDefault = ctxDescriptor?.defaultId;
-				const ctxLabel =
-					ctxDescriptor !== undefined
-						? ctxDescriptor.options.find((o) => o.id === ctxDefault)?.label
-						: undefined;
-				// Only surface a pill when the default is the larger window —
-				// 200k-by-default rows would be noise.
-				const contextWindowLabel =
-					ctxDefault === "1m" ? (ctxLabel ?? "1M") : undefined;
+				// Inventory may already supply a context-window pill (Kiro live
+				// catalog). Fall back to the static descriptor default when not.
+				let contextWindowLabel = m.contextWindowLabel;
+				if (contextWindowLabel === undefined) {
+					const descriptor = findModelDescriptor(pid, m.id);
+					const ctxDescriptor = descriptor?.optionDescriptors?.find(
+						(d): d is SelectOptionDescriptor =>
+							d.kind === "select" && d.id === "contextWindow",
+					);
+					const ctxDefault = ctxDescriptor?.defaultId;
+					const ctxLabel =
+						ctxDescriptor !== undefined
+							? ctxDescriptor.options.find((o) => o.id === ctxDefault)?.label
+							: undefined;
+					// Only surface a pill when the default is the larger window —
+					// 200k-by-default rows would be noise.
+					if (ctxDefault === "1m") {
+						contextWindowLabel = ctxLabel ?? "1M";
+					}
+				}
 				out.push({
 					providerId: pid,
 					modelId: m.id,
@@ -848,17 +876,11 @@ function ModelRow({
 					className="size-4 shrink-0 text-muted-foreground"
 				/>
 			)}
+			{/* Name + optional provider subtitle. Chips live outside this column so
+			    two-line recent rows don't pull 1M / credit badges off the row center. */}
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="flex min-w-0 items-center gap-1.5">
-					<span className="truncate font-medium">{entry.label}</span>
-					{entry.contextWindowLabel !== undefined && (
-						<span
-							title={`${entry.contextWindowLabel} context window`}
-							className="shrink-0 rounded-[0.25rem] bg-muted px-1.5 py-px text-[10px] font-medium text-foreground/70 dark:bg-muted/70 dark:px-1 dark:text-muted-foreground"
-						>
-							{entry.contextWindowLabel}
-						</span>
-					)}
+				<span className="min-w-0 font-medium break-words leading-snug">
+					{entry.label}
 				</span>
 				{showProvider && (
 					<span className="truncate text-[11px] text-muted-foreground">
@@ -866,10 +888,29 @@ function ModelRow({
 					</span>
 				)}
 			</span>
-			<span className="flex-1" />
-			{entry.badgeLabel !== undefined && (
-				<span className="shrink-0 rounded-[0.25rem] bg-primary/35 px-1.5 py-px text-[9px] font-semibold text-primary-foreground uppercase tracking-wide dark:bg-primary/15 dark:text-primary">
-					{entry.badgeLabel}
+			{(entry.contextWindowLabel !== undefined ||
+				entry.badgeLabel !== undefined) && (
+				<span className="flex shrink-0 items-center gap-1.5">
+					{entry.contextWindowLabel !== undefined && (
+						<span
+							title={`${entry.contextWindowLabel} context window`}
+							className="rounded-[0.25rem] bg-muted px-1.5 py-px text-[10px] font-medium text-foreground/70 dark:bg-muted/70 dark:px-1 dark:text-muted-foreground"
+						>
+							{entry.contextWindowLabel}
+						</span>
+					)}
+					{entry.badgeLabel !== undefined && (
+						<span
+							title={
+								/^\d+(\.\d+)?×$/.test(entry.badgeLabel)
+									? `${entry.badgeLabel} credit multiplier`
+									: entry.badgeLabel
+							}
+							className="rounded-[0.25rem] bg-primary/35 px-1.5 py-px text-[9px] font-semibold text-primary-foreground uppercase tracking-wide dark:bg-primary/15 dark:text-primary"
+						>
+							{entry.badgeLabel}
+						</span>
+					)}
 				</span>
 			)}
 			<Tooltip>
