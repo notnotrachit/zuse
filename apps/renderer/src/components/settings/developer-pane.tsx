@@ -1,14 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert01Icon,
-	GitMergeIcon,
-	GitPullRequestIcon,
-	InformationCircleIcon,
-	Loading02Icon,
-	TaskDone01Icon,
-	Upload01Icon,
-	Wrench01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { GitMerge, GitPullRequest, Info, ListChecks, Loader, TriangleAlert, Upload, Wrench } from "lucide-react";
 import {
 	GLASS_TONE_VARS,
 	GLASS_TONES,
@@ -100,7 +90,7 @@ const WORKFLOW_DEMOS: ReadonlyArray<WorkflowDemo> = [
 		chip: "1 change",
 		action: {
 			label: "Commit & push",
-			icon: <HugeiconsIcon icon={Upload01Icon} />,
+			icon: <Upload />,
 		},
 	},
 	{
@@ -109,14 +99,14 @@ const WORKFLOW_DEMOS: ReadonlyArray<WorkflowDemo> = [
 		chip: "2 ahead",
 		action: {
 			label: "Create PR",
-			icon: <HugeiconsIcon icon={GitPullRequestIcon} />,
+			icon: <GitPullRequest />,
 		},
 	},
 	{
 		label: "open-pr",
 		tone: "green",
 		chip: "#142",
-		action: { label: "Merge", icon: <HugeiconsIcon icon={GitMergeIcon} /> },
+		action: { label: "Merge", icon: <GitMerge /> },
 	},
 	{
 		label: "open-pr · draft",
@@ -124,7 +114,7 @@ const WORKFLOW_DEMOS: ReadonlyArray<WorkflowDemo> = [
 		chip: "#142",
 		action: {
 			label: "Mark ready",
-			icon: <HugeiconsIcon icon={GitMergeIcon} />,
+			icon: <GitMerge />,
 		},
 	},
 	{
@@ -133,7 +123,7 @@ const WORKFLOW_DEMOS: ReadonlyArray<WorkflowDemo> = [
 		chip: "#142",
 		action: {
 			label: "Fix actions",
-			icon: <HugeiconsIcon icon={Wrench01Icon} />,
+			icon: <Wrench />,
 		},
 	},
 	{
@@ -142,7 +132,7 @@ const WORKFLOW_DEMOS: ReadonlyArray<WorkflowDemo> = [
 		chip: "#142",
 		action: {
 			label: "Resolve conflicts",
-			icon: <HugeiconsIcon icon={Alert01Icon} />,
+			icon: <TriangleAlert />,
 		},
 	},
 ];
@@ -158,7 +148,7 @@ function ToastPlaygroundSection(): React.ReactElement {
 			<div className="grid gap-2 rounded-lg border border-border/60 bg-muted p-3 sm:grid-cols-2">
 				<GlassActionButton
 					tone="green"
-					icon={<HugeiconsIcon icon={GitMergeIcon} />}
+					icon={<GitMerge />}
 					label="PR merged"
 					onClick={() =>
 						toastManager.add({
@@ -170,7 +160,7 @@ function ToastPlaygroundSection(): React.ReactElement {
 				/>
 				<GlassActionButton
 					tone="zinc"
-					icon={<HugeiconsIcon icon={InformationCircleIcon} />}
+					icon={<Info />}
 					label="PR closed"
 					onClick={() =>
 						toastManager.add({
@@ -182,7 +172,7 @@ function ToastPlaygroundSection(): React.ReactElement {
 				/>
 				<GlassActionButton
 					tone="red"
-					icon={<HugeiconsIcon icon={Alert01Icon} />}
+					icon={<TriangleAlert />}
 					label="Sidebar error"
 					onClick={() =>
 						toastManager.add({
@@ -194,7 +184,7 @@ function ToastPlaygroundSection(): React.ReactElement {
 				/>
 				<GlassActionButton
 					tone="red"
-					icon={<HugeiconsIcon icon={Alert01Icon} />}
+					icon={<TriangleAlert />}
 					label="Action failed"
 					onClick={() =>
 						toastManager.add({
@@ -207,7 +197,7 @@ function ToastPlaygroundSection(): React.ReactElement {
 				/>
 				<GlassActionButton
 					tone="pink"
-					icon={<HugeiconsIcon icon={Loading02Icon} />}
+					icon={<Loader />}
 					label="Loading"
 					onClick={() =>
 						toastManager.add({
@@ -220,7 +210,7 @@ function ToastPlaygroundSection(): React.ReactElement {
 				/>
 				<GlassActionButton
 					tone="green"
-					icon={<HugeiconsIcon icon={TaskDone01Icon} />}
+					icon={<ListChecks />}
 					label="Success"
 					onClick={() =>
 						toastManager.add({

@@ -1,15 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowRight01Icon,
-	BubbleChatIcon,
-	Copy01Icon,
-	Delete02Icon,
-	FileAddIcon,
-	FolderAddIcon,
-	FolderOpenIcon,
-	PencilEdit01Icon,
-	Search01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ChevronRight, Copy, FilePlus, FolderOpen, FolderPlus, MessageCircle, Search, SquarePen, Trash2 } from "lucide-react";
 import type {
 	ContextMenuItem as FileTreeContextMenuItem,
 	ContextMenuOpenContext as FileTreeContextMenuOpenContext,
@@ -624,26 +613,26 @@ function TreeView({
 				<div className={cn("min-w-[190px] p-1.5 text-sm", overlaySurface)}>
 					{isFile && (
 						<MenuButton
-							icon={PencilEdit01Icon}
+							icon={SquarePen}
 							onClick={act(() => openFile(stripSlash(item.path), item.name))}
 						>
 							Open in editor
 						</MenuButton>
 					)}
 					<MenuButton
-						icon={PencilEdit01Icon}
+						icon={SquarePen}
 						onClick={act(() => model.startRenaming(item.path), false)}
 					>
 						Rename
 					</MenuButton>
 					<MenuButton
-						icon={BubbleChatIcon}
+						icon={MessageCircle}
 						onClick={act(() => attach(item.path, item.kind))}
 					>
 						Attach to chat
 					</MenuButton>
 					<MenuButton
-						icon={Copy01Icon}
+						icon={Copy}
 						onClick={act(() => copyPath(item.path))}
 					>
 						Copy path
@@ -655,13 +644,13 @@ function TreeView({
 					/>
 					<div className="my-1 h-px bg-border" />
 					<MenuButton
-						icon={FileAddIcon}
+						icon={FilePlus}
 						onClick={act(() => void createInDirectory(dirForCreate, "file"))}
 					>
 						New File
 					</MenuButton>
 					<MenuButton
-						icon={FolderAddIcon}
+						icon={FolderPlus}
 						onClick={act(
 							() => void createInDirectory(dirForCreate, "directory"),
 						)}
@@ -670,7 +659,7 @@ function TreeView({
 					</MenuButton>
 					<div className="my-1 h-px bg-border" />
 					<MenuButton
-						icon={Delete02Icon}
+						icon={Trash2}
 						destructive
 						onClick={act(() =>
 							setDeleteTarget({
@@ -709,17 +698,17 @@ function TreeView({
 			</span>
 			<HeaderButton
 				label="New File"
-				icon={FileAddIcon}
+				icon={FilePlus}
 				onClick={() => void createInDirectory("", "file")}
 			/>
 			<HeaderButton
 				label="New Folder"
-				icon={FolderAddIcon}
+				icon={FolderPlus}
 				onClick={() => void createInDirectory("", "directory")}
 			/>
 			<HeaderButton
 				label="Search files"
-				icon={Search01Icon}
+				icon={Search}
 				onClick={openSearch}
 			/>
 		</div>
@@ -821,10 +810,7 @@ function FileSearchPalette({
 				onMouseDown={(e) => e.stopPropagation()}
 			>
 				<div className="flex items-center gap-2 border-b border-border/60 px-3">
-					<HugeiconsIcon
-						icon={Search01Icon}
-						className="size-4 shrink-0 text-muted-foreground"
-					/>
+					<Search className="size-4 shrink-0 text-muted-foreground" />
 					<input
 						ref={inputRef}
 						value={query}
@@ -888,12 +874,12 @@ function FileSearchPalette({
 }
 
 function MenuButton({
-	icon,
+	icon: Icon,
 	children,
 	onClick,
 	destructive = false,
 }: {
-	icon: typeof FileAddIcon;
+	icon: typeof FilePlus;
 	children: React.ReactNode;
 	onClick: () => void;
 	destructive?: boolean;
@@ -906,7 +892,7 @@ function MenuButton({
 				destructive ? "text-red-300 hover:bg-red-500/20 hover:text-red-200" : ""
 			}`}
 		>
-			<HugeiconsIcon icon={icon} className="size-4" />
+			<Icon className="size-4" />
 			{children}
 		</button>
 	);
@@ -931,12 +917,9 @@ function OpenInSubmenu({
 				aria-haspopup="menu"
 				className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-accent"
 			>
-				<HugeiconsIcon icon={FolderOpenIcon} className="size-4" />
+				<FolderOpen className="size-4" />
 				<span>Open in</span>
-				<HugeiconsIcon
-					icon={ArrowRight01Icon}
-					className="ml-auto size-3.5 text-muted-foreground"
-				/>
+				<ChevronRight className="ml-auto size-3.5 text-muted-foreground" />
 			</button>
 			<div
 				role="menu"
@@ -965,11 +948,10 @@ function OpenInSubmenu({
 
 function HeaderButton({
 	label,
-	icon,
-	onClick,
+	icon: Icon, onClick,
 }: {
 	label: string;
-	icon: typeof FileAddIcon;
+	icon: typeof FilePlus;
 	onClick: () => void;
 }) {
 	return (
@@ -982,7 +964,7 @@ function HeaderButton({
 						onClick={onClick}
 						className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 					>
-						<HugeiconsIcon icon={icon} className="size-4" />
+						<Icon className="size-4" />
 					</button>
 				}
 			/>

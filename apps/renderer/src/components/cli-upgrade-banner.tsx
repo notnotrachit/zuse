@@ -1,12 +1,5 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	CircleArrowUp01Icon,
-	Copy01Icon,
-	LinkSquare01Icon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, CircleArrowUp, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import type { ProviderId } from "@zuse/contracts";
-import { RefreshCw as RefreshIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -83,7 +76,7 @@ export function CliUpgradeBanner({
 		>
 			<div className="flex items-start gap-2.5">
 				<span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-warning">
-					<HugeiconsIcon icon={CircleArrowUp01Icon} className="size-3.5" />
+					<CircleArrowUp className="size-3.5" />
 				</span>
 				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 					<span className="text-[12.5px] font-medium text-foreground">
@@ -122,11 +115,11 @@ export function CliUpgradeBanner({
 					>
 						{copied ? (
 							<>
-								<HugeiconsIcon icon={Tick01Icon} className="size-3" /> Copied
+								<Check className="size-3" /> Copied
 							</>
 						) : (
 							<>
-								<HugeiconsIcon icon={Copy01Icon} className="size-3" /> Copy
+								<Copy className="size-3" /> Copy
 							</>
 						)}
 					</Button>
@@ -140,7 +133,7 @@ export function CliUpgradeBanner({
 					onClick={onOpenDocs}
 					className="gap-1.5 rounded-full text-[11px] text-muted-foreground"
 				>
-					<HugeiconsIcon icon={LinkSquare01Icon} className="size-3" />
+					<ExternalLink className="size-3" />
 					Upgrade guide
 				</Button>
 				<Button
@@ -150,7 +143,7 @@ export function CliUpgradeBanner({
 					disabled={refreshing}
 					className="gap-1.5 rounded-full text-[11px] text-muted-foreground"
 				>
-					<RefreshIcon
+					<RefreshCw
 						className={`size-3 ${refreshing ? "animate-spin" : ""}`}
 					/>
 					Recheck

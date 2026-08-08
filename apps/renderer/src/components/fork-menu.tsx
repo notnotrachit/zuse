@@ -1,6 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Loading02Icon } from "@hugeicons-pro/core-solid-rounded";
-import { GitBranchIcon } from "@hugeicons-pro/core-stroke-rounded";
+import { GitBranch, Loader } from "lucide-react";
 import type {
 	FolderId,
 	ForkDestination,
@@ -152,11 +150,8 @@ export function ForkButton({
 							className="inline-grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/70 outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] data-[popup-open]:bg-muted/50 data-[popup-open]:text-foreground [@media(pointer:coarse)]:size-11"
 						>
 							{forking ? (
-								<HugeiconsIcon
-									icon={Loading02Icon}
-									className="size-3.5 animate-spin"
-									aria-hidden="true"
-								/>
+								<Loader className="size-3.5 animate-spin"
+ aria-hidden="true" />
 							) : (
 								<ForkSplitIcon className="size-3.5" />
 							)}
@@ -193,7 +188,7 @@ export function ForkButton({
 									onClick={() => void run("chat")}
 									className="gap-2.5 px-2 py-1.5"
 								>
-									<HugeiconsIcon icon={GitBranchIcon} className="size-4" />
+									<GitBranch className="size-4" />
 									<span>Fork into a new worktree</span>
 								</MenuItem>
 							}

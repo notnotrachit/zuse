@@ -1,10 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ComputerIcon,
-	Moon02Icon,
-	Sun03Icon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, Monitor, Moon, Sun } from "lucide-react";
 import type { AppearanceMode } from "@zuse/contracts";
 
 import { cn } from "~/lib/utils";
@@ -15,25 +9,25 @@ const APPEARANCE_OPTIONS: ReadonlyArray<{
 	readonly value: AppearanceMode;
 	readonly label: string;
 	readonly description: string;
-	readonly Icon: typeof ComputerIcon;
+	readonly Icon: typeof Monitor;
 }> = [
 	{
 		value: "system",
 		label: "System",
 		description: "Match your Mac automatically.",
-		Icon: ComputerIcon,
+		Icon: Monitor,
 	},
 	{
 		value: "light",
 		label: "Light",
 		description: "Use the brighter interface.",
-		Icon: Sun03Icon,
+		Icon: Sun,
 	},
 	{
 		value: "dark",
 		label: "Dark",
 		description: "Keep the classic dark interface.",
-		Icon: Moon02Icon,
+		Icon: Moon,
 	},
 ];
 
@@ -65,11 +59,7 @@ export function AppearanceStep() {
 							)}
 						>
 							<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background/70 text-foreground">
-								<HugeiconsIcon
-									icon={option.Icon}
-									className="size-4"
-									strokeWidth={1.75}
-								/>
+								<option.Icon className="size-4" strokeWidth={1.75} />
 							</span>
 							<span className="flex min-w-0 flex-1 flex-col gap-1">
 								<span className="text-[13px] font-medium leading-none text-foreground">
@@ -81,11 +71,8 @@ export function AppearanceStep() {
 							</span>
 							{active && (
 								<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-									<HugeiconsIcon
-										icon={Tick01Icon}
-										className="size-2.5"
-										strokeWidth={3.5}
-									/>
+									<Check className="size-2.5"
+ strokeWidth={3.5} />
 								</span>
 							)}
 						</button>

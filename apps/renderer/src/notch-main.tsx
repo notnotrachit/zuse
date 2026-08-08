@@ -154,7 +154,7 @@ function NotchTray() {
                       PULSES.has(item.state) &&
                         "animate-pulse motion-reduce:animate-none",
                     )}
-                  />
+ />
                 );
               })}
               {compactOverflow > 0 && (
@@ -191,7 +191,7 @@ function NotchTray() {
                         item.state === "running" &&
                           "animate-pulse motion-reduce:animate-none",
                       )}
-                    />
+ />
                     <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium leading-none text-white/[0.88]">
                       {item.title}
                     </span>

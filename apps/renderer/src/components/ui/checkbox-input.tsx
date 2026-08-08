@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Tick01Icon } from "@hugeicons-pro/core-solid-rounded";
+import { Check } from "lucide-react";
 import { cn } from "~/lib/utils";
 
 /**
@@ -39,12 +38,9 @@ export function CheckboxInput({
 				)}
 			>
 				{checked ? (
-					<HugeiconsIcon
-						icon={Tick01Icon}
-						className="size-3 text-background"
-						strokeWidth={3.5}
-						aria-hidden
-					/>
+					<Check className="size-3 text-background"
+ strokeWidth={3.5}
+ aria-hidden />
 				) : null}
 			</span>
 		</span>

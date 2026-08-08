@@ -1,25 +1,26 @@
-import type { IconSvgElement } from "@hugeicons/react";
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
-	Alert01Icon,
-	ArrowLeft01Icon,
-	BrowserIcon,
-	ConnectIcon,
-	Delete02Icon,
-	DocumentAttachmentIcon,
-	Folder01Icon,
-	InformationCircleIcon,
-	KeyboardIcon,
-	PackageIcon,
-	PencilEdit01Icon,
-	PlugSocketIcon,
-	Settings01Icon,
-	SmartPhone01Icon,
-	TaskDone01Icon,
-	TestTubeIcon,
-	Tick01Icon,
-	VolumeHighIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+	AppWindow,
+	Check,
+	ChevronLeft,
+	FilePlus,
+	Folder as FolderIcon,
+	Info,
+	Keyboard,
+	Link2,
+	ListChecks,
+	Package,
+	Plug,
+	Plus,
+	RefreshCw,
+	Settings,
+	Smartphone,
+	SquarePen,
+	TestTube2,
+	Trash2,
+	TriangleAlert,
+	Volume2,
+	type LucideIcon,
+} from "lucide-react";
 import {
 	type AppearanceMode,
 	type BranchNamingStyle,
@@ -31,7 +32,6 @@ import {
 	visibleModelsForProvider,
 } from "@zuse/contracts";
 import { Effect } from "effect";
-import { Plus, RefreshCw as RefreshIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { displayPath } from "~/lib/display-path";
 import { hasHostCapability } from "~/lib/host-platform";
@@ -94,7 +94,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip.tsx";
 type RailItemBase = {
 	readonly id: string;
 	readonly label: string;
-	readonly Icon: IconSvgElement;
+	readonly Icon: LucideIcon;
 	readonly section: SettingsSection;
 };
 
@@ -102,55 +102,55 @@ const TOP_RAIL: ReadonlyArray<RailItemBase> = [
 	{
 		id: "general",
 		label: "General",
-		Icon: Settings01Icon,
+		Icon: Settings,
 		section: { kind: "general" },
 	},
 	{
 		id: "providers",
 		label: "Providers",
-		Icon: PackageIcon,
+		Icon: Package,
 		section: { kind: "providers" },
 	},
 	{
 		id: "mcp",
 		label: "MCP Servers",
-		Icon: PlugSocketIcon,
+		Icon: Plug,
 		section: { kind: "mcp" },
 	},
 	{
 		id: "integrations",
 		label: "Integrations",
-		Icon: ConnectIcon,
+		Icon: Link2,
 		section: { kind: "integrations" },
 	},
 	{
 		id: "devices",
 		label: "Devices",
-		Icon: SmartPhone01Icon,
+		Icon: Smartphone,
 		section: { kind: "devices" },
 	},
 	{
 		id: "browser",
 		label: "Browser",
-		Icon: BrowserIcon,
+		Icon: AppWindow,
 		section: { kind: "browser" },
 	},
 	{
 		id: "pokedex",
 		label: "Pokedex",
-		Icon: TaskDone01Icon,
+		Icon: ListChecks,
 		section: { kind: "pokedex" },
 	},
 	{
 		id: "shortcuts",
 		label: "Keyboard shortcuts",
-		Icon: KeyboardIcon,
+		Icon: Keyboard,
 		section: { kind: "shortcuts" },
 	},
 	{
 		id: "diagnostics",
 		label: "Diagnostics",
-		Icon: DocumentAttachmentIcon,
+		Icon: FilePlus,
 		section: { kind: "diagnostics" },
 	},
 	// Dev-only visual playground (accent swatches + workflow chip/button
@@ -158,7 +158,7 @@ const TOP_RAIL: ReadonlyArray<RailItemBase> = [
 	{
 		id: "developer",
 		label: "Developer",
-		Icon: TestTubeIcon,
+		Icon: TestTube2,
 		section: { kind: "developer" },
 	},
 ];
@@ -193,7 +193,7 @@ export function SettingsPage() {
 					aria-label="Back to app"
 					className="flex items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground [-webkit-app-region:no-drag]"
 				>
-					<HugeiconsIcon icon={ArrowLeft01Icon} className="size-3.5" />
+					<ChevronLeft className="size-3.5" />
 					<span>Back to app</span>
 				</button>
 			</header>
@@ -266,7 +266,7 @@ function Rail({
 									onClick={() =>
 										onSelect({ kind: "repository", projectId: f.id })
 									}
-									icon={Folder01Icon}
+									icon={FolderIcon}
 									label={f.name}
 									title={displayPath(f.path)}
 									truncate
@@ -290,7 +290,7 @@ function RailButton({
 }: {
 	active: boolean;
 	onClick: () => void;
-	icon: IconSvgElement;
+	icon: LucideIcon;
 	label: string;
 	title?: string;
 	truncate?: boolean;
@@ -307,7 +307,7 @@ function RailButton({
 					: "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
 			)}
 		>
-			<HugeiconsIcon icon={Icon} className="size-4 shrink-0" />
+			<Icon className="size-4 shrink-0" />
 			<span className={cn(truncate && "truncate")}>{label}</span>
 		</button>
 	);
@@ -418,7 +418,7 @@ function InfoTip({ content }: { content: React.ReactNode }) {
 						aria-label="More info"
 						className="inline-flex shrink-0 cursor-default items-center text-muted-foreground/50 hover:text-muted-foreground"
 					>
-						<HugeiconsIcon icon={InformationCircleIcon} className="size-3.5" />
+						<Info className="size-3.5" />
 					</button>
 				}
 			/>
@@ -683,7 +683,7 @@ function BrowserTestLoginsPane() {
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-alert-warning-bg px-3 py-2.5 text-[12px] leading-relaxed text-warning-foreground">
-				<HugeiconsIcon icon={Alert01Icon} className="mt-0.5 size-4 shrink-0" />
+				<TriangleAlert className="mt-0.5 size-4 shrink-0" />
 				<span>
 					<strong className="font-semibold">Dummy / test logins only.</strong>{" "}
 					Never store a real or production password here. These are for seeded
@@ -722,7 +722,7 @@ function BrowserTestLoginsPane() {
 										aria-label={`Remove login for ${c.origin}`}
 										className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
 									>
-										<HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
+										<Trash2 className="size-3.5" />
 									</button>
 								</li>
 							))}
@@ -801,10 +801,7 @@ function NotchSettingsPane() {
 		<div className="flex flex-col gap-4">
 			{!supported && (
 				<div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-alert-warning-bg px-3 py-2.5 text-[12px] leading-relaxed text-warning-foreground">
-					<HugeiconsIcon
-						icon={Alert01Icon}
-						className="mt-0.5 size-4 shrink-0"
-					/>
+					<TriangleAlert className="mt-0.5 size-4 shrink-0" />
 					<span>{unsupportedText}</span>
 				</div>
 			)}
@@ -1017,10 +1014,7 @@ function GeneralPane() {
 										aria-label="Edit display name"
 										className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
 									>
-										<HugeiconsIcon
-											icon={PencilEdit01Icon}
-											className="size-3.5"
-										/>
+										<SquarePen className="size-3.5" />
 									</button>
 								</div>
 							)}
@@ -1140,10 +1134,7 @@ function GeneralPane() {
 							!completionSoundEnabled && "opacity-60",
 						)}
 					>
-						<HugeiconsIcon
-							icon={VolumeHighIcon}
-							className="size-4 shrink-0 text-muted-foreground"
-						/>
+						<Volume2 className="size-4 shrink-0 text-muted-foreground" />
 						<Select
 							value={completionSoundPreset}
 							onValueChange={(v) =>
@@ -1352,7 +1343,7 @@ function ProvidersPane() {
 							disabled={loading}
 							aria-label="Refresh provider status"
 						>
-							<RefreshIcon
+							<RefreshCw
 								className={cn("size-3.5", loading && "animate-spin")}
 								aria-hidden
 							/>
@@ -1593,13 +1584,13 @@ export function SettingsCardHeader({
 	title,
 	trailing,
 }: {
-	icon?: IconSvgElement;
+	icon?: LucideIcon;
 	title: string;
 	trailing?: React.ReactNode;
 }) {
 	return (
 		<header className="flex h-8 shrink-0 items-center gap-2 px-3 text-muted-foreground">
-			{Icon && <HugeiconsIcon icon={Icon} className="size-3.5" aria-hidden />}
+			{Icon ? <Icon className="size-3.5" aria-hidden /> : null}
 			<span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">
 				{title}
 			</span>
@@ -1623,7 +1614,7 @@ export function SettingsRow({
 	className,
 	children,
 }: {
-	icon?: IconSvgElement;
+	icon?: LucideIcon;
 	title: string;
 	description?: string;
 	action?: React.ReactNode;
@@ -1633,13 +1624,7 @@ export function SettingsRow({
 	return (
 		<div className={cn("flex flex-col gap-2 px-3 py-2.5", className)}>
 			<div className="flex items-start gap-2.5">
-				{Icon && (
-					<HugeiconsIcon
-						icon={Icon}
-						className="size-4 shrink-0 text-muted-foreground"
-						aria-hidden
-					/>
-				)}
+				{Icon ? <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden /> : null}
 				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 					<div className="text-xs font-medium text-foreground">{title}</div>
 					{description && (
@@ -1709,7 +1694,7 @@ export function OptionCard({
 	onClick,
 	disabled,
 }: {
-	icon?: IconSvgElement;
+	icon?: LucideIcon;
 	iconNode?: React.ReactNode;
 	title: string;
 	description?: string;
@@ -1743,7 +1728,7 @@ export function OptionCard({
 					)}
 				>
 					{iconNode ??
-						(Icon ? <HugeiconsIcon icon={Icon} className="size-4" /> : null)}
+						(Icon ? <Icon className="size-4" /> : null)}
 				</span>
 			)}
 			<span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -1811,12 +1796,9 @@ export function RadioCheck({
 			)}
 		>
 			{active && (
-				<HugeiconsIcon
-					icon={Tick01Icon}
-					className="size-2.5 text-primary-foreground"
-					strokeWidth={3.5}
-					aria-hidden
-				/>
+				<Check className="size-2.5 text-primary-foreground"
+ strokeWidth={3.5}
+ aria-hidden />
 			)}
 		</span>
 	);
@@ -1900,12 +1882,9 @@ export function CheckboxInput({
 				)}
 			>
 				{checked && (
-					<HugeiconsIcon
-						icon={Tick01Icon}
-						className="size-3 text-background"
-						strokeWidth={3.5}
-						aria-hidden
-					/>
+					<Check className="size-3 text-background"
+ strokeWidth={3.5}
+ aria-hidden />
 				)}
 			</span>
 		</span>

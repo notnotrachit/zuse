@@ -1,8 +1,4 @@
-import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
-import {
-	Folder01Icon,
-	FolderOpenIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Folder, FolderOpen } from "lucide-react";
 import {
 	createFileTreeIconResolver,
 	getBuiltInSpriteSheet,
@@ -100,29 +96,31 @@ export const resolveFileIcon = (name: string): ResolvedFileIcon =>
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** Vanilla-DOM render of a hugeicons glyph (for non-React hosts like CM). */
-const svgFromHugeicon = (icon: IconSvgElement): SVGSVGElement => {
+/** Vanilla-DOM folder glyph for non-React hosts (CodeMirror chips). */
+const svgFromFolder = (expanded: boolean): SVGSVGElement => {
 	const svg = document.createElementNS(SVG_NS, "svg");
 	svg.setAttribute("viewBox", "0 0 24 24");
 	svg.setAttribute("fill", "none");
+	svg.setAttribute("stroke", "currentColor");
+	svg.setAttribute("stroke-width", "2");
+	svg.setAttribute("stroke-linecap", "round");
+	svg.setAttribute("stroke-linejoin", "round");
 	svg.setAttribute("aria-hidden", "true");
-	for (const [tag, attrs] of icon) {
-		const el = document.createElementNS(SVG_NS, tag);
-		for (const [key, value] of Object.entries(attrs)) {
-			if (key === "key") continue;
-			// Icon data uses React camelCase props (strokeWidth, strokeLinecap);
-			// raw DOM needs the kebab-case SVG attribute names.
-			const attr = key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
-			el.setAttribute(attr, String(value));
-		}
-		svg.appendChild(el);
-	}
+	// Lucide folder / folder-open paths
+	const path = document.createElementNS(SVG_NS, "path");
+	path.setAttribute(
+		"d",
+		expanded
+			? "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"
+			: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
+	);
+	svg.appendChild(path);
 	return svg;
 };
 
 /**
  * Vanilla-DOM equivalent of `FileIcon` for non-React hosts (the CodeMirror
- * chip widget). Same pierre sprite + tone for files, same hugeicons folder
+ * chip widget). Same pierre sprite + tone for files, same Lucide folder
  * glyphs as the file tree for directories.
  */
 export const buildFileIconDom = (
@@ -132,7 +130,7 @@ export const buildFileIconDom = (
 ): Element => {
 	installFileIconSprite();
 	if (kind === "directory") {
-		const svg = svgFromHugeicon(Folder01Icon);
+		const svg = svgFromFolder(false);
 		if (className !== "") svg.setAttribute("class", className);
 		svg.style.opacity = "0.7";
 		return svg;
@@ -159,10 +157,7 @@ export function FileIcon({ name, kind, expanded = false, className }: Props) {
 	if (kind === "directory") {
 		return (
 			<span className={wrapperClass} aria-hidden="true">
-				<HugeiconsIcon
-					icon={expanded ? FolderOpenIcon : Folder01Icon}
-					className="size-full opacity-70"
-				/>
+				{expanded ? <FolderOpen className="size-full opacity-70" /> : <Folder className="size-full opacity-70" />}
 			</span>
 		);
 	}

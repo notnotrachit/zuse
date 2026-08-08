@@ -1,11 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	ArrowUpRight01Icon,
-	Search01Icon,
-	StarIcon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ArrowUpRight, Check, ChevronDown, Search, Star } from "lucide-react";
 import type {
 	AgentAvailability,
 	ChatId,
@@ -481,7 +474,7 @@ export function ModelPicker(props: ModelPickerProps) {
 			>
 				<ProviderIcon providerId={providerId} className="size-3" />
 				<span>{currentLabel}</span>
-				<HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+				<ChevronDown className="size-3 opacity-60" />
 			</PopoverTrigger>
 			<PopoverPrimitive.Portal>
 				<PopoverPrimitive.Positioner
@@ -675,10 +668,7 @@ function SearchField({
 			: `in ${PROVIDER_CHIP_LABEL[scope]}…`;
 	return (
 		<div className="flex min-h-10 items-center gap-2 rounded-lg border bg-background px-3 focus-within:border-foreground/60 focus-within:ring-2 focus-within:ring-primary/30">
-			<HugeiconsIcon
-				icon={Search01Icon}
-				className="size-3.5 text-muted-foreground"
-			/>
+			<Search className="size-3.5 text-muted-foreground" />
 			<input
 				type="text"
 				value={value}
@@ -886,25 +876,19 @@ function ModelRow({
 							: "opacity-0 group-hover:opacity-70 group-focus-within:opacity-70 hover:opacity-100",
 					)}
 				>
-					<HugeiconsIcon icon={StarIcon} className="size-3.5" />
+					<Star className="size-3.5" />
 				</TooltipTrigger>
 				<TooltipPopup side="top">
 					{isDefault ? "Default model" : "Make default"}
 				</TooltipPopup>
 			</Tooltip>
 			{opensNewTab && (
-				<HugeiconsIcon
-					icon={ArrowUpRight01Icon}
-					className="size-3 text-muted-foreground/70"
-					aria-label="Open in new tab"
-				/>
+				<ArrowUpRight className="size-3 text-muted-foreground/70"
+ aria-label="Open in new tab" />
 			)}
 			{isActive && (
-				<HugeiconsIcon
-					icon={Tick01Icon}
-					className="size-3.5 shrink-0 text-primary"
-					aria-label="Selected"
-				/>
+				<Check className="size-3.5 shrink-0 text-primary"
+ aria-label="Selected" />
 			)}
 			{countSuffix !== undefined && (
 				<span className="text-[11px] text-muted-foreground tabular-nums">

@@ -1,5 +1,5 @@
+import { ArrowUp, CloudOff } from "lucide-react-native";
 import { useAtomValue } from "@effect/atom-react";
-import { ArrowUpIcon, CloudOffIcon } from "@hugeicons-pro/core-solid-rounded";
 import {
 	orderedChatSessions,
 	resolveActiveChatSession,
@@ -714,13 +714,13 @@ export default function NewChatScreen() {
 										<ActivityIndicator color={colors.primaryForeground} />
 									) : selectedOptions === null ? (
 										<HugeIcon
-											icon={CloudOffIcon}
+											icon={CloudOff}
 											size={15}
 											color={colors.primaryForeground}
 										/>
 									) : (
 										<HugeIcon
-											icon={ArrowUpIcon}
+											icon={ArrowUp}
 											size={18}
 											color={colors.primaryForeground}
 										/>

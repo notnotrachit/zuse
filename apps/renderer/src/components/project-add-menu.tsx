@@ -1,10 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	FileAddIcon,
-	FolderOpenIcon,
-	GlobeIcon,
-} from "@hugeicons-pro/core-solid-rounded";
-import { Plus } from "lucide-react";
+import { FilePlus, FolderOpen, Globe, Plus } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
@@ -68,10 +62,7 @@ export function ProjectAddMenu() {
 						onClick={() => void add()}
 						className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 					>
-						<HugeiconsIcon
-							icon={FolderOpenIcon}
-							className="size-3.5 text-muted-foreground"
-						/>
+						<FolderOpen className="size-3.5 text-muted-foreground" />
 						Open project
 					</MenuItem>
 					<MenuItem
@@ -80,10 +71,7 @@ export function ProjectAddMenu() {
 						onClick={() => setCloneOpen(true)}
 						className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 					>
-						<HugeiconsIcon
-							icon={GlobeIcon}
-							className="size-3.5 text-muted-foreground"
-						/>
+						<Globe className="size-3.5 text-muted-foreground" />
 						Open GitHub project
 					</MenuItem>
 					<MenuItem
@@ -92,10 +80,7 @@ export function ProjectAddMenu() {
 						onClick={() => setCreateOpen(true)}
 						className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 					>
-						<HugeiconsIcon
-							icon={FileAddIcon}
-							className="size-3.5 text-muted-foreground"
-						/>
+						<FilePlus className="size-3.5 text-muted-foreground" />
 						Quick start
 					</MenuItem>
 				</MenuPopup>

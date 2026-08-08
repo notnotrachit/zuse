@@ -21,7 +21,7 @@ export function OTPField({
       data-size={size}
       data-slot="otp-field"
       {...props}
-    />
+ />
   );
 }
 
@@ -38,7 +38,7 @@ export function OTPFieldInput({
       data-slot="otp-field-input"
       spellCheck={false}
       {...props}
-    />
+ />
   );
 }
 
@@ -56,9 +56,9 @@ export function OTPFieldSeparator({
           )}
           orientation="horizontal"
           {...props}
-        />
+ />
       }
-    />
+ />
   );
 }
 

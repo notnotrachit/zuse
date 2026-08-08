@@ -1,11 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowTurnDownIcon,
-	Loading02Icon,
-	MinusSignIcon,
-	Tick02Icon,
-	Upload01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, CornerDownLeft, Loader, Minus, Upload, FileWarning, MessageSquareText, Pencil, Sparkles, Trash2 } from "lucide-react";
 import type {
 	CodeAnnotation,
 	FolderId,
@@ -17,13 +10,6 @@ import type {
 	WorktreeId,
 } from "@zuse/contracts";
 import { Effect } from "effect";
-import {
-	FileWarning,
-	MessageSquareText,
-	Pencil,
-	Sparkles,
-	Trash2,
-} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getRpcClient } from "../lib/rpc-client.ts";
 import { useAnnotationsStore } from "../store/annotations.ts";
@@ -790,13 +776,10 @@ function CheckBox({
 			}`}
 		>
 			{indeterminate ? (
-				<HugeiconsIcon
-					icon={MinusSignIcon}
-					className="size-2"
-					strokeWidth={3.5}
-				/>
+				<Minus className="size-2"
+ strokeWidth={3.5} />
 			) : (
-				<HugeiconsIcon icon={Tick02Icon} className="size-2" strokeWidth={3.5} />
+				<Check className="size-2" strokeWidth={3.5} />
 			)}
 		</button>
 	);
@@ -895,12 +878,9 @@ function CommitComposer({
 						}
 					>
 						{busy === "push" ? (
-							<HugeiconsIcon
-								icon={Loading02Icon}
-								className="size-3 animate-spin"
-							/>
+							<Loader className="size-3 animate-spin" />
 						) : (
-							<HugeiconsIcon icon={Upload01Icon} className="size-3" />
+							<Upload className="size-3" />
 						)}
 						Push
 					</button>
@@ -942,12 +922,9 @@ function CommitComposer({
 						className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[11px] font-medium text-background transition-colors hover:bg-foreground/85 disabled:cursor-not-allowed disabled:opacity-30"
 					>
 						{busy === "commit" ? (
-							<HugeiconsIcon
-								icon={Loading02Icon}
-								className="size-3 animate-spin"
-							/>
+							<Loader className="size-3 animate-spin" />
 						) : (
-							<HugeiconsIcon icon={ArrowTurnDownIcon} className="size-3" />
+							<CornerDownLeft className="size-3" />
 						)}
 						{selectedCount > 0 ? `Commit ${selectedCount}` : "Commit"}
 					</button>
@@ -981,11 +958,8 @@ function Indicator({
 		<div className="grid min-h-32 flex-1 place-items-center px-6 py-10 text-center">
 			<div className="flex max-w-64 flex-col items-center gap-1.5">
 				{loading ? (
-					<HugeiconsIcon
-						icon={Loading02Icon}
-						className="mb-1 size-4 animate-spin text-muted-foreground"
-						aria-hidden="true"
-					/>
+					<Loader className="mb-1 size-4 animate-spin text-muted-foreground"
+ aria-hidden="true" />
 				) : null}
 				<span className="text-xs font-medium text-foreground">{title}</span>
 				{body !== undefined ? (

@@ -1,18 +1,7 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert01Icon,
-	CheckListIcon,
-	Clock01Icon,
-	GitCompareIcon,
-	GitMergeIcon,
-	GitPullRequestIcon,
-	Loading02Icon,
-	Tick02Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, Clock, GitCompare, GitMerge, GitPullRequest, ListChecks, Loader, TriangleAlert, ArrowLeftRight, Cloud, Laptop, MonitorSmartphone } from "lucide-react";
 import type { GitBranchInfo, GitPrCheckRun, Message } from "@zuse/contracts";
 import { latestProposedPlanMarkdown } from "@zuse/utils/proposed-plan";
 import { Effect } from "effect";
-import { ArrowLeftRight, Cloud, Laptop, MonitorSmartphone } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { deriveEnvironmentPrRows } from "../lib/branch-workflow.ts";
@@ -227,38 +216,39 @@ export function EnvironmentSummary() {
 	const prStatus = (() => {
 		if (pr === null) {
 			return {
-				icon: Loading02Icon,
+				icon: Loader,
 				label: "Loading pull request",
 				className: "animate-spin text-muted-foreground",
 			};
 		}
 		if (pr.state === "merged") {
 			return {
-				icon: GitMergeIcon,
+				icon: GitMerge,
 				label: "Pull request merged",
 				className: "text-primary",
 			};
 		}
 		if (pr.state === "closed") {
 			return {
-				icon: Alert01Icon,
+				icon: TriangleAlert,
 				label: "Pull request closed",
 				className: "text-muted-foreground",
 			};
 		}
 		if (pr.state === "open") {
 			return {
-				icon: Tick02Icon,
+				icon: Check,
 				label: "Pull request open",
 				className: "text-[var(--accent-green)]",
 			};
 		}
 		return {
-			icon: GitPullRequestIcon,
+			icon: GitPullRequest,
 			label: "No pull request",
 			className: "text-muted-foreground",
 		};
 	})();
+	const PrIcon = prStatus.icon;
 	const openPullRequest = () => {
 		if (pr?.state === "none" && sessionId !== null) {
 			void useMessagesStore
@@ -289,7 +279,7 @@ export function EnvironmentSummary() {
 				className={`${rowClass} hover:bg-muted/60`}
 				onClick={() => revealPanel("changes")}
 			>
-				<HugeiconsIcon icon={GitCompareIcon} className="size-4 shrink-0" />
+				<GitCompare className="size-4 shrink-0" />
 				<span className="min-w-0 flex-1 truncate">{changesLabel}</span>
 				{diffStat !== null ? (
 					<span className="flex shrink-0 items-center gap-1 font-mono text-[11px] tabular-nums">
@@ -361,8 +351,7 @@ export function EnvironmentSummary() {
 				className={`${rowClass} justify-between hover:bg-muted/60`}
 				onClick={openPullRequest}
 			>
-				<HugeiconsIcon
-					icon={prStatus.icon}
+				<PrIcon
 					className={`size-4 shrink-0 ${prStatus.className}`}
 					aria-label={prStatus.label}
 				/>
@@ -426,10 +415,7 @@ export function EnvironmentSummary() {
 						className="flex min-h-7 min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
 						onClick={() => revealPanel("pr")}
 					>
-						<HugeiconsIcon
-							icon={Alert01Icon}
-							className="size-4 shrink-0 text-[var(--accent-red)]"
-						/>
+						<TriangleAlert className="size-4 shrink-0 text-[var(--accent-red)]" />
 						<span className="min-w-0 flex-1 truncate">Merge conflicts</span>
 					</button>
 					<span className="pointer-events-none shrink-0 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 motion-reduce:transition-none">
@@ -445,10 +431,7 @@ export function EnvironmentSummary() {
 						className={`${rowClass} hover:bg-muted/60`}
 						onClick={() => revealPanel("plan")}
 					>
-						<HugeiconsIcon
-							icon={CheckListIcon}
-							className="size-4 shrink-0 text-primary"
-						/>
+						<ListChecks className="size-4 shrink-0 text-primary" />
 						<span className="min-w-0 flex-1 truncate">Plan</span>
 					</button>
 				</>
@@ -519,25 +502,16 @@ function ChecksStatusIcon({
 }) {
 	if (kind === "pending") {
 		return (
-			<HugeiconsIcon
-				icon={Loading02Icon}
-				className="size-4 shrink-0 animate-spin text-[var(--accent-amber)]"
-			/>
+			<Loader className="size-4 shrink-0 animate-spin text-[var(--accent-amber)]" />
 		);
 	}
 	if (kind === "failure") {
 		return (
-			<HugeiconsIcon
-				icon={Alert01Icon}
-				className="size-4 shrink-0 text-[var(--accent-red)]"
-			/>
+			<TriangleAlert className="size-4 shrink-0 text-[var(--accent-red)]" />
 		);
 	}
 	return (
-		<HugeiconsIcon
-			icon={Tick02Icon}
-			className="size-4 shrink-0 text-[var(--accent-green)]"
-		/>
+		<Check className="size-4 shrink-0 text-[var(--accent-green)]" />
 	);
 }
 
@@ -551,7 +525,7 @@ function ChecksPreview({
 	if (loading) {
 		return (
 			<div className="flex min-h-24 items-center justify-center gap-2 text-xs text-muted-foreground">
-				<HugeiconsIcon icon={Loading02Icon} className="size-4 animate-spin" />
+				<Loader className="size-4 animate-spin" />
 				Loading checks…
 			</div>
 		);
@@ -587,15 +561,9 @@ function ChecksPreview({
 					>
 						<span className="grid size-4 shrink-0 place-items-center">
 							{kind === "pending" ? (
-								<HugeiconsIcon
-									icon={Clock01Icon}
-									className="size-3.5 text-[var(--accent-amber)]"
-								/>
+								<Clock className="size-3.5 text-[var(--accent-amber)]" />
 							) : kind === "neutral" ? (
-								<HugeiconsIcon
-									icon={CheckListIcon}
-									className="size-3.5 text-muted-foreground"
-								/>
+								<ListChecks className="size-3.5 text-muted-foreground" />
 							) : (
 								<ChecksStatusIcon
 									kind={kind === "failure" ? "failure" : "success"}

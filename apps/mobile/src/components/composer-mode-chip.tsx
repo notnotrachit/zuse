@@ -1,6 +1,4 @@
-import {
-	Task01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ListTodo } from "lucide-react-native";
 import { X } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 
@@ -21,7 +19,7 @@ export function ComposerModeChip({
 
 	return (
 		<View className="h-11 flex-row items-center gap-1">
-			{plan ? <HugeIcon icon={Task01Icon} size={15} color={tint} /> : null}
+			{plan ? <HugeIcon icon={ListTodo} size={15} color={tint} /> : null}
 			<Text className="font-sans-medium text-[13px]" style={{ color: tint }}>
 				{label}
 			</Text>

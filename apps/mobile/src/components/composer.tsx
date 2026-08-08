@@ -1,9 +1,5 @@
+import { ArrowUp, CloudOff, Square } from "lucide-react-native";
 import { useAtomValue } from "@effect/atom-react";
-import {
-	ArrowUp02Icon,
-	CloudOffIcon,
-	StopIcon,
-} from "@hugeicons-pro/core-solid-rounded";
 import { chooseComposerSubmitRoute } from "@zuse/client-runtime/plan-interactions";
 import type { ConnectionStatus } from "@zuse/client-runtime/supervisor";
 import {
@@ -629,15 +625,15 @@ const SendButton = ({
 				color={showInterrupt ? colors.fg : colors.primaryForeground}
 			/>
 		) : showInterrupt ? (
-			<HugeIcon icon={StopIcon} size={15} color={colors.fg as string} />
+			<HugeIcon icon={Square} size={15} color={colors.fg as string} />
 		) : online ? (
 			<HugeIcon
-				icon={ArrowUp02Icon}
+				icon={ArrowUp}
 				size={16}
 				color={colors.primaryForeground}
 			/>
 		) : (
-			<HugeIcon icon={CloudOffIcon} size={15} color={colors.fg as string} />
+			<HugeIcon icon={CloudOff} size={15} color={colors.fg as string} />
 		)}
 	</Button>
 );

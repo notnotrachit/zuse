@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ViewIcon, ViewOffIcon } from "@hugeicons-pro/core-solid-rounded";
+import { Eye, EyeOff } from "lucide-react";
 import type { AgentAvailability, ProviderId } from "@zuse/contracts";
 import { useState } from "react";
 
@@ -103,9 +102,9 @@ function ProviderRow({ availability }: { availability: AgentAvailability }) {
 						tabIndex={-1}
 					>
 						{reveal ? (
-							<HugeiconsIcon icon={ViewOffIcon} className="size-3.5" />
+							<EyeOff className="size-3.5" />
 						) : (
-							<HugeiconsIcon icon={ViewIcon} className="size-3.5" />
+							<Eye className="size-3.5" />
 						)}
 					</button>
 				</div>

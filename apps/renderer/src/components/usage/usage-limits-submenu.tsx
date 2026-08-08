@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Analytics01Icon } from "@hugeicons-pro/core-solid-rounded";
+import { ChartColumn } from "lucide-react";
 import type {
 	ProviderId,
 	ProviderUsageLimits,
@@ -178,7 +177,7 @@ export function UsageLimitsMenuItems() {
 				onFocus={() => void prefetchUsage(null)}
 				onClick={() => openUsage("global")}
 			>
-				<HugeiconsIcon icon={Analytics01Icon} />
+				<ChartColumn />
 				Full usage
 			</MenuItem>
 			<MenuSeparator />

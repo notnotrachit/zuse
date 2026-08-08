@@ -78,7 +78,7 @@ export function AgentCursor({
             key={pulseKey}
             className="memoize-agent-cursor-pulse"
             style={{ transform: `translate(${pulseAt.x}px, ${pulseAt.y}px)` }}
-          />
+ />
         ) : null}
       </div>
     </>
@@ -106,7 +106,7 @@ function CursorArrow() {
         strokeWidth="1.4"
         strokeLinejoin="round"
         strokeLinecap="round"
-      />
+ />
     </svg>
   );
 }

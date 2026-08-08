@@ -16,7 +16,7 @@ export function Separator({
       data-slot="separator"
       orientation={orientation}
       {...props}
-    />
+ />
   );
 }
 

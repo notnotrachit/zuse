@@ -16,7 +16,7 @@ export function Toolbar({
       )}
       data-slot="toolbar"
       {...props}
-    />
+ />
   );
 }
 
@@ -29,7 +29,7 @@ export function ToolbarButton({
       className={cn(className)}
       data-slot="toolbar-button"
       {...props}
-    />
+ />
   );
 }
 
@@ -42,7 +42,7 @@ export function ToolbarLink({
       className={cn(className)}
       data-slot="toolbar-link"
       {...props}
-    />
+ />
   );
 }
 
@@ -55,7 +55,7 @@ export function ToolbarInput({
       className={cn(className)}
       data-slot="toolbar-input"
       {...props}
-    />
+ />
   );
 }
 
@@ -68,7 +68,7 @@ export function ToolbarGroup({
       className={cn("flex items-center gap-1", className)}
       data-slot="toolbar-group"
       {...props}
-    />
+ />
   );
 }
 
@@ -84,7 +84,7 @@ export function ToolbarSeparator({
       )}
       data-slot="toolbar-separator"
       {...props}
-    />
+ />
   );
 }
 

@@ -13,7 +13,7 @@ export function Fieldset({
       className={className}
       data-slot="fieldset"
       {...props}
-    />
+ />
   );
 }
 export function FieldsetLegend({
@@ -25,7 +25,7 @@ export function FieldsetLegend({
       className={cn("font-semibold text-foreground", className)}
       data-slot="fieldset-legend"
       {...props}
-    />
+ />
   );
 }
 

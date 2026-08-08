@@ -247,7 +247,7 @@ export function PokedexPane() {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search by name or number"
-        />
+ />
         <Select
           value={unlockFilter}
           onValueChange={(value) => setUnlockFilter(value as UnlockFilter)}
@@ -319,7 +319,7 @@ export function PokedexPane() {
                   top: row * TILE_HEIGHT,
                   width: virtualGrid.columnWidth,
                 }}
-              />
+ />
             );
           })}
         </div>
@@ -331,7 +331,7 @@ export function PokedexPane() {
         }}
         onZoomChange={setZoom}
         zoom={zoom}
-      />
+ />
     </section>
   );
 }
@@ -367,7 +367,7 @@ function PokedexTile({
             height={56}
             loading="lazy"
             draggable={false}
-          />
+ />
         ) : (
           <img
             src={entry.silhouetteUrl}
@@ -379,7 +379,7 @@ function PokedexTile({
             height={56}
             loading="lazy"
             draggable={false}
-          />
+ />
         )}
       </div>
       <div className="mt-1.5 min-w-0">
@@ -443,7 +443,7 @@ function PokemonDetailDialog({
                       decoding="async"
                       draggable={false}
                       style={{ height: imageSize, width: imageSize }}
-                    />
+ />
                   ) : null}
                 </div>
               </div>
@@ -463,7 +463,7 @@ function PokemonDetailDialog({
                   }}
                   step={0.25}
                   value={zoom}
-                />
+ />
               </div>
               {entry.evolutionLine.length > 1 ? (
                 <div className="space-y-2">
@@ -494,7 +494,7 @@ function PokemonDetailDialog({
                               height={56}
                               draggable={false}
                               loading="lazy"
-                            />
+ />
                           </div>
                           <div className="mt-2 w-full truncate text-xs font-medium">
                             {step.name}
@@ -530,7 +530,7 @@ function PokemonDetailDialog({
                               height={64}
                               draggable={false}
                               loading="lazy"
-                            />
+ />
                           </div>
                           <div className="mt-2 w-full truncate text-xs font-medium">
                             {variant.label}

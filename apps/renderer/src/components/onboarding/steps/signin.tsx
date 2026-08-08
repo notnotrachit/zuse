@@ -1,9 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowRight01Icon,
-	Tick01Icon,
-	UserCircleIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, ChevronRight, UserCircle } from "lucide-react";
 import { BlurredEmail } from "~/components/blurred-email";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
@@ -24,11 +19,7 @@ export function SigninStep() {
 			<div className="grid gap-4 rounded-xl border border-border/60 bg-muted/50 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
 				<div className="flex min-w-0 items-start gap-3">
 					<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background/70 text-foreground">
-						<HugeiconsIcon
-							icon={isSignedIn ? Tick01Icon : UserCircleIcon}
-							className="size-5"
-							strokeWidth={2}
-						/>
+						{isSignedIn ? <Check className="size-5" strokeWidth={2} /> : <UserCircle className="size-5" strokeWidth={2} />}
 					</span>
 					<div className="flex min-w-0 flex-col gap-1">
 						<span className="text-sm font-medium text-foreground">
@@ -80,7 +71,7 @@ export function SigninStep() {
 						) : (
 							<>
 								Sign in with WorkOS
-								<HugeiconsIcon icon={ArrowRight01Icon} />
+								<ChevronRight />
 							</>
 						)}
 					</Button>

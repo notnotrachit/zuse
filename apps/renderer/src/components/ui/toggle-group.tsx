@@ -96,7 +96,7 @@ export function ToggleGroupSeparator({
       )}
       orientation={orientation}
       {...props}
-    />
+ />
   );
 }
 

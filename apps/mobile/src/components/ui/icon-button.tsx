@@ -29,9 +29,6 @@ export const IconButton = ({
 		)}
 		{...props}
 	>
-		<Icon
-			size={18}
-			color={tone === "primary" ? colors.primaryForeground : colors.fg}
-		/>
+		<Icon size={18} color={tone === "primary" ? colors.primaryForeground : colors.fg} />
 	</Pressable>
 );

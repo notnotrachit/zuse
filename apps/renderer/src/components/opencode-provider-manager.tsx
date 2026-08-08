@@ -1,17 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Add01Icon,
-	ArrowUpRight01Icon,
-	Cancel01Icon,
-	CheckmarkCircle02Icon,
-	Delete02Icon,
-	Loading02Icon,
-	PlugSocketIcon,
-	RefreshIcon,
-	Search01Icon,
-	ViewIcon,
-	ViewOffIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ArrowUpRight, CircleCheck, Eye, EyeOff, Loader, Plug, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import type { OpencodeInventoryProvider } from "@zuse/contracts";
 import { Effect } from "effect";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -206,21 +193,15 @@ function ProvidersSection({
 					aria-label="Refresh providers"
 					className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-50"
 				>
-					<HugeiconsIcon
-						icon={RefreshIcon}
-						className={cn("size-3.5", loading && "animate-spin")}
-						aria-hidden
-					/>
+					<RefreshCw className={cn("size-3.5", loading && "animate-spin")}
+ aria-hidden />
 				</button>
 			</div>
 
 			{!loaded ? (
 				<div className="flex items-center gap-2 rounded-lg border border-border/50 bg-background/40 px-3 py-3 text-xs text-muted-foreground">
-					<HugeiconsIcon
-						icon={Loading02Icon}
-						className="size-3.5 animate-spin"
-						aria-hidden
-					/>
+					<Loader className="size-3.5 animate-spin"
+ aria-hidden />
 					<ShimmerText as="span">Loading providers…</ShimmerText>
 				</div>
 			) : connected.length === 0 ? (
@@ -250,11 +231,8 @@ function ProvidersSection({
 							onChanged={onRefresh}
 							trigger={
 								<Button size="xs" variant="outline">
-									<HugeiconsIcon
-										icon={Add01Icon}
-										className="mr-1 size-3"
-										aria-hidden
-									/>
+									<Plus className="mr-1 size-3"
+ aria-hidden />
 									Add provider
 								</Button>
 							}
@@ -263,11 +241,8 @@ function ProvidersSection({
 							onChanged={onRefresh}
 							trigger={
 								<Button size="xs" variant="ghost">
-									<HugeiconsIcon
-										icon={PlugSocketIcon}
-										className="mr-1 size-3"
-										aria-hidden
-									/>
+									<Plug className="mr-1 size-3"
+ aria-hidden />
 									Custom endpoint
 								</Button>
 							}
@@ -320,11 +295,8 @@ function ConnectedProviderRow({
 					<span className="truncate text-xs font-medium text-foreground">
 						{provider.name}
 					</span>
-					<HugeiconsIcon
-						icon={CheckmarkCircle02Icon}
-						className="size-3 shrink-0 text-emerald-400"
-						aria-hidden
-					/>
+					<CircleCheck className="size-3 shrink-0 text-emerald-400"
+ aria-hidden />
 				</div>
 				<span className="text-[10px] text-muted-foreground/70">
 					{provider.custom ? "Custom · " : ""}
@@ -340,11 +312,7 @@ function ConnectedProviderRow({
 				title="Remove credential"
 				className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-50"
 			>
-				<HugeiconsIcon
-					icon={busy ? Loading02Icon : Delete02Icon}
-					className={cn("size-3.5", busy && "animate-spin")}
-					aria-hidden
-				/>
+				{busy ? <Loader className={cn("size-3.5", busy && "animate-spin")} aria-hidden /> : <Trash2 className={cn("size-3.5", busy && "animate-spin")} aria-hidden />}
 			</button>
 		</div>
 	);
@@ -429,16 +397,13 @@ function ProviderBrowserDialog({
 							render={<Button size="icon-xs" variant="ghost" />}
 							aria-label="Close"
 						>
-							<HugeiconsIcon icon={Cancel01Icon} className="size-3.5" />
+							<X className="size-3.5" />
 						</DialogClose>
 					</div>
 
 					<div className="relative">
-						<HugeiconsIcon
-							icon={Search01Icon}
-							className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-							aria-hidden
-						/>
+						<Search className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+ aria-hidden />
 						<Input
 							autoFocus
 							placeholder="Search providers"
@@ -534,11 +499,8 @@ function ProviderBrowserRow({
 				</span>
 				{provider.connected ? (
 					<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
-						<HugeiconsIcon
-							icon={CheckmarkCircle02Icon}
-							className="size-3"
-							aria-hidden
-						/>
+						<CircleCheck className="size-3"
+ aria-hidden />
 						Connected
 					</span>
 				) : (
@@ -561,11 +523,8 @@ function ProviderBrowserRow({
 							className="inline-flex w-fit items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
 						>
 							Get an API key
-							<HugeiconsIcon
-								icon={ArrowUpRight01Icon}
-								className="size-3"
-								aria-hidden
-							/>
+							<ArrowUpRight className="size-3"
+ aria-hidden />
 						</button>
 					)}
 					<ConnectKeyForm
@@ -664,10 +623,7 @@ function ConnectKeyForm({
 						aria-label={reveal ? "Hide key" : "Reveal key"}
 						tabIndex={-1}
 					>
-						<HugeiconsIcon
-							icon={reveal ? ViewOffIcon : ViewIcon}
-							className="size-3.5"
-						/>
+						{reveal ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
 					</button>
 				</div>
 				<Button
@@ -676,10 +632,7 @@ function ConnectKeyForm({
 					disabled={busy || value.trim().length === 0}
 				>
 					{busy ? (
-						<HugeiconsIcon
-							icon={Loading02Icon}
-							className="size-3.5 animate-spin"
-						/>
+						<Loader className="size-3.5 animate-spin" />
 					) : (
 						"Save"
 					)}
@@ -811,7 +764,7 @@ function CustomProviderDialog({
 							render={<Button size="icon-xs" variant="ghost" />}
 							aria-label="Close"
 						>
-							<HugeiconsIcon icon={Cancel01Icon} className="size-3.5" />
+							<X className="size-3.5" />
 						</DialogClose>
 					</div>
 					<p className="text-[11px] text-muted-foreground">
@@ -920,7 +873,7 @@ function CustomProviderDialog({
 										aria-label="Remove model"
 										className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
 									>
-										<HugeiconsIcon icon={Cancel01Icon} className="size-3.5" />
+										<X className="size-3.5" />
 									</button>
 								</div>
 							))}
@@ -932,7 +885,7 @@ function CustomProviderDialog({
 									setModels((cur) => [...cur, { id: "", name: "" }])
 								}
 							>
-								<HugeiconsIcon icon={Add01Icon} className="mr-1 size-3" />
+								<Plus className="mr-1 size-3" />
 								Add model
 							</Button>
 						</div>
@@ -1061,16 +1014,13 @@ function ModelFilterDialog({
 							render={<Button size="icon-xs" variant="ghost" />}
 							aria-label="Close"
 						>
-							<HugeiconsIcon icon={Cancel01Icon} className="size-3.5" />
+							<X className="size-3.5" />
 						</DialogClose>
 					</div>
 
 					<div className="relative">
-						<HugeiconsIcon
-							icon={Search01Icon}
-							className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-							aria-hidden
-						/>
+						<Search className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+ aria-hidden />
 						<Input
 							autoFocus
 							placeholder="Filter models"

@@ -1,11 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Maximize02Icon,
-	MoveIcon,
-	UndoIcon,
-	ZoomInAreaIcon,
-	ZoomOutAreaIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Maximize2, Move, Undo2, ZoomIn, ZoomOut } from "lucide-react";
 import {
 	type ComponentProps,
 	isValidElement,
@@ -338,7 +331,7 @@ function MermaidPanZoom({
 					variant="ghost"
 					onClick={() => zoomBy(-0.2)}
 				>
-					<HugeiconsIcon icon={ZoomOutAreaIcon} />
+					<ZoomOut />
 				</Button>
 				<div className="markdown-mermaid-zoom-label">
 					{Math.round(scale * 100)}%
@@ -349,7 +342,7 @@ function MermaidPanZoom({
 					variant="ghost"
 					onClick={() => zoomBy(0.2)}
 				>
-					<HugeiconsIcon icon={ZoomInAreaIcon} />
+					<ZoomIn />
 				</Button>
 				<Button
 					aria-label="Reset view"
@@ -357,7 +350,7 @@ function MermaidPanZoom({
 					variant="ghost"
 					onClick={resetView}
 				>
-					<HugeiconsIcon icon={UndoIcon} />
+					<Undo2 />
 				</Button>
 				{toolbarExtra}
 			</div>
@@ -378,7 +371,7 @@ function MermaidPanZoom({
 					<MermaidSvg svg={svg} />
 				</div>
 				<div className="markdown-mermaid-pan-hint">
-					<HugeiconsIcon icon={MoveIcon} className="size-3.5" />
+					<Move className="size-3.5" />
 				</div>
 			</div>
 		</div>
@@ -499,7 +492,7 @@ function MermaidDiagram({ source }: { source: string }) {
 								variant="ghost"
 								onClick={() => setViewerOpen(true)}
 							>
-								<HugeiconsIcon icon={Maximize02Icon} />
+								<Maximize2 />
 							</Button>
 						}
 					/>

@@ -33,7 +33,7 @@ export function AlertDialogBackdrop({
       )}
       data-slot="alert-dialog-backdrop"
       {...props}
-    />
+ />
   );
 }
 
@@ -49,7 +49,7 @@ export function AlertDialogViewport({
       )}
       data-slot="alert-dialog-viewport"
       {...props}
-    />
+ />
   );
 }
 
@@ -80,7 +80,7 @@ export function AlertDialogPopup({
           )}
           data-slot="alert-dialog-popup"
           {...props}
-        />
+ />
       </AlertDialogViewport>
     </AlertDialogPortal>
   );
@@ -98,7 +98,7 @@ export function AlertDialogHeader({
       )}
       data-slot="alert-dialog-header"
       {...props}
-    />
+ />
   );
 }
 
@@ -114,7 +114,7 @@ export function AlertDialogFooter({
       )}
       data-slot="alert-dialog-footer"
       {...props}
-    />
+ />
   );
 }
 
@@ -130,7 +130,7 @@ export function AlertDialogTitle({
       )}
       data-slot="alert-dialog-title"
       {...props}
-    />
+ />
   );
 }
 
@@ -143,7 +143,7 @@ export function AlertDialogDescription({
       className={cn("text-muted-foreground text-sm", className)}
       data-slot="alert-dialog-description"
       {...props}
-    />
+ />
   );
 }
 

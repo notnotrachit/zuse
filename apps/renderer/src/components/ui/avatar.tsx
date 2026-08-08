@@ -16,7 +16,7 @@ export function Avatar({
       )}
       data-slot="avatar"
       {...props}
-    />
+ />
   );
 }
 
@@ -29,7 +29,7 @@ export function AvatarImage({
       className={cn("size-full object-cover", className)}
       data-slot="avatar-image"
       {...props}
-    />
+ />
   );
 }
 
@@ -45,7 +45,7 @@ export function AvatarFallback({
       )}
       data-slot="avatar-fallback"
       {...props}
-    />
+ />
   );
 }
 

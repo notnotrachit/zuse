@@ -1,9 +1,8 @@
 "use client";
+import { PanelLeft } from "lucide-react";
 
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { PanelLeftIcon } from "@hugeicons-pro/core-solid-rounded";
 import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { Button } from "~/components/ui/button";
@@ -296,7 +295,7 @@ export function SidebarTrigger({
 			variant="ghost"
 			{...props}
 		>
-			<HugeiconsIcon icon={PanelLeftIcon} />
+			<PanelLeft />
 			<span className="sr-only">Toggle Sidebar</span>
 		</Button>
 	);

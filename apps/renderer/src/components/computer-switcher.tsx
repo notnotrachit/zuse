@@ -1,8 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	ComputerIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ChevronDown, Monitor } from "lucide-react";
 import {
 	environmentRoute,
 	parseEnvironmentRoute,
@@ -98,7 +94,7 @@ export function ComputerSwitcher() {
 					className="flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left outline-none transition-colors hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
 				>
 					<span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-accent text-sidebar-accent-foreground">
-						<HugeiconsIcon icon={ComputerIcon} className="size-4" />
+						<Monitor className="size-4" />
 					</span>
 					<span className="min-w-0 flex-1">
 						<span className="block truncate text-xs font-medium">
@@ -113,11 +109,8 @@ export function ComputerSwitcher() {
 									: `Offline · ${relativeTime(selected.lastHeartbeat)}`}
 						</span>
 					</span>
-					<HugeiconsIcon
-						aria-hidden="true"
-						icon={ArrowDown01Icon}
-						className="size-3.5 text-muted-foreground"
-					/>
+					<ChevronDown aria-hidden="true"
+ className="size-3.5 text-muted-foreground" />
 				</MenuTrigger>
 				<MenuPopup
 					align="start"

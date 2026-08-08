@@ -1,38 +1,27 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	CodeIcon,
-	CursorInWindowIcon,
-	FolderOpenIcon,
-	TerminalIcon,
-	VisualStudioCodeIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Code, FolderOpen, MousePointer2, Terminal } from "lucide-react";
 
 import type { OpenTarget } from "../lib/bridge.ts";
 
 const fallbackIconForTarget = (targetId: string) => {
 	switch (targetId) {
 		case "finder":
-			return FolderOpenIcon;
+			return FolderOpen;
 		case "vscode":
-			return VisualStudioCodeIcon;
+			return Code;
 		case "cursor":
-			return CursorInWindowIcon;
+			return MousePointer2;
 		case "ghostty":
 		case "terminal":
-			return TerminalIcon;
+			return Terminal;
 		default:
-			return CodeIcon;
+			return Code;
 	}
 };
 
 export function OpenTargetIcon({ target }: { target: OpenTarget }) {
 	if (target.iconDataUrl === null || target.iconDataUrl === undefined) {
-		return (
-			<HugeiconsIcon
-				icon={fallbackIconForTarget(target.id)}
-				className="size-5 shrink-0 text-muted-foreground"
-			/>
-		);
+		const Icon = fallbackIconForTarget(target.id);
+		return <Icon className="size-5 shrink-0 text-muted-foreground" />;
 	}
 	return (
 		<img

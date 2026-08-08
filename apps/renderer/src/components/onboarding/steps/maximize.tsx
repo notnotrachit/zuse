@@ -1,8 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	CircleArrowUp01Icon,
-	Loading02Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { CircleArrowUp, Loader } from "lucide-react";
 import type { UsageReport } from "@zuse/contracts";
 import { Effect } from "effect";
 import { useEffect, useState } from "react";
@@ -106,11 +102,8 @@ export function MaximizeStep() {
 			<div className="flex flex-col gap-4 rounded-2xl bg-muted/50 p-5">
 				<div className="flex items-start gap-3">
 					<span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-						<HugeiconsIcon
-							icon={CircleArrowUp01Icon}
-							className="size-4"
-							strokeWidth={1.75}
-						/>
+						<CircleArrowUp className="size-4"
+ strokeWidth={1.75} />
 					</span>
 					<div className="flex flex-col gap-1">
 						<span className="text-[14px] font-semibold text-foreground">
@@ -248,11 +241,8 @@ function SpendSkeleton() {
 	return (
 		<div className="flex flex-col gap-4 rounded-2xl bg-muted/50 p-5">
 			<div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-				<HugeiconsIcon
-					icon={Loading02Icon}
-					className="size-3.5 animate-spin"
-					aria-hidden
-				/>
+				<Loader className="size-3.5 animate-spin"
+ aria-hidden />
 				Scanning this month&apos;s local agent logs...
 			</div>
 			<div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_15rem]">

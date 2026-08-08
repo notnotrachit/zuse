@@ -1,20 +1,12 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ActivitySparkIcon,
-	AiDnaIcon,
-	ArtificialIntelligence08Icon,
-	Atom02Icon,
-	Flower2Icon,
-	GeometricShapes02Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Activity, Atom, Dna, Flower2, Shapes, Sparkles } from "lucide-react";
 
 const ICONS = [
-	Atom02Icon,
-	Flower2Icon,
-	GeometricShapes02Icon,
-	ActivitySparkIcon,
-	AiDnaIcon,
-	ArtificialIntelligence08Icon,
+	Atom,
+	Flower2,
+	Shapes,
+	Activity,
+	Dna,
+	Sparkles,
 ] as const;
 
 const TONES = [
@@ -42,17 +34,14 @@ export function SubagentAvatar({
 	readonly size?: "sm" | "md";
 }) {
 	const index = identityIndex(name);
-	const icon = ICONS[index % ICONS.length] ?? Atom02Icon;
+	const Icon = ICONS[index % ICONS.length] ?? Atom;
 	const tone = TONES[index % TONES.length] ?? TONES[0];
 	return (
 		<span
 			className={`grid shrink-0 place-items-center ${size === "sm" ? "size-5" : "size-7"} ${tone}`}
 			aria-hidden="true"
 		>
-			<HugeiconsIcon
-				icon={icon}
-				className={size === "sm" ? "size-4" : "size-6"}
-			/>
+			<Icon className={size === "sm" ? "size-4" : "size-6"} />
 		</span>
 	);
 }

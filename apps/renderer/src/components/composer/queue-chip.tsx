@@ -1,15 +1,5 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	ArrowUp01Icon,
-	Chat01Icon,
-	CornerDownRightIcon,
-	Delete02Icon,
-	DragDropVerticalIcon,
-	MoreHorizontalIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ChevronDown, ChevronUp, CornerDownRight, Ellipsis, GripVertical, MessageSquare, Trash2, Pencil } from "lucide-react";
 import type { QueuedMessage, SessionId } from "@zuse/contracts";
-import { Pencil } from "lucide-react";
 import { useState } from "react";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
@@ -80,7 +70,7 @@ export function QueueChip({
 	};
 
 	const icon = (
-		<HugeiconsIcon icon={Chat01Icon} className="size-3.5" aria-hidden="true" />
+		<MessageSquare className="size-3.5" aria-hidden="true" />
 	);
 
 	return (
@@ -109,7 +99,7 @@ export function QueueChip({
 					className="-ml-1 flex size-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground/60 opacity-0 hover:text-foreground group-hover:opacity-100 active:cursor-grabbing"
 					aria-label="Drag queued message"
 				>
-					<HugeiconsIcon icon={DragDropVerticalIcon} className="size-3.5" />
+					<GripVertical className="size-3.5" />
 				</button>
 			}
 			actions={
@@ -131,10 +121,7 @@ export function QueueChip({
 											: "Send queued message now"
 									}
 								>
-									<HugeiconsIcon
-										icon={CornerDownRightIcon}
-										className="size-3.5"
-									/>
+									<CornerDownRight className="size-3.5" />
 									<span className="text-[11px]">
 										{runningNow
 											? "Starting…"
@@ -174,34 +161,31 @@ export function QueueChip({
 									className={trayPillActionClass}
 									aria-label="More queue actions"
 								>
-									<HugeiconsIcon
-										icon={MoreHorizontalIcon}
-										className="size-3.5"
-									/>
+									<Ellipsis className="size-3.5" />
 								</button>
 							}
 						/>
 						<MenuPopup align="end" sideOffset={4}>
 							<MenuItem onClick={() => void runNext()} disabled={runningNow}>
-								<HugeiconsIcon icon={CornerDownRightIcon} />
+								<CornerDownRight />
 								{running ? "Run next" : "Send now"}
 							</MenuItem>
 							<MenuItem
 								onClick={() => onMove(index, index - 1)}
 								disabled={index === 0}
 							>
-								<HugeiconsIcon icon={ArrowUp01Icon} />
+								<ChevronUp />
 								Move up
 							</MenuItem>
 							<MenuItem
 								onClick={() => onMove(index, index + 1)}
 								disabled={index >= count - 1}
 							>
-								<HugeiconsIcon icon={ArrowDown01Icon} />
+								<ChevronDown />
 								Move down
 							</MenuItem>
 							<MenuItem onClick={() => drop(sessionId, item.id)}>
-								<HugeiconsIcon icon={Delete02Icon} />
+								<Trash2 />
 								Remove from queue
 							</MenuItem>
 						</MenuPopup>

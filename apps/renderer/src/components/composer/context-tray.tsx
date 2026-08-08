@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { CheckListIcon } from "@hugeicons-pro/core-solid-rounded";
+import { ListChecks } from "lucide-react";
 import type { Session, SessionId } from "@zuse/contracts";
 import { useEffect, useMemo, useState } from "react";
 
@@ -108,7 +107,7 @@ export function ContextTray({ sessionId }: { sessionId: SessionId }) {
 				return (
 					<Chip
 						key={key}
-						icon={<HugeiconsIcon icon={CheckListIcon} className="size-3" />}
+						icon={<ListChecks className="size-3" />}
 						label={single ? "Plan" : `${s.title} · plan`}
 						busy={busy === key}
 						onClick={() => void attach(key, s, "plan")}

@@ -1,9 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert01Icon,
-	GitBranchIcon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, GitBranch, TriangleAlert } from "lucide-react";
 import { shouldShowSetupCard } from "../lib/setup-card-visibility.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
 import { useSessionsStore } from "../store/sessions.ts";
@@ -155,10 +150,7 @@ export function SetupCardView({ data }: { data: SetupCardData }) {
 		<div className="mx-auto w-full max-w-3xl px-4 pt-4">
 			<div className="overflow-hidden rounded-xl border border-border/60 bg-muted/15">
 				<header className="flex items-center gap-2 border-b border-border/40 px-3.5 py-2.5">
-					<HugeiconsIcon
-						icon={GitBranchIcon}
-						className="size-4 shrink-0 text-muted-foreground"
-					/>
+					<GitBranch className="size-4 shrink-0 text-muted-foreground" />
 					<span className="flex-1 text-[13px] font-medium text-foreground/90">
 						{busy ? (
 							<ShimmerText tone="lime">
@@ -179,10 +171,7 @@ export function SetupCardView({ data }: { data: SetupCardData }) {
 								}
 							/>
 						) : failed ? (
-							<HugeiconsIcon
-								icon={Alert01Icon}
-								className="size-4 text-[var(--accent-red)]"
-							/>
+							<TriangleAlert className="size-4 text-[var(--accent-red)]" />
 						) : null}
 					</span>
 				</header>
@@ -259,15 +248,9 @@ function StepRow({
 			{state === "active" ? (
 				<Spinner className="size-3 shrink-0 text-muted-foreground" />
 			) : state === "failed" ? (
-				<HugeiconsIcon
-					icon={Alert01Icon}
-					className="size-3.5 shrink-0 text-[var(--accent-red)]"
-				/>
+				<TriangleAlert className="size-3.5 shrink-0 text-[var(--accent-red)]" />
 			) : state === "done" ? (
-				<HugeiconsIcon
-					icon={Tick01Icon}
-					className="size-3.5 shrink-0 text-foreground/60"
-				/>
+				<Check className="size-3.5 shrink-0 text-foreground/60" />
 			) : (
 				<span className="size-3.5 shrink-0" aria-hidden="true">
 					<span className="m-[0.3125rem] block size-1 rounded-full bg-muted-foreground/40" />

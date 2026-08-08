@@ -1,25 +1,17 @@
 "use client";
+import { CircleAlert, CircleCheck, Info, Loader2, TriangleAlert, X } from "lucide-react";
 
 import { Toast } from "@base-ui/react/toast";
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert02Icon,
-	AlertCircleIcon,
-	Cancel01Icon,
-	CheckmarkCircle02Icon,
-	InformationCircleIcon,
-	Loading03Icon,
-} from "@hugeicons-pro/core-solid-rounded";
 import type React from "react";
 import { buttonVariants } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 
 const TOAST_ICONS = {
-	error: AlertCircleIcon,
-	info: InformationCircleIcon,
-	loading: Loading03Icon,
-	success: CheckmarkCircle02Icon,
-	warning: Alert02Icon,
+	error: CircleAlert,
+	info: Info,
+	loading: Loader2,
+	success: CircleCheck,
+	warning: TriangleAlert,
 } as const;
 
 type SwipeDirection = "up" | "down" | "left" | "right";
@@ -140,10 +132,7 @@ function Toasts({
 											className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
 											data-slot="toast-icon"
 										>
-											<HugeiconsIcon
-												icon={Icon}
-												className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80"
-											/>
+											<Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
 										</div>
 									)}
 
@@ -171,10 +160,7 @@ function Toasts({
 									className="-my-2 -mr-2 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-offset-2 transition-colors duration-150 ease-out pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-foreground focus-visible:outline-2 focus-visible:outline-foreground/60"
 									data-slot="toast-close"
 								>
-									<HugeiconsIcon
-										icon={Cancel01Icon}
-										className="pointer-events-none size-4"
-									/>
+									<X className="pointer-events-none size-4" />
 								</Toast.Close>
 							</Toast.Content>
 						</Toast.Root>
@@ -241,10 +227,7 @@ function AnchoredToasts({
 													className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
 													data-slot="toast-icon"
 												>
-													<HugeiconsIcon
-														icon={Icon}
-														className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80"
-													/>
+													<Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
 												</div>
 											)}
 

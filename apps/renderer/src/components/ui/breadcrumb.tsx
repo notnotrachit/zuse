@@ -1,12 +1,8 @@
 "use client";
+import { ChevronRight, Ellipsis } from "lucide-react";
 
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowRight01Icon,
-	MoreHorizontalIcon,
-} from "@hugeicons-pro/core-solid-rounded";
 import type * as React from "react";
 import { cn } from "~/lib/utils";
 
@@ -89,7 +85,7 @@ export function BreadcrumbSeparator({
 			role="presentation"
 			{...props}
 		>
-			{children ?? <HugeiconsIcon icon={ArrowRight01Icon} />}
+			{children ?? <ChevronRight />}
 		</li>
 	);
 }
@@ -106,7 +102,7 @@ export function BreadcrumbEllipsis({
 			role="presentation"
 			{...props}
 		>
-			<HugeiconsIcon icon={MoreHorizontalIcon} className="size-4" />
+			<Ellipsis className="size-4" />
 			<span className="sr-only">More</span>
 		</span>
 	);

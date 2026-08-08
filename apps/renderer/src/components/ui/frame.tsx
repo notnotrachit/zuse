@@ -14,7 +14,7 @@ export function Frame({
       )}
       data-slot="frame"
       {...props}
-    />
+ />
   );
 }
 
@@ -30,7 +30,7 @@ export function FramePanel({
       )}
       data-slot="frame-panel"
       {...props}
-    />
+ />
   );
 }
 
@@ -43,7 +43,7 @@ export function FrameHeader({
       className={cn("flex flex-col px-5 py-4", className)}
       data-slot="frame-panel-header"
       {...props}
-    />
+ />
   );
 }
 
@@ -56,7 +56,7 @@ export function FrameTitle({
       className={cn("font-semibold text-sm", className)}
       data-slot="frame-panel-title"
       {...props}
-    />
+ />
   );
 }
 
@@ -69,7 +69,7 @@ export function FrameDescription({
       className={cn("text-muted-foreground text-sm", className)}
       data-slot="frame-panel-description"
       {...props}
-    />
+ />
   );
 }
 
@@ -82,6 +82,6 @@ export function FrameFooter({
       className={cn("px-5 py-4", className)}
       data-slot="frame-panel-footer"
       {...props}
-    />
+ />
   );
 }

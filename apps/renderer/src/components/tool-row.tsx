@@ -1,23 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	ArrowRight01Icon,
-	Brain01Icon,
-	BrowserIcon,
-	BubbleChatIcon,
-	Camera01Icon,
-	CheckListIcon,
-	Copy01Icon,
-	File01Icon,
-	Folder01Icon,
-	GlobeIcon,
-	PencilEdit01Icon,
-	Robot01Icon,
-	SearchIcon,
-	TerminalIcon,
-	Tick02Icon,
-	Wrench01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { AppWindow, Bot, Brain, Camera, Check, ChevronDown, ChevronRight, Copy, File, Folder, Globe, ListChecks, MessageCircle, Search, SquarePen, Terminal, Wrench, type LucideIcon } from "lucide-react";
 import {
 	type ChatId,
 	isRedundantShellDescription,
@@ -52,13 +33,13 @@ import { Button } from "./ui/button.tsx";
 import { ShimmerText } from "./ui/shimmer-text.tsx";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip.tsx";
 
-type IconHandle = Parameters<typeof HugeiconsIcon>[0]["icon"];
+type IconHandle = LucideIcon;
 
 const normalizeToolName = (tool: string): string =>
 	tool.replace(/^mcp__memoize__/, "mcp__zuse__");
 
 /**
- * Map a tool name to the same Hugeicon used in its expanded ToolRow. Other
+ * Map a tool name to the same Lucide icon used in its expanded ToolRow. Other
  * surfaces (e.g. the turn-summary icon preview) reuse this so the icons
  * stay in lockstep across the timeline.
  */
@@ -66,24 +47,24 @@ export const iconForTool = (tool: string): IconHandle => {
 	const normalizedTool = normalizeToolName(tool);
 	switch (normalizedTool) {
 		case "Bash":
-			return TerminalIcon;
+			return Terminal;
 		case "Read":
 		case "ReadFile":
-			return File01Icon;
+			return File;
 		case "ViewImage":
-			return Camera01Icon;
+			return Camera;
 		case "Edit":
 		case "Write":
 		case "WriteFile":
 		case "MultiEdit":
-			return PencilEdit01Icon;
+			return SquarePen;
 		case "Grep":
 		case "Glob":
 		case "Search":
-			return SearchIcon;
+			return Search;
 		case "ListDir":
 		case "ListDirectory":
-			return Folder01Icon;
+			return Folder;
 		case "Task":
 		case "Agent":
 		case "SpawnAgent":
@@ -92,40 +73,40 @@ export const iconForTool = (tool: string): IconHandle => {
 		case "CollabResumeAgent":
 		case "CollabCloseAgent":
 		case "CollabWait":
-			return Robot01Icon;
+			return Bot;
 		case "WebFetch":
 		case "WebSearch":
-			return GlobeIcon;
+			return Globe;
 		case "TodoWrite":
-			return CheckListIcon;
+			return ListChecks;
 		case "mcp__zuse__browser_navigate":
-			return BrowserIcon;
+			return AppWindow;
 		case "mcp__zuse__browser_screenshot":
-			return Camera01Icon;
+			return Camera;
 		default: {
 			// Agent browser tools arrive as their MCP FQN; match by suffix so the
 			// exact-case list above stays the source of truth.
-			if (normalizedTool.endsWith("__browser_screenshot")) return Camera01Icon;
-			if (normalizedTool.includes("__browser_")) return BrowserIcon;
+			if (normalizedTool.endsWith("__browser_screenshot")) return Camera;
+			if (normalizedTool.includes("__browser_")) return AppWindow;
 			// Heuristic fallback for any Grok-native or future tool we haven't
 			// wired an exact case for yet. "list dir", "read file", "run shell"
 			// etc. will now get a reasonable icon instead of the generic wrench.
 			const t = normalizedTool.toLowerCase();
 			if (t.includes("dir") || t.includes("folder") || t.includes("list"))
-				return Folder01Icon;
+				return Folder;
 			if (t.includes("file") || t.includes("read") || t.includes("write"))
-				return File01Icon;
+				return File;
 			if (
 				t.includes("bash") ||
 				t.includes("shell") ||
 				t.includes("cmd") ||
 				t.includes("exec")
 			)
-				return TerminalIcon;
+				return Terminal;
 			if (t.includes("search") || t.includes("grep") || t.includes("glob"))
-				return SearchIcon;
-			if (t.includes("web") || t.includes("http")) return GlobeIcon;
-			return Wrench01Icon;
+				return Search;
+			if (t.includes("web") || t.includes("http")) return Globe;
+			return Wrench;
 		}
 	}
 };
@@ -589,7 +570,7 @@ const countTreeFiles = (tree: string): number =>
 // ---------------------------------------------------------------------------
 
 function ExpandableIconRow({
-	icon,
+	icon: Icon,
 	label,
 	detail,
 	body,
@@ -605,7 +586,7 @@ function ExpandableIconRow({
 	pending?: boolean;
 }) {
 	const [expanded, setExpanded] = useState(false);
-	const chevron = expanded ? ArrowDown01Icon : ArrowRight01Icon;
+	const Chevron = expanded ? ChevronDown : ChevronRight;
 	return (
 		<div className="px-4 py-0.5">
 			<button
@@ -617,25 +598,16 @@ function ExpandableIconRow({
 				)}
 			>
 				<div className="relative grid size-4 shrink-0 place-items-center">
-					<HugeiconsIcon
-						icon={icon}
-						strokeWidth={2}
-						aria-hidden="true"
-						className={cn(
-							"col-start-1 row-start-1 size-3.5 text-muted-foreground transition-opacity duration-150 ease-out",
-							hasContent ? "group-hover:opacity-0" : "",
-							"motion-reduce:transition-none",
-						)}
-					/>
+					<Icon strokeWidth={2} aria-hidden="true" className={cn(
+ "col-start-1 row-start-1 size-3.5 text-muted-foreground transition-opacity duration-150 ease-out",
+ hasContent ? "group-hover:opacity-0" : "",
+ "motion-reduce:transition-none",
+ )} />
 					{hasContent ? (
-						<HugeiconsIcon
-							icon={chevron}
-							aria-hidden="true"
-							className={cn(
-								"col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
-								"group-hover:opacity-100 motion-reduce:transition-none",
-							)}
-						/>
+						<Chevron aria-hidden="true" className={cn(
+ "col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
+ "group-hover:opacity-100 motion-reduce:transition-none",
+ )} />
 					) : null}
 				</div>
 				<span
@@ -723,7 +695,7 @@ const buildToolView = (
 					: fallbackLabel;
 			// Command lives under the chevron — collapsed row is just the label.
 			return {
-				icon: TerminalIcon,
+				icon: Terminal,
 				label,
 				fallbackBody:
 					cmd === null ? (
@@ -746,7 +718,7 @@ const buildToolView = (
 			const path = asString(obj.file_path) ?? asString(obj.path);
 			const pending = result === undefined;
 			return {
-				icon: Camera01Icon,
+				icon: Camera,
 				label: pending ? "Viewing image" : "Viewed image",
 				detail: path !== null ? <MutedFilePath path={path} /> : undefined,
 				resultPanel: (result) => {
@@ -776,7 +748,7 @@ const buildToolView = (
 			const path = asString(obj.file_path);
 			const pending = result === undefined;
 			return {
-				icon: File01Icon,
+				icon: File,
 				label: pending ? "Reading" : "Read",
 				detail: path !== null ? <MutedFilePath path={path} /> : undefined,
 				fallbackBody:
@@ -828,7 +800,7 @@ const buildToolView = (
 					</span>
 				) : null;
 			return {
-				icon: PencilEdit01Icon,
+				icon: SquarePen,
 				label:
 					tool === "MultiEdit" && fileCount > 1
 						? `${label} ${fileCount} files`
@@ -883,7 +855,7 @@ const buildToolView = (
 			const matchesHint =
 				files !== null ? (files === 0 ? "no matches" : `${files}`) : null;
 			return {
-				icon: SearchIcon,
+				icon: Search,
 				label: "Grep",
 				// Pattern/scope live under the chevron; count sits next to the label.
 				detail:
@@ -932,7 +904,7 @@ const buildToolView = (
 			const matchesHint =
 				matches !== null ? (matches === 0 ? "no matches" : `${matches}`) : null;
 			return {
-				icon: SearchIcon,
+				icon: Search,
 				label: "Glob",
 				detail:
 					matchesHint !== null ? (
@@ -973,7 +945,7 @@ const buildToolView = (
 			const filesHint =
 				files !== null ? (files === 0 ? "empty" : `${files}`) : null;
 			return {
-				icon: Folder01Icon,
+				icon: Folder,
 				label: "List",
 				detail:
 					filesHint !== null ? (
@@ -1000,7 +972,7 @@ const buildToolView = (
 			const desc = asString(obj.description) ?? asString(obj.subagent_type);
 			const prompt = asString(obj.prompt);
 			return {
-				icon: Robot01Icon,
+				icon: Bot,
 				label: "Agent",
 				inputPanel:
 					desc !== null || prompt !== null ? (
@@ -1038,7 +1010,7 @@ const buildToolView = (
 		case "WebFetch": {
 			const url = asString(obj.url);
 			return {
-				icon: GlobeIcon,
+				icon: Globe,
 				label: "WebFetch",
 				inputPanel:
 					url !== null ? (
@@ -1058,7 +1030,7 @@ const buildToolView = (
 		case "WebSearch": {
 			const q = asString(obj.query);
 			return {
-				icon: GlobeIcon,
+				icon: Globe,
 				label: "WebSearch",
 				inputPanel:
 					q !== null ? (
@@ -1083,7 +1055,7 @@ const buildToolView = (
 		case "TodoWrite": {
 			const todos = Array.isArray(obj.todos) ? obj.todos : null;
 			return {
-				icon: CheckListIcon,
+				icon: ListChecks,
 				label: "TodoWrite",
 				detail:
 					todos !== null ? (
@@ -1126,7 +1098,7 @@ const buildToolView = (
 			const n = receivers.length || Object.keys(states).length || 1;
 
 			return {
-				icon: Robot01Icon,
+				icon: Bot,
 				label: `Spawn ${n} agent${n === 1 ? "" : "s"}`,
 				fallbackBody: (
 					<div className="space-y-1.5 text-[12px]">
@@ -1169,7 +1141,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_navigate": {
 			const targetUrl = asString(obj.url);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Browse",
 				inputPanel:
 					targetUrl !== null ? (
@@ -1188,7 +1160,7 @@ const buildToolView = (
 
 		case "mcp__zuse__browser_screenshot": {
 			return {
-				icon: Camera01Icon,
+				icon: Camera,
 				label: "Screenshot",
 				resultPanel: (result) => {
 					if (result.isError) {
@@ -1208,7 +1180,7 @@ const buildToolView = (
 
 		case "mcp__zuse__browser_snapshot": {
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Read page",
 				resultPanel: (result) => (
 					<PreBlock
@@ -1222,7 +1194,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_click": {
 			const ref = asString(obj.ref);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Click",
 				inputPanel:
 					ref !== null ? (
@@ -1240,7 +1212,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_type": {
 			const typed = asString(obj.text);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Type",
 				inputPanel:
 					typed !== null ? (
@@ -1260,7 +1232,7 @@ const buildToolView = (
 			const ms = typeof obj.ms === "number" ? `${obj.ms}ms` : null;
 			const hint = sel ?? ms ?? "settle";
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Wait",
 				inputPanel: <p className="text-[11px] text-muted-foreground">{hint}</p>,
 			};
@@ -1271,7 +1243,7 @@ const buildToolView = (
 			const ref = asString(obj.ref);
 			const hint = ref ?? dir ?? "down";
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Scroll",
 				inputPanel: <p className="text-[11px] text-muted-foreground">{hint}</p>,
 			};
@@ -1280,7 +1252,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_hover": {
 			const ref = asString(obj.ref);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Hover",
 				inputPanel:
 					ref !== null ? (
@@ -1292,7 +1264,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_select": {
 			const value = asString(obj.value);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Select",
 				inputPanel:
 					value !== null ? (
@@ -1310,7 +1282,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_press": {
 			const key = asString(obj.key);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Press",
 				inputPanel:
 					key !== null ? (
@@ -1321,7 +1293,7 @@ const buildToolView = (
 
 		case "mcp__zuse__browser_read": {
 			return {
-				icon: File01Icon,
+				icon: File,
 				label: "Read page",
 				resultPanel: (result) => (
 					<PreBlock
@@ -1335,7 +1307,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_history": {
 			const action = asString(obj.action);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label:
 					action === "back"
 						? "Back"
@@ -1347,7 +1319,7 @@ const buildToolView = (
 
 		case "mcp__zuse__browser_console": {
 			return {
-				icon: TerminalIcon,
+				icon: Terminal,
 				label: "Console",
 				resultPanel: (result) => (
 					<PreBlock
@@ -1361,7 +1333,7 @@ const buildToolView = (
 		case "mcp__zuse__browser_login": {
 			const origin = asString(obj.origin);
 			return {
-				icon: BrowserIcon,
+				icon: AppWindow,
 				label: "Log in",
 				inputPanel:
 					origin !== null ? (
@@ -1450,7 +1422,7 @@ export function ExitPlanModeRow({
 		return (
 			<div className="px-4 py-2">
 				<div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-					<HugeiconsIcon icon={CheckListIcon} size={14} strokeWidth={2} />
+					<ListChecks size={14} strokeWidth={2} />
 					<span>Plan</span>
 				</div>
 				{plan === null ? (
@@ -1489,7 +1461,7 @@ export function ExitPlanModeRow({
 
 	return (
 		<ExpandableIconRow
-			icon={CheckListIcon}
+			icon={ListChecks}
 			label="Plan"
 			detail={<InlineTextHint value={teaser} />}
 			hasContent
@@ -1525,7 +1497,7 @@ export function OrchestrationThreadRow({
 		return (
 			<div className="px-4 py-2">
 				<div className="flex items-center gap-2 text-xs text-muted-foreground">
-					<HugeiconsIcon icon={BubbleChatIcon} size={14} strokeWidth={2} />
+					<MessageCircle size={14} strokeWidth={2} />
 					<span>
 						{variant === "send_to_thread"
 							? "Sending to thread..."
@@ -1559,7 +1531,7 @@ export function OrchestrationThreadRow({
 				<div className="flex items-center justify-between gap-3">
 					<div className="min-w-0">
 						<div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-							<HugeiconsIcon icon={BubbleChatIcon} size={14} strokeWidth={2} />
+							<MessageCircle size={14} strokeWidth={2} />
 							<span>{label}</span>
 						</div>
 						{variant !== "send_to_thread" ? (
@@ -1673,11 +1645,7 @@ export function UserInputRow({
 						title={copied ? "Copied" : "Copy"}
 						className="rounded p-0.5 text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground"
 					>
-						<HugeiconsIcon
-							icon={copied ? Tick02Icon : Copy01Icon}
-							size={12}
-							strokeWidth={2}
-						/>
+						{copied ? <Check size={12} strokeWidth={2} /> : <Copy size={12} strokeWidth={2} />}
 					</button>
 				</div>
 				<span className="rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-500/90">
@@ -1689,7 +1657,7 @@ export function UserInputRow({
 
 	return (
 		<ExpandableIconRow
-			icon={BubbleChatIcon}
+			icon={MessageCircle}
 			label="User input"
 			detail={<InlineTextHint value={teaser} />}
 			hasContent
@@ -1839,7 +1807,7 @@ export function ThinkingRow({
 	);
 	return (
 		<ExpandableIconRow
-			icon={Brain01Icon}
+			icon={Brain}
 			label="Thinking"
 			pending={pending}
 			hasContent

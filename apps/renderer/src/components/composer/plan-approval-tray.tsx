@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { CheckListIcon } from "@hugeicons-pro/core-solid-rounded";
+import { ListChecks } from "lucide-react";
 
 import type { SessionId } from "@zuse/contracts";
 import { PLAN_APPROVAL_PROMPT } from "@zuse/utils/proposed-plan";
@@ -145,11 +144,8 @@ export function PlanApprovalTray({
 			flush
 			className="bg-rose-500/10 hover:bg-rose-500/15"
 			icon={
-				<HugeiconsIcon
-					icon={CheckListIcon}
-					strokeWidth={2}
-					className="size-3.5"
-				/>
+				<ListChecks strokeWidth={2}
+ className="size-3.5" />
 			}
 			title="Review plan"
 			subtitle="Type feedback below, or approve the plan"

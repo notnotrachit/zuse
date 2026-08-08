@@ -34,7 +34,7 @@ export function SidebarPeekTrigger() {
       onMouseEnter={() => setPeek(true)}
       className="fixed inset-y-0 left-0 z-40"
       style={{ width: TRIGGER_WIDTH_PX }}
-    />
+ />
   );
 }
 

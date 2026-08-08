@@ -1,17 +1,9 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert01Icon,
-	MoreHorizontalIcon,
-	PencilIcon,
-	Search01Icon,
-	UndoIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Ellipsis, Pencil, Search, TriangleAlert, Undo2, Plus } from "lucide-react";
 import {
 	type Command,
 	type KeybindingRule,
 	keyStringFromEvent,
 } from "@zuse/contracts";
-import { Plus } from "lucide-react";
 import {
 	type KeyboardEvent as ReactKeyboardEvent,
 	useEffect,
@@ -419,7 +411,7 @@ function RowEditor({
 										}
 										aria-label={`Edit shortcut for ${meta.label}`}
 									>
-										<HugeiconsIcon icon={PencilIcon} className="size-3.5" />
+										<Pencil className="size-3.5" />
 									</Button>
 								}
 							/>
@@ -438,7 +430,7 @@ function RowEditor({
 												onClick={() => dispatch({ type: "reset", row })}
 												aria-label="Discard pending changes"
 											>
-												<HugeiconsIcon icon={UndoIcon} className="size-3.5" />
+												<Undo2 className="size-3.5" />
 											</Button>
 										}
 									/>
@@ -486,7 +478,7 @@ function RowEditor({
 								/>
 							}
 						>
-							<HugeiconsIcon icon={MoreHorizontalIcon} className="size-3.5" />
+							<Ellipsis className="size-3.5" />
 						</MenuTrigger>
 						<MenuPopup align="end" className="min-w-36">
 							{canReset && (
@@ -609,7 +601,7 @@ function NewRow({
 											}
 											aria-label="Re-record shortcut for new binding"
 										>
-											<HugeiconsIcon icon={PencilIcon} className="size-3.5" />
+											<Pencil className="size-3.5" />
 										</Button>
 									}
 								/>
@@ -625,7 +617,7 @@ function NewRow({
 							aria-label="Record shortcut for new binding"
 							className="inline-flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
 						>
-							<HugeiconsIcon icon={PencilIcon} className="size-3" />
+							<Pencil className="size-3" />
 							Click to record
 						</button>
 					)}
@@ -677,7 +669,7 @@ function ConflictWarning({
 						aria-label={description}
 						className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-amber-500 outline-none transition-colors hover:bg-amber-500/10 focus-visible:ring-[3px] focus-visible:ring-amber-500/25"
 					>
-						<HugeiconsIcon icon={Alert01Icon} className="size-3.5" />
+						<TriangleAlert className="size-3.5" />
 					</span>
 				}
 			/>
@@ -726,7 +718,7 @@ function ExpandableSearch({
 								onClick={() => onOpenChange(true)}
 								aria-label="Search keybindings"
 							>
-								<HugeiconsIcon icon={Search01Icon} className="size-3.5" />
+								<Search className="size-3.5" />
 							</Button>
 						}
 					/>
@@ -737,11 +729,8 @@ function ExpandableSearch({
 	}
 	return (
 		<div className="relative">
-			<HugeiconsIcon
-				icon={Search01Icon}
-				className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
-				aria-hidden
-			/>
+			<Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
+ aria-hidden />
 			<input
 				ref={inputRef}
 				autoFocus

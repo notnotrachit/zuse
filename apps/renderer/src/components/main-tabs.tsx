@@ -1,10 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	GitCompareIcon,
-	PencilEdit01Icon,
-	SquareLock01Icon,
-	TaskDone01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { GitCompare, ListChecks, Lock, SquarePen, Plus, X } from "lucide-react";
 import {
 	defaultModelFor,
 	type FolderId,
@@ -13,7 +7,6 @@ import {
 	type Session,
 	type SessionId,
 } from "@zuse/contracts";
-import { Plus, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import {
 	type AgentActivityState,
@@ -168,10 +161,7 @@ export function MainTabs({ projectId, emptyLabel }: Props) {
 							path="Review every change on this branch"
 							dirty={false}
 							icon={
-								<HugeiconsIcon
-									icon={GitCompareIcon}
-									className="size-4 shrink-0"
-								/>
+								<GitCompare className="size-4 shrink-0" />
 							}
 							closeLabel="Close review"
 							onClick={() => setActiveMainTab("changes")}
@@ -325,11 +315,11 @@ export function ChatTabButton({
 				<span className="inline-grid size-5 shrink-0 place-items-center">
 					{awaitingPlanApproval ? (
 						<span className="text-emerald-300" title="Plan ready to approve">
-							<HugeiconsIcon icon={TaskDone01Icon} className="size-3.5" />
+							<ListChecks className="size-3.5" />
 						</span>
 					) : awaitingPermission ? (
 						<span className="text-amber-300" title="Waiting for permission">
-							<HugeiconsIcon icon={SquareLock01Icon} className="size-3.5" />
+							<Lock className="size-3.5" />
 						</span>
 					) : booting || running ? (
 						<AgentActivityOrb
@@ -358,7 +348,7 @@ export function ChatTabButton({
 					title="Rename session"
 					className="rounded p-0.5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 				>
-					<HugeiconsIcon icon={PencilEdit01Icon} className="size-3" />
+					<SquarePen className="size-3" />
 				</button>
 				<button
 					type="button"

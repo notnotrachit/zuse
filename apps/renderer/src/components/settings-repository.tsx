@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Delete02Icon, GitBranchIcon } from "@hugeicons-pro/core-solid-rounded";
+import { GitBranch, Trash2 } from "lucide-react";
 import {
 	type FolderId,
 	MODELS_BY_PROVIDER,
@@ -353,10 +352,7 @@ function RuntimeModeOverrideSection({
 								onClick={() => onChange(mode)}
 								className="group flex w-full items-start gap-2.5 border-b border-border/40 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-muted/40"
 							>
-								<HugeiconsIcon
-									icon={m.Icon}
-									className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-								/>
+								<m.Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 									<span className="text-xs font-medium text-foreground">
 										{m.label}
@@ -455,10 +451,7 @@ function WorktreeSection({
 								key={wt.id}
 								className="grid grid-cols-[auto_1fr_auto] items-center gap-2.5 px-3 py-2.5 transition-colors hover:bg-muted/20"
 							>
-								<HugeiconsIcon
-									icon={GitBranchIcon}
-									className="size-4 shrink-0 text-muted-foreground"
-								/>
+								<GitBranch className="size-4 shrink-0 text-muted-foreground" />
 								<div
 									className="flex min-w-0 flex-col gap-0.5"
 									title={displayPath(wt.path)}
@@ -481,7 +474,7 @@ function WorktreeSection({
 									onClick={() => void onRemove(wt.id)}
 									title="Remove the checkout; uncommitted changes are saved to its branch"
 								>
-									<HugeiconsIcon icon={Delete02Icon} className="size-3" />
+									<Trash2 className="size-3" />
 									Remove
 								</Button>
 							</li>

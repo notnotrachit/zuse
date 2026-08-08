@@ -1,10 +1,5 @@
+import { Archive, ChevronRight, Pin, PinOff } from "lucide-react-native";
 import { useAtomValue } from "@effect/atom-react";
-import {
-	ArchiveIcon,
-	ArrowRight01Icon,
-	PinIcon,
-	PinOffIcon,
-} from "@hugeicons-pro/core-solid-rounded";
 import { Link } from "expo-router";
 import { useEffect, useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -106,7 +101,7 @@ export function HomeChatRow({
 								}}
 							>
 								<HugeIcon
-									icon={row.pinned ? PinOffIcon : PinIcon}
+									icon={row.pinned ? PinOff : Pin}
 									size={20}
 									color={colors.secondaryFg}
 								/>
@@ -132,7 +127,7 @@ export function HomeChatRow({
 						void onArchive(item);
 					}}
 				>
-					<HugeIcon icon={ArchiveIcon} size={20} color={colors.danger} />
+					<HugeIcon icon={Archive} size={20} color={colors.danger} />
 					<Text className="mt-1 font-sans-medium text-[12px] text-danger">
 						Archive
 					</Text>
@@ -161,7 +156,7 @@ export function HomeChatRow({
 							className="w-4 items-center justify-center"
 						>
 							{row.pinned ? (
-								<HugeIcon icon={PinIcon} size={12} color={colors.secondaryFg} />
+								<HugeIcon icon={Pin} size={12} color={colors.secondaryFg} />
 							) : isActive ? (
 								<PresenceDot tone="online" pulse size={7} />
 							) : row.unread ? (
@@ -193,7 +188,7 @@ export function HomeChatRow({
 							</View>
 						</View>
 						<HugeIcon
-							icon={ArrowRight01Icon}
+							icon={ChevronRight}
 							size={16}
 							color={colors.tertiaryFg}
 						/>

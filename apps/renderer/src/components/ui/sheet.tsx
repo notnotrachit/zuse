@@ -37,7 +37,7 @@ export function SheetBackdrop({
       )}
       data-slot="sheet-backdrop"
       {...props}
-    />
+ />
   );
 }
 
@@ -63,7 +63,7 @@ export function SheetViewport({
       )}
       data-slot="sheet-viewport"
       {...props}
-    />
+ />
   );
 }
 
@@ -180,7 +180,7 @@ export function SheetTitle({
       )}
       data-slot="sheet-title"
       {...props}
-    />
+ />
   );
 }
 
@@ -193,7 +193,7 @@ export function SheetDescription({
       className={cn("text-muted-foreground text-sm", className)}
       data-slot="sheet-description"
       {...props}
-    />
+ />
   );
 }
 

@@ -36,7 +36,7 @@ export function Alert({
       data-slot="alert"
       role="alert"
       {...props}
-    />
+ />
   );
 }
 
@@ -49,7 +49,7 @@ export function AlertTitle({
       className={cn("font-medium [svg~&]:col-start-2", className)}
       data-slot="alert-title"
       {...props}
-    />
+ />
   );
 }
 
@@ -65,7 +65,7 @@ export function AlertDescription({
       )}
       data-slot="alert-description"
       {...props}
-    />
+ />
   );
 }
 
@@ -81,6 +81,6 @@ export function AlertAction({
       )}
       data-slot="alert-action"
       {...props}
-    />
+ />
   );
 }

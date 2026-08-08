@@ -13,7 +13,7 @@ export function Kbd({
       )}
       data-slot="kbd"
       {...props}
-    />
+ />
   );
 }
 
@@ -26,6 +26,6 @@ export function KbdGroup({
       className={cn("inline-flex items-center gap-1", className)}
       data-slot="kbd-group"
       {...props}
-    />
+ />
   );
 }

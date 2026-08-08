@@ -1,10 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArchiveArrowUpIcon,
-	ArchiveIcon,
-	ArrowLeft01Icon,
-	Search01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Archive, ChevronLeft, Search } from "lucide-react";
 import type {
 	Chat,
 	ChatArchiveJob,
@@ -191,10 +185,7 @@ export function ArchivedChatsPage({
 			<section className="flex min-h-0 flex-1 flex-col bg-background/55">
 				<header className="shrink-0 border-b border-border/50 px-8 py-4">
 					<div className="flex items-center gap-3">
-						<HugeiconsIcon
-							icon={ArchiveIcon}
-							className="size-5 text-muted-foreground"
-						/>
+						<Archive className="size-5 text-muted-foreground" />
 						<div className="min-w-0">
 							<h1 className="truncate text-lg font-semibold text-foreground">
 								Archived chats
@@ -205,10 +196,7 @@ export function ArchivedChatsPage({
 						</div>
 					</div>
 					<label className="mt-5 flex min-h-11 max-w-xl items-center gap-2 rounded-md border border-border/70 bg-background px-3 text-sm focus-within:ring-2 focus-within:ring-ring">
-						<HugeiconsIcon
-							icon={Search01Icon}
-							className="size-4 shrink-0 text-muted-foreground"
-						/>
+						<Search className="size-4 shrink-0 text-muted-foreground" />
 						<span className="sr-only">Filter archived chats</span>
 						<input
 							value={query}
@@ -244,10 +232,7 @@ export function ArchivedChatsPage({
 										onClick={() => void openChat(chat)}
 										className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
 									>
-										<HugeiconsIcon
-											icon={ArchiveIcon}
-											className="size-3.5 shrink-0 text-muted-foreground"
-										/>
+										<Archive className="size-3.5 shrink-0 text-muted-foreground" />
 										<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
 											{chat.title}
 										</span>
@@ -273,12 +258,9 @@ export function ArchivedChatsPage({
 					aria-label="Back to archived chats"
 					className="grid size-11 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors duration-150 ease-out hover:bg-muted/45 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
 				>
-					<HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+					<ChevronLeft className="size-4" />
 				</button>
-				<HugeiconsIcon
-					icon={ArchiveIcon}
-					className="size-4 shrink-0 text-muted-foreground"
-				/>
+				<Archive className="size-4 shrink-0 text-muted-foreground" />
 				<div className="min-w-0 flex-1">
 					<h1 className="truncate text-sm font-medium text-foreground">
 						{selectedChat.title}
@@ -361,10 +343,7 @@ export function ArchivedChatsPage({
 
 			<footer className="shrink-0 border-t border-border/60 bg-background/92 px-4 py-2 backdrop-blur-xl">
 				<div className="mx-auto flex w-full max-w-4xl items-center gap-2.5">
-					<HugeiconsIcon
-						icon={ArchiveIcon}
-						className="size-4 shrink-0 text-muted-foreground"
-					/>
+					<Archive className="size-4 shrink-0 text-muted-foreground" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs text-muted-foreground">
 							This chat is archived.
@@ -398,7 +377,7 @@ export function ArchivedChatsPage({
 						{restoring ? (
 							<Spinner className="size-3.5" />
 						) : (
-							<HugeiconsIcon icon={ArchiveArrowUpIcon} className="size-3.5" />
+							<Archive className="size-3.5" />
 						)}
 						{restoring ? "Unarchiving…" : restoreError ? "Retry" : "Unarchive"}
 					</Button>

@@ -56,7 +56,7 @@ export function ScrollBar({
       <ScrollAreaPrimitive.Thumb
         className="relative flex-1 rounded-full bg-foreground/20"
         data-slot="scroll-area-thumb"
-      />
+ />
     </ScrollAreaPrimitive.Scrollbar>
   );
 }

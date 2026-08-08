@@ -1,9 +1,7 @@
 "use client";
+import { ArrowUpDown, X } from "lucide-react";
 
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowUpDownIcon } from "@hugeicons-pro/core-solid-rounded";
-import { X } from "lucide-react";
 import type React from "react";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -68,7 +66,7 @@ export function AutocompleteInput({
 					{...triggerProps}
 				>
 					<AutocompletePrimitive.Icon data-slot="autocomplete-icon">
-						<HugeiconsIcon icon={ArrowUpDownIcon} />
+						<ArrowUpDown />
 					</AutocompletePrimitive.Icon>
 				</AutocompleteTrigger>
 			)}

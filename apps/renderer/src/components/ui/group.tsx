@@ -81,7 +81,7 @@ export function GroupSeparator({
       )}
       orientation={orientation}
       {...props}
-    />
+ />
   );
 }
 

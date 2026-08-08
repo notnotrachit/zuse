@@ -123,7 +123,7 @@ export function AnnotationFileChip({
         name={name}
         kind="file"
         className="inline-flex size-3.5 shrink-0 items-center justify-center"
-      />
+ />
       <span className="min-w-0 truncate font-mono">{name}</span>
       <span className="shrink-0 font-mono tabular-nums text-foreground/60">
         :{range}
@@ -254,7 +254,7 @@ export function FileChip({
               name={name}
               kind={kind}
               className="inline-flex size-3.5 shrink-0 items-center justify-center"
-            />
+ />
             <span className="max-w-[28ch] truncate font-mono">{name}</span>
             {diffStats !== undefined && diffStats.added > 0 ? (
               <span className="shrink-0 font-mono tabular-nums text-emerald-400">
@@ -268,7 +268,7 @@ export function FileChip({
             ) : null}
           </span>
         }
-      />
+ />
       <TooltipPopup>{tooltip}</TooltipPopup>
     </Tooltip>
   );

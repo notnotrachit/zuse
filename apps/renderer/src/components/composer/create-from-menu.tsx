@@ -1,15 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	CancelCircleIcon,
-	CheckmarkCircle01Icon,
-	CircleDashedIcon,
-	GitBranchIcon,
-	GitPullRequestIcon,
-	Progress03Icon,
-	RecordIcon,
-	Search01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ChevronDown, Circle, CircleCheck, CircleDashed, CircleX, GitBranch, GitPullRequest, LoaderCircle, Search } from "lucide-react";
 import type {
 	FolderId,
 	GitBranchInfo,
@@ -70,7 +59,7 @@ type Tab = "prs" | "branches" | "issues" | "linear";
 
 interface Row {
 	readonly key: string;
-	readonly icon: typeof GitPullRequestIcon;
+	readonly icon: typeof GitPullRequest;
 	readonly lead: string;
 	readonly label: string;
 	readonly inUse: boolean;
@@ -88,16 +77,16 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
 const linearStateIcon = (stateType: string) => {
 	switch (stateType) {
 		case "started":
-			return Progress03Icon;
+			return LoaderCircle;
 		case "completed":
-			return CheckmarkCircle01Icon;
+			return CircleCheck;
 		case "canceled":
-			return CancelCircleIcon;
+			return CircleX;
 		case "backlog":
 		case "triage":
-			return CircleDashedIcon;
+			return CircleDashed;
 		default:
-			return RecordIcon;
+			return Circle;
 	}
 };
 
@@ -277,7 +266,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 				const existing = worktreeByBranch.get(pr.headRefName) ?? null;
 				return {
 					key: `pr:${pr.number}`,
-					icon: GitPullRequestIcon,
+					icon: GitPullRequest,
 					lead: `#${pr.number}`,
 					label: pr.title,
 					inUse: existing !== null,
@@ -299,7 +288,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 					const existing = worktreeByBranch.get(b.name) ?? null;
 					return {
 						key: `br:${b.kind}:${b.name}`,
-						icon: GitBranchIcon,
+						icon: GitBranch,
 						lead: "",
 						label: b.name,
 						inUse: existing !== null,
@@ -319,7 +308,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 		if (tab === "issues")
 			return (issues ?? []).map((issue) => ({
 				key: `is:${issue.number}`,
-				icon: RecordIcon,
+				icon: Circle,
 				lead: `#${issue.number}`,
 				label: issue.title,
 				inUse: false,
@@ -421,12 +410,9 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 				)}
 				aria-label="Create from an existing PR, branch, or issue tracker ticket"
 			>
-				<HugeiconsIcon
-					icon={GitPullRequestIcon}
-					className="size-3.5 text-muted-foreground"
-				/>
+				<GitPullRequest className="size-3.5 text-muted-foreground" />
 				<span>Create from…</span>
-				<HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+				<ChevronDown className="size-3 opacity-60" />
 			</PopoverPrimitive.Trigger>
 			<PopoverPrimitive.Portal>
 				<PopoverPrimitive.Positioner
@@ -443,10 +429,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 						onKeyDown={onKeyDown}
 					>
 						<div className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
-							<HugeiconsIcon
-								icon={Search01Icon}
-								className="size-4 shrink-0 text-muted-foreground"
-							/>
+							<Search className="size-4 shrink-0 text-muted-foreground" />
 							<input
 								ref={inputRef}
 								value={query}
@@ -537,6 +520,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 									(linearIssues ?? []).map((issue, index) => {
 										const checked = selectedLinear.has(linearKey(issue));
 										const active = index === highlight;
+										const StateIcon = linearStateIcon(issue.stateType);
 										return (
 											<label
 												key={linearKey(issue)}
@@ -579,9 +563,8 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 															: { color: issue.stateColor }
 													}
 												>
-													<HugeiconsIcon
+													<StateIcon
 														aria-hidden="true"
-														icon={linearStateIcon(issue.stateType)}
 														className="size-3.5"
 													/>
 												</span>
@@ -624,6 +607,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 							) : (
 								filtered.map((row, i) => {
 									const active = i === highlight;
+									const Icon = row.icon;
 									return (
 										<button
 											key={row.key}
@@ -637,10 +621,7 @@ export function CreateFromMenu({ folderId, onSelect }: CreateFromMenuProps) {
 												active ? "bg-accent" : "hover:bg-muted",
 											)}
 										>
-											<HugeiconsIcon
-												icon={row.icon}
-												className="size-4 shrink-0 text-muted-foreground"
-											/>
+											<Icon className="size-4 shrink-0 text-muted-foreground" />
 											{row.lead.length > 0 && (
 												<span className="shrink-0 font-mono text-xs text-muted-foreground">
 													{row.lead}

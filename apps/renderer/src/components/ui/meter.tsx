@@ -34,7 +34,7 @@ export function MeterLabel({
       className={cn("font-medium text-foreground text-sm", className)}
       data-slot="meter-label"
       {...props}
-    />
+ />
   );
 }
 
@@ -47,7 +47,7 @@ export function MeterTrack({
       className={cn("block h-2 w-full overflow-hidden bg-input", className)}
       data-slot="meter-track"
       {...props}
-    />
+ />
   );
 }
 
@@ -60,7 +60,7 @@ export function MeterIndicator({
       className={cn("bg-primary transition-all duration-500", className)}
       data-slot="meter-indicator"
       {...props}
-    />
+ />
   );
 }
 
@@ -73,7 +73,7 @@ export function MeterValue({
       className={cn("text-foreground text-sm tabular-nums", className)}
       data-slot="meter-value"
       {...props}
-    />
+ />
   );
 }
 

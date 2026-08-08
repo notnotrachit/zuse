@@ -39,7 +39,7 @@ export function Toggle({
       className={cn(toggleVariants({ className, size, variant }))}
       data-slot="toggle"
       {...props}
-    />
+ />
   );
 }
 

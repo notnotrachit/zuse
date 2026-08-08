@@ -1,11 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	AlertCircleIcon,
-	LinkSquare01Icon,
-	Tick01Icon,
-	ViewIcon,
-	ViewOffIcon,
-} from "@hugeicons-pro/core-bulk-rounded";
+import { Check, CircleAlert, ExternalLink, Eye, EyeOff } from "lucide-react";
 import type { ProviderId } from "@zuse/contracts";
 import { useId, useState } from "react";
 
@@ -163,11 +156,8 @@ export function ApiKeyRow({
 						className="gap-1"
 					>
 						Get an API key
-						<HugeiconsIcon
-							icon={LinkSquare01Icon}
-							className="size-3"
-							aria-hidden
-						/>
+						<ExternalLink className="size-3"
+ aria-hidden />
 					</Button>
 				</div>
 				<AlertDialog open={removeOpen} onOpenChange={setRemoveOpen}>
@@ -220,11 +210,8 @@ export function ApiKeyRow({
 						className="inline-flex items-center gap-1 rounded text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
 					>
 						Get an API key
-						<HugeiconsIcon
-							icon={LinkSquare01Icon}
-							className="size-3"
-							aria-hidden
-						/>
+						<ExternalLink className="size-3"
+ aria-hidden />
 					</button>
 				</div>
 			)}
@@ -254,11 +241,7 @@ export function ApiKeyRow({
 						className="absolute end-0 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-3px]"
 						aria-label={reveal ? "Hide API key" : "Reveal API key"}
 					>
-						<HugeiconsIcon
-							icon={reveal ? ViewOffIcon : ViewIcon}
-							className="size-3.5"
-							aria-hidden
-						/>
+						{reveal ? <EyeOff className="size-3.5" aria-hidden /> : <Eye className="size-3.5" aria-hidden />}
 					</button>
 				</div>
 				<Button
@@ -313,11 +296,7 @@ function FeedbackMessage({
 						: "text-amber-400",
 			)}
 		>
-			<HugeiconsIcon
-				icon={isSuccess ? Tick01Icon : AlertCircleIcon}
-				className="mt-px size-3.5 shrink-0"
-				aria-hidden
-			/>
+			{isSuccess ? <Check className="mt-px size-3.5 shrink-0" aria-hidden /> : <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />}
 			{feedback.text}
 		</p>
 	);

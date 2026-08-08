@@ -1,7 +1,4 @@
-import {
-	ArrowDown01Icon,
-	ArrowRight01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ChevronDown, ChevronRight } from "lucide-react-native";
 import { useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 
@@ -87,7 +84,7 @@ export function HomeProjectHeader({
 				{group.rows.length}
 			</Text>
 			<HugeIcon
-				icon={collapsed ? ArrowRight01Icon : ArrowDown01Icon}
+				icon={collapsed ? ChevronRight : ChevronDown}
 				size={16}
 				color={colors.tertiaryFg}
 			/>

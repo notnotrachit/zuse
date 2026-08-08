@@ -1,11 +1,4 @@
-import type { IconSvgElement } from "@hugeicons/react";
-import {
-	LockIcon,
-	PencilEdit01Icon,
-	SquareUnlock01Icon,
-	TerminalIcon,
-} from "@hugeicons-pro/core-solid-rounded";
-
+import { Lock, LockOpen, SquarePen, Terminal, type LucideIcon } from "lucide-react";
 import type { RuntimeMode } from "@zuse/contracts";
 
 /**
@@ -20,7 +13,7 @@ import type { RuntimeMode } from "@zuse/contracts";
 export type ModeMeta = {
 	readonly label: string;
 	readonly description: string;
-	readonly Icon: IconSvgElement;
+	readonly Icon: LucideIcon;
 };
 
 export const MODE_META: Record<RuntimeMode, ModeMeta> = {
@@ -28,25 +21,25 @@ export const MODE_META: Record<RuntimeMode, ModeMeta> = {
 		label: "Supervised",
 		description:
 			"Asks before every Bash, file edit, web request, or MCP call. Read-only tools (Read, Glob, Grep, LS) are always free.",
-		Icon: LockIcon,
+		Icon: Lock,
 	},
 	"auto-accept-edits": {
 		label: "Auto-accept edits",
 		description:
 			"Auto-allows Edit, Write, MultiEdit, NotebookEdit. Still asks for Bash, WebFetch/WebSearch, and other tools.",
-		Icon: PencilEdit01Icon,
+		Icon: SquarePen,
 	},
 	"auto-accept-edits-and-bash": {
 		label: "Auto-accept edits + Bash",
 		description:
 			"Auto-allows edits and Bash commands. Still asks for WebFetch/WebSearch and other tools.",
-		Icon: TerminalIcon,
+		Icon: Terminal,
 	},
 	"full-access": {
 		label: "Full access",
 		description:
 			"Auto-allows everything. Plan mode and sensitive paths (.env, .ssh, credentials, keys) still prompt.",
-		Icon: SquareUnlock01Icon,
+		Icon: LockOpen,
 	},
 };
 

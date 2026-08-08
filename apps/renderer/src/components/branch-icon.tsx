@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { GitBranchIcon } from "@hugeicons-pro/core-solid-rounded";
+import { GitBranch } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 
@@ -54,14 +53,11 @@ export function BranchIcon({
 }) {
 	const color = COLOR_BY_STATE[state];
 	return (
-		<HugeiconsIcon
-			icon={GitBranchIcon}
-			className={cn(
-				"size-3.5 shrink-0 transition-colors",
-				selected ? color.selected : color.idle,
-				className,
-			)}
-			aria-hidden="true"
-		/>
+		<GitBranch className={cn(
+ "size-3.5 shrink-0 transition-colors",
+ selected ? color.selected : color.idle,
+ className,
+ )}
+ aria-hidden="true" />
 	);
 }

@@ -19,7 +19,7 @@ export function CollapsibleTrigger({
       className={className}
       data-slot="collapsible-trigger"
       {...props}
-    />
+ />
   );
 }
 
@@ -35,7 +35,7 @@ export function CollapsiblePanel({
       )}
       data-slot="collapsible-panel"
       {...props}
-    />
+ />
   );
 }
 

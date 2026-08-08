@@ -1,6 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { CircleArrowUp01Icon } from "@hugeicons-pro/core-solid-rounded";
-import { X } from "lucide-react";
+import { CircleArrowUp, X } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -121,7 +119,7 @@ export function ProviderUpdatesToast() {
 		>
 			<div className="flex items-start gap-2">
 				<span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
-					<HugeiconsIcon icon={CircleArrowUp01Icon} className="size-3.5" />
+					<CircleArrowUp className="size-3.5" />
 				</span>
 				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 					<span className="text-xs font-medium text-foreground">{title}</span>

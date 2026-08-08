@@ -37,7 +37,7 @@ export function PokemonSprite({
       className={cn("size-5 shrink-0 object-contain", className)}
       loading="lazy"
       draggable={false}
-    />
+ />
   );
 }
 

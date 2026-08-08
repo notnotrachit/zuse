@@ -60,7 +60,7 @@ export function Checkbox({
             )}
           </span>
         )}
-      />
+ />
     </CheckboxPrimitive.Root>
   );
 }

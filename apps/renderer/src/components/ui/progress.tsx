@@ -35,7 +35,7 @@ export function ProgressLabel({
       className={cn("font-medium text-sm", className)}
       data-slot="progress-label"
       {...props}
-    />
+ />
   );
 }
 
@@ -51,7 +51,7 @@ export function ProgressTrack({
       )}
       data-slot="progress-track"
       {...props}
-    />
+ />
   );
 }
 
@@ -64,7 +64,7 @@ export function ProgressIndicator({
       className={cn("bg-primary transition-all duration-500", className)}
       data-slot="progress-indicator"
       {...props}
-    />
+ />
   );
 }
 
@@ -77,7 +77,7 @@ export function ProgressValue({
       className={cn("text-sm tabular-nums", className)}
       data-slot="progress-value"
       {...props}
-    />
+ />
   );
 }
 

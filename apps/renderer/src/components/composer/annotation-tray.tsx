@@ -1,11 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	BubbleChatIcon,
-	CursorMagicSelection01Icon,
-	PencilEdit01Icon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, ChevronDown, MessageCircle, MousePointerClick, SquarePen, X } from "lucide-react";
 import type {
 	BrowserAnnotation,
 	CodeAnnotation,
@@ -14,7 +7,6 @@ import type {
 	SessionId,
 	WorktreeId,
 } from "@zuse/contracts";
-import { X } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -64,11 +56,8 @@ function BrowserAnnotationChip({
 				className,
 			)}
 		>
-			<HugeiconsIcon
-				icon={CursorMagicSelection01Icon}
-				className="size-3.5 shrink-0 text-primary"
-				aria-hidden="true"
-			/>
+			<MousePointerClick className="size-3.5 shrink-0 text-primary"
+ aria-hidden="true" />
 			<span className="truncate font-medium text-foreground">
 				{browserHost(annotation)}
 			</span>
@@ -113,25 +102,19 @@ export function AnnotationTray({
 					aria-expanded={expanded}
 					className="flex min-h-6 flex-1 items-center gap-1.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 				>
-					<HugeiconsIcon
-						icon={BubbleChatIcon}
-						className="size-3.5 shrink-0 text-muted-foreground"
-						aria-hidden="true"
-					/>
+					<MessageCircle className="size-3.5 shrink-0 text-muted-foreground"
+ aria-hidden="true" />
 					<span className="text-xs font-semibold text-foreground">
 						Annotations
 					</span>
 					<span className="rounded border border-border/45 bg-background/70 px-1 py-px text-[10px] font-medium tabular-nums text-muted-foreground">
 						{annotations.length}
 					</span>
-					<HugeiconsIcon
-						icon={ArrowDown01Icon}
-						className={cn(
-							"ml-auto size-4 shrink-0 text-muted-foreground transition-transform",
-							expanded ? "rotate-180" : "",
-						)}
-						aria-hidden="true"
-					/>
+					<ChevronDown className={cn(
+ "ml-auto size-4 shrink-0 text-muted-foreground transition-transform",
+ expanded ? "rotate-180" : "",
+ )}
+ aria-hidden="true" />
 				</button>
 				<button
 					type="button"
@@ -215,7 +198,7 @@ export function AnnotationTray({
 										className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-80 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 										aria-label="Save annotation"
 									>
-										<HugeiconsIcon icon={Tick01Icon} className="size-3.5" />
+										<Check className="size-3.5" />
 									</button>
 								) : (
 									<button
@@ -227,10 +210,7 @@ export function AnnotationTray({
 										className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 group-hover/annotation:opacity-100"
 										aria-label="Edit annotation"
 									>
-										<HugeiconsIcon
-											icon={PencilEdit01Icon}
-											className="size-3.5"
-										/>
+										<SquarePen className="size-3.5" />
 									</button>
 								)}
 								<button

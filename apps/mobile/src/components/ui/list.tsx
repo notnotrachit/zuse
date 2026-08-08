@@ -131,13 +131,8 @@ export function ListRow({
 							iconTone === "brand" ? "bg-primary" : "bg-muted",
 						)}
 					>
-						<Icon
-							size={17}
-							color={
-								iconColor ??
-								(iconTone === "brand" ? colors.primaryForeground : colors.fg)
-							}
-						/>
+						<Icon size={17} color={iconColor ??
+								(iconTone === "brand" ? colors.primaryForeground : colors.fg)} />
 					</View>
 				) : null)}
 			<View className="min-w-0 flex-1">

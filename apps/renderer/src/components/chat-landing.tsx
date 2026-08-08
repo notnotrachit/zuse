@@ -1,10 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	Folder01Icon,
-	FolderAddIcon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, ChevronDown, Folder, FolderPlus, X } from "lucide-react";
 import {
 	type ChatId,
 	type ChatWorkspacePolicy,
@@ -18,7 +12,6 @@ import {
 	type WorktreeId,
 } from "@zuse/contracts";
 import { Effect } from "effect";
-import { X } from "lucide-react";
 import {
 	lazy,
 	Suspense,
@@ -939,10 +932,7 @@ function ContinueThreadsSection({
 										</FramePanel>
 										<FrameFooter className="flex min-w-0 items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground">
 											<span className="flex min-w-0 items-center gap-1.5">
-												<HugeiconsIcon
-													icon={Folder01Icon}
-													className="size-3.5 shrink-0"
-												/>
+												<Folder className="size-3.5 shrink-0" />
 												<span className="truncate">{thread.projectName}</span>
 											</span>
 											{!thread.available && (
@@ -1037,9 +1027,9 @@ function ProjectPicker({
 				className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-foreground transition-colors hover:bg-accent data-[popup-open]:bg-accent"
 				aria-label="Pick a project"
 			>
-				<HugeiconsIcon icon={Folder01Icon} className="size-3.5" />
+				<Folder className="size-3.5" />
 				<span className="truncate">{selectedName ?? "Pick a project"}</span>
-				<HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+				<ChevronDown className="size-3 opacity-60" />
 			</MenuTrigger>
 			<MenuPopup side="bottom" align="start" className="w-64 p-1">
 				{folders.length === 0 ? (
@@ -1062,16 +1052,10 @@ function ProjectPicker({
 							>
 								<span className="col-start-1 row-start-1 flex items-center justify-center">
 									{active && (
-										<HugeiconsIcon
-											icon={Tick01Icon}
-											className="size-3.5 opacity-90"
-										/>
+										<Check className="size-3.5 opacity-90" />
 									)}
 								</span>
-								<HugeiconsIcon
-									icon={Folder01Icon}
-									className="col-start-2 row-start-1 size-3.5 opacity-80"
-								/>
+								<Folder className="col-start-2 row-start-1 size-3.5 opacity-80" />
 								<span className="col-start-3 row-start-1 truncate">
 									{folder.name}
 								</span>
@@ -1085,10 +1069,7 @@ function ProjectPicker({
 					className="grid grid-cols-[1rem_auto_1fr] items-center gap-x-2 rounded-md px-2 py-1.5 text-sm"
 				>
 					<span className="col-start-1 row-start-1" />
-					<HugeiconsIcon
-						icon={FolderAddIcon}
-						className="col-start-2 row-start-1 size-3.5 opacity-80"
-					/>
+					<FolderPlus className="col-start-2 row-start-1 size-3.5 opacity-80" />
 					<span className="col-start-3 row-start-1">Add new project</span>
 				</MenuItem>
 			</MenuPopup>

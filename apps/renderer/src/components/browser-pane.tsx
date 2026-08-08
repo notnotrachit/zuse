@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { StarIcon } from "@hugeicons-pro/core-solid-rounded";
+import { Star, Camera, ChevronLeft, ChevronRight, Eraser, MousePointer2, MousePointerClick, PencilLine, RefreshCw, SendHorizontal, Server, SquareDashedMousePointer, X } from "lucide-react";
 import {
 	type BrowserAnnotationElement,
 	type BrowserAnnotationPoint,
@@ -15,28 +14,12 @@ import {
 	type SessionId,
 } from "@zuse/contracts";
 import { Effect, Fiber, Schedule, Stream } from "effect";
-import {
-	Camera,
-	ChevronLeft,
-	ChevronRight,
-	Eraser,
-	MousePointer2,
-	MousePointerClick,
-	PencilLine,
-	RefreshCw,
-	SendHorizontal,
-	Server,
-	SquareDashedMousePointer,
-	X,
-} from "lucide-react";
-import {
-	type ComponentType,
+import { type ComponentType,
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
 	useRef,
-	useState,
-} from "react";
+	useState, } from "react";
 
 import type {
 	BrowserCookieImportStatus,
@@ -1543,7 +1526,7 @@ export function BrowserPane({
 					disabled={true}
 					ariaLabel="Bookmark"
 				>
-					<HugeiconsIcon icon={StarIcon} className="size-3.5" />
+					<Star className="size-3.5" />
 				</ToolbarButton>
 				<input
 					type="text"

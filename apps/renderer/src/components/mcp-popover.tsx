@@ -1,13 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert02Icon,
-	ArrowDown01Icon,
-	Key01Icon,
-	Loading02Icon,
-	PlugSocketIcon,
-	RefreshIcon,
-	Tick02Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, ChevronDown, Key, Loader, Plug, RefreshCw, TriangleAlert } from "lucide-react";
 import type {
 	FolderId,
 	McpServerDescriptor,
@@ -46,38 +37,26 @@ function StateGlyph({
 	}
 	if (status.state === "connected") {
 		return (
-			<HugeiconsIcon
-				icon={Tick02Icon}
-				className="size-3.5 text-emerald-500"
-				aria-hidden
-			/>
+			<Check className="size-3.5 text-emerald-500"
+ aria-hidden />
 		);
 	}
 	if (status.state === "connecting") {
 		return (
-			<HugeiconsIcon
-				icon={Loading02Icon}
-				className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none"
-				aria-hidden
-			/>
+			<Loader className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none"
+ aria-hidden />
 		);
 	}
 	if (status.state === "needs-auth") {
 		return (
-			<HugeiconsIcon
-				icon={Key01Icon}
-				className="size-3.5 text-amber-400"
-				aria-hidden
-			/>
+			<Key className="size-3.5 text-amber-400"
+ aria-hidden />
 		);
 	}
 	if (status.state === "error") {
 		return (
-			<HugeiconsIcon
-				icon={Alert02Icon}
-				className="size-3.5 text-red-400"
-				aria-hidden
-			/>
+			<TriangleAlert className="size-3.5 text-red-400"
+ aria-hidden />
 		);
 	}
 	return (
@@ -220,14 +199,11 @@ function AppGroup({
 				onClick={() => setExpanded((current) => !current)}
 				className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left transition-colors hover:bg-muted/50"
 			>
-				<HugeiconsIcon
-					icon={ArrowDown01Icon}
-					className={cn(
-						"size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
-						!expanded && "-rotate-90",
-					)}
-					aria-hidden
-				/>
+				<ChevronDown className={cn(
+ "size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
+ !expanded && "-rotate-90",
+ )}
+ aria-hidden />
 				<span className="flex size-4 shrink-0 items-center justify-center">
 					<StateGlyph status={status} available={available} />
 				</span>
@@ -300,7 +276,7 @@ export function McpPopover({
 									: "text-muted-foreground hover:text-foreground",
 							)}
 						>
-							<HugeiconsIcon icon={PlugSocketIcon} className="size-3" />
+							<Plug className="size-3" />
 						</PopoverTrigger>
 					}
 				/>
@@ -320,13 +296,10 @@ export function McpPopover({
 						onClick={() => void refresh(scope)}
 						className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
 					>
-						<HugeiconsIcon
-							icon={RefreshIcon}
-							className={cn(
-								"size-3.5",
-								refreshing && "animate-spin motion-reduce:animate-none",
-							)}
-						/>
+						<RefreshCw className={cn(
+ "size-3.5",
+ refreshing && "animate-spin motion-reduce:animate-none",
+ )} />
 					</button>
 				</div>
 				<div className="max-h-[min(24rem,calc(var(--available-height)-4rem))] overflow-y-auto overscroll-y-contain">

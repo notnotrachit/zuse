@@ -1,16 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	AlertCircleIcon,
-	ArrowDown01Icon,
-	ArrowRight01Icon,
-	Copy01Icon,
-	DashboardSpeedIcon,
-	LinkSquare01Icon,
-	Loading02Icon,
-	PlayIcon,
-	Settings01Icon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, ChevronDown, ChevronRight, CircleAlert, Copy, ExternalLink, Gauge, Loader, Play, RefreshCw, Settings } from "lucide-react";
 import type {
 	AttachmentRef,
 	BrowserAnnotation,
@@ -25,7 +13,6 @@ import type {
 	SessionId,
 	SkillRef,
 } from "@zuse/contracts";
-import { RefreshCw as RefreshIcon } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 
 import { FileIcon } from "~/components/file-icon";
@@ -409,7 +396,7 @@ function CompactRow({
 	return (
 		<div className="px-4 py-2 text-muted-foreground">
 			<div className="flex items-center gap-2">
-				<RefreshIcon
+				<RefreshCw
 					aria-hidden
 					className={cn(
 						"size-3.5 shrink-0 opacity-70",
@@ -637,7 +624,7 @@ function UserBubble({
 					) : null}
 					{goal ? (
 						<div className="mt-2 flex items-center gap-1.5 text-xs text-user-bubble-foreground/65">
-							<HugeiconsIcon icon={DashboardSpeedIcon} className="size-3.5" />
+							<Gauge className="size-3.5" />
 							<span>Sent as goal</span>
 						</div>
 					) : null}
@@ -693,7 +680,7 @@ function AssistantBubble({
 
 function ToolErrorRow({ output }: { output: unknown }) {
 	const [expanded, setExpanded] = useState(false);
-	const chevron = expanded ? ArrowDown01Icon : ArrowRight01Icon;
+	const Chevron = expanded ? ChevronDown : ChevronRight;
 	const text = typeof output === "string" ? output : stringifyJson(output);
 	const firstLine = text.split("\n", 1)[0] ?? "";
 	return (
@@ -704,23 +691,16 @@ function ToolErrorRow({ output }: { output: unknown }) {
 				className="group flex w-full items-center gap-2 rounded px-1.5 py-0.5 text-left text-xs hover:bg-accent"
 			>
 				<div className="relative grid size-4 shrink-0 place-items-center">
-					<HugeiconsIcon
-						icon={AlertCircleIcon}
-						strokeWidth={2}
-						aria-hidden="true"
-						className={cn(
-							"col-start-1 row-start-1 size-3.5 text-destructive transition-opacity duration-150 ease-out",
-							"group-hover:opacity-0 motion-reduce:transition-none",
-						)}
-					/>
-					<HugeiconsIcon
-						icon={chevron}
-						aria-hidden="true"
-						className={cn(
-							"col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
-							"group-hover:opacity-100 motion-reduce:transition-none",
-						)}
-					/>
+					<CircleAlert strokeWidth={2}
+ aria-hidden="true"
+ className={cn(
+ "col-start-1 row-start-1 size-3.5 text-destructive transition-opacity duration-150 ease-out",
+ "group-hover:opacity-0 motion-reduce:transition-none",
+ )} />
+					<Chevron aria-hidden="true" className={cn(
+ "col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
+ "group-hover:opacity-100 motion-reduce:transition-none",
+ )} />
 				</div>
 				<span className="font-medium text-foreground">Error</span>
 				<span className="truncate text-muted-foreground">{firstLine}</span>
@@ -851,11 +831,8 @@ function ProviderAuthCard({
 			<div className="w-fit max-w-[80%] rounded-lg border border-border/60 bg-card px-3 py-2.5 text-xs text-foreground">
 				<div className="flex items-center justify-between gap-2">
 					<span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-						<HugeiconsIcon
-							icon={AlertCircleIcon}
-							className="size-3.5 text-destructive"
-							aria-hidden
-						/>
+						<CircleAlert className="size-3.5 text-destructive"
+ aria-hidden />
 						Authentication required
 					</span>
 					{onDismiss !== undefined && (
@@ -876,11 +853,8 @@ function ProviderAuthCard({
 							role="status"
 							aria-live="polite"
 						>
-							<HugeiconsIcon
-								icon={Loading02Icon}
-								className="size-3.5 animate-spin motion-reduce:animate-none"
-								aria-hidden
-							/>
+							<Loader className="size-3.5 animate-spin motion-reduce:animate-none"
+ aria-hidden />
 							<ShimmerText as="span">
 								{state.url === null
 									? `Starting ${label} sign-in…`
@@ -898,11 +872,8 @@ function ProviderAuthCard({
 									}}
 									className="gap-1.5"
 								>
-									<HugeiconsIcon
-										icon={LinkSquare01Icon}
-										className="size-3"
-										aria-hidden
-									/>
+									<ExternalLink className="size-3"
+ aria-hidden />
 									Open browser again
 								</Button>
 							)}
@@ -917,11 +888,8 @@ function ProviderAuthCard({
 						role="status"
 						aria-live="polite"
 					>
-						<HugeiconsIcon
-							icon={Loading02Icon}
-							className="size-3.5 animate-spin motion-reduce:animate-none"
-							aria-hidden
-						/>
+						<Loader className="size-3.5 animate-spin motion-reduce:animate-none"
+ aria-hidden />
 						<ShimmerText as="span">Signed in. Finishing…</ShimmerText>
 					</div>
 				) : (
@@ -943,7 +911,7 @@ function ProviderAuthCard({
 								onClick={() => void start()}
 								className="gap-1.5"
 							>
-								<HugeiconsIcon icon={PlayIcon} className="size-3" aria-hidden />
+								<Play className="size-3" aria-hidden />
 								{state.kind === "failed"
 									? `Try ${label} sign-in again`
 									: `Sign in to ${label}`}
@@ -955,11 +923,8 @@ function ProviderAuthCard({
 								onClick={onOpenSettings}
 								className="gap-1"
 							>
-								<HugeiconsIcon
-									icon={Settings01Icon}
-									className="size-3"
-									aria-hidden
-								/>
+								<Settings className="size-3"
+ aria-hidden />
 								Settings
 							</Button>
 						</div>
@@ -991,12 +956,9 @@ function GeminiUpgradeCard({ onDismiss }: { onDismiss?: () => void }) {
 			<div className="max-w-[34rem] rounded-xl border border-warning/25 bg-alert-warning-bg px-4 py-3 text-xs text-foreground shadow-sm">
 				<div className="flex items-start gap-3">
 					<div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-warning/12 text-warning">
-						<HugeiconsIcon
-							icon={AlertCircleIcon}
-							strokeWidth={2}
-							aria-hidden="true"
-							className="size-4"
-						/>
+						<CircleAlert strokeWidth={2}
+ aria-hidden="true"
+ className="size-4" />
 					</div>
 					<div className="min-w-0 flex-1">
 						<div className="text-sm font-medium text-foreground">
@@ -1012,9 +974,9 @@ function GeminiUpgradeCard({ onDismiss }: { onDismiss?: () => void }) {
 							</code>
 							<Button size="xs" variant="outline" onClick={copyCommand}>
 								{copied ? (
-									<HugeiconsIcon icon={Tick01Icon} className="size-3.5" />
+									<Check className="size-3.5" />
 								) : (
-									<HugeiconsIcon icon={Copy01Icon} className="size-3.5" />
+									<Copy className="size-3.5" />
 								)}
 								{copied ? "Copied" : "Copy upgrade command"}
 							</Button>
@@ -1170,12 +1132,9 @@ export function ErrorBubble({
 				)}
 			>
 				<div className="flex min-w-0 items-start gap-2">
-					<HugeiconsIcon
-						icon={AlertCircleIcon}
-						strokeWidth={2}
-						aria-hidden="true"
-						className={cn("mt-px size-3.5 shrink-0", iconTone)}
-					/>
+					<CircleAlert strokeWidth={2}
+ aria-hidden="true"
+ className={cn("mt-px size-3.5 shrink-0", iconTone)} />
 					<div className="flex min-w-0 flex-1 flex-col gap-1">
 						{headline !== null ? (
 							<span className="font-medium text-foreground">{headline}</span>
@@ -1196,7 +1155,7 @@ export function ErrorBubble({
 									onClick={onRetry}
 									className="gap-1"
 								>
-									<RefreshIcon className="size-3" aria-hidden />
+									<RefreshCw className="size-3" aria-hidden />
 									Retry
 								</Button>
 								{error.kind === "auth" && (
@@ -1207,11 +1166,8 @@ export function ErrorBubble({
 										onClick={onOpenSettings}
 										className="gap-1"
 									>
-										<HugeiconsIcon
-											icon={Settings01Icon}
-											className="size-3"
-											aria-hidden
-										/>
+										<Settings className="size-3"
+ aria-hidden />
 										Open Provider Settings
 									</Button>
 								)}

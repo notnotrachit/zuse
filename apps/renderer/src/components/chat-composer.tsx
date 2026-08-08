@@ -1,19 +1,5 @@
+import {  ChevronDown, Gauge, Info, MapIcon as MapIcon, Paperclip, Pencil, Play, Send, Square, Trash2, Upload, Zap  } from "lucide-react";
 import type { EditorView } from "@codemirror/view";
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	AttachmentIcon,
-	DashboardSpeedIcon,
-	Delete02Icon,
-	FlashIcon,
-	InformationCircleIcon,
-	MapsIcon,
-	PencilIcon,
-	PlayIcon,
-	SentIcon,
-	SquareIcon,
-	Upload01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
 import {
 	type BooleanOptionDescriptor,
 	type BrowserAnnotation,
@@ -1299,7 +1285,7 @@ export function ChatComposer({
 							{isDragging && (
 								<div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-lg border border-dashed border-accent-foreground/40 bg-popover">
 									<div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-										<HugeiconsIcon icon={Upload01Icon} className="size-3.5" />
+										<Upload className="size-3.5" />
 										<span>Drop files to attach</span>
 									</div>
 								</div>
@@ -1365,10 +1351,7 @@ export function ChatComposer({
 												aria-label="Attach files"
 											className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 											>
-												<HugeiconsIcon
-													icon={AttachmentIcon}
-													className="size-3.5"
-												/>
+												<Paperclip className="size-3.5" />
 											</button>
 										}
 									/>
@@ -1471,10 +1454,7 @@ export function ChatComposer({
 																: "Stop current turn"
 														}
 													>
-														<HugeiconsIcon
-															icon={SquareIcon}
-															className="size-3.5"
-														/>
+														<Square className="size-3.5" />
 													</Button>
 												}
 											/>
@@ -1499,7 +1479,7 @@ export function ChatComposer({
 															: "Send"
 													}
 												>
-													<HugeiconsIcon icon={SentIcon} className="size-3.5" />
+													<Send className="size-3.5" />
 												</Button>
 											}
 										/>
@@ -1577,7 +1557,7 @@ function FastModeToggle({ sessionId }: { sessionId: SessionId }) {
 								: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
 						)}
 					>
-						<HugeiconsIcon icon={FlashIcon} className="size-3.5" />
+						<Zap className="size-3.5" />
 						{enabled ? <span>Fast</span> : null}
 					</button>
 				}
@@ -1629,7 +1609,7 @@ function PlanModeToggle({
 								: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
 						)}
 					>
-						<HugeiconsIcon icon={MapsIcon} className="size-3.5" />
+						<MapIcon className="size-3.5" />
 						{isPlan ? <span>Plan</span> : null}
 					</button>
 				}
@@ -1669,7 +1649,7 @@ function GoalModeToggle({
 									: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
 						)}
 					>
-						<HugeiconsIcon icon={DashboardSpeedIcon} className="size-3.5" />
+						<Gauge className="size-3.5" />
 						{active ? <span>Goal</span> : null}
 					</button>
 				}
@@ -1715,7 +1695,7 @@ function GoalBanner({
 		<>
 			<TrayPill
 				flush
-				icon={<HugeiconsIcon icon={DashboardSpeedIcon} className="size-3.5" />}
+				icon={<Gauge className="size-3.5" />}
 				title={GOAL_LABEL[goal.status]}
 				subtitle={objective}
 				actions={
@@ -1731,10 +1711,7 @@ function GoalBanner({
 											goal.status === "active" ? "Pause goal" : "Resume goal"
 										}
 									>
-										<HugeiconsIcon
-											icon={goal.status === "active" ? SquareIcon : PlayIcon}
-											className="size-3.5"
-										/>
+										{goal.status === "active" ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
 									</button>
 								}
 							/>
@@ -1751,7 +1728,7 @@ function GoalBanner({
 										className={trayPillActionClass}
 										aria-label="Edit goal"
 									>
-										<HugeiconsIcon icon={PencilIcon} className="size-3.5" />
+										<Pencil className="size-3.5" />
 									</button>
 								}
 							/>
@@ -1769,7 +1746,7 @@ function GoalBanner({
 										)}
 										aria-label="Delete goal"
 									>
-										<HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
+										<Trash2 className="size-3.5" />
 									</button>
 								}
 							/>
@@ -1783,7 +1760,7 @@ function GoalBanner({
 					flush
 					tone="warning"
 					icon={
-						<HugeiconsIcon icon={InformationCircleIcon} className="size-3.5" />
+						<Info className="size-3.5" />
 					}
 					title="Plan mode active"
 					subtitle="Codex won't continue this goal until plan mode exits."
@@ -2018,16 +1995,13 @@ function ReasoningPicker({
 						: `${resolved.label} for the next message`
 				}
 			>
-				<HugeiconsIcon icon={DashboardSpeedIcon} className="size-3" />
+				<Gauge className="size-3" />
 				<span>{activeLabel}</span>
 				{isUltracode && (
-					<HugeiconsIcon
-						icon={InformationCircleIcon}
-						className="size-3 opacity-90"
-						aria-hidden
-					/>
+					<Info className="size-3 opacity-90"
+ aria-hidden />
 				)}
-				<HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+				<ChevronDown className="size-3 opacity-60" />
 			</MenuTrigger>
 			<MenuPopup side="top" align="start" className="w-44">
 				<MenuGroup>

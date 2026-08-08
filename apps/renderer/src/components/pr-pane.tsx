@@ -1,11 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	CircleIcon,
-	GitPullRequestIcon,
-	Loading02Icon,
-	MinusSignCircleIcon,
-	Tick01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, Circle, CircleMinus, GitPullRequest, Loader, ArrowUpRight, Plus, X } from "lucide-react";
 import type {
 	FolderId,
 	GitPrCheckRun,
@@ -16,7 +9,6 @@ import type {
 	WorktreeId,
 } from "@zuse/contracts";
 import { GitPrInfo } from "@zuse/contracts";
-import { ArrowUpRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -450,10 +442,7 @@ Resolve this PR feedback. Make the necessary code changes, then summarize what c
 			<Frame>
 				<FrameHeader className="flex-row items-start justify-between gap-3 px-3 py-2">
 					<div className="flex min-w-0 items-start gap-2.5">
-						<HugeiconsIcon
-							icon={GitPullRequestIcon}
-							className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-						/>
+						<GitPullRequest className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 						<div className="flex min-w-0 flex-1 flex-col gap-1">
 							<div className="flex items-baseline gap-2">
 								{number !== null ? (
@@ -602,10 +591,7 @@ Resolve this PR feedback. Make the necessary code changes, then summarize what c
 						{pr.isDraft ? (
 							<Indicator
 								icon={
-									<HugeiconsIcon
-										icon={CircleIcon}
-										className="size-4 text-zinc-400"
-									/>
+									<Circle className="size-4 text-zinc-400" />
 								}
 								title="Draft"
 								body="Mark the PR as ready for review to start running checks."
@@ -613,10 +599,7 @@ Resolve this PR feedback. Make the necessary code changes, then summarize what c
 						) : orderedChecks.length === 0 ? (
 							<Indicator
 								icon={
-									<HugeiconsIcon
-										icon={CircleIcon}
-										className="size-4 text-muted-foreground"
-									/>
+									<Circle className="size-4 text-muted-foreground" />
 								}
 								title="No checks configured"
 								body="There aren't any required status checks on this branch."
@@ -1075,7 +1058,7 @@ function AttachButton({
 			}`}
 		>
 			{attached ? (
-				<HugeiconsIcon icon={Tick01Icon} className="size-3" />
+				<Check className="size-3" />
 			) : (
 				<Plus className="size-3" strokeWidth={1.8} />
 			)}
@@ -1088,23 +1071,17 @@ function checkIcon(run: GitPrCheckRun) {
 	if (run.status !== "completed") {
 		if (run.status === "queued" || run.status === "pending") {
 			return (
-				<HugeiconsIcon
-					icon={CircleIcon}
-					className="size-4 text-muted-foreground"
-				/>
+				<Circle className="size-4 text-muted-foreground" />
 			);
 		}
 		return (
-			<HugeiconsIcon
-				icon={Loading02Icon}
-				className="size-4 animate-spin text-amber-300"
-			/>
+			<Loader className="size-4 animate-spin text-amber-300" />
 		);
 	}
 	switch (run.conclusion) {
 		case "success":
 			return (
-				<HugeiconsIcon icon={Tick01Icon} className="size-3 text-emerald-400" />
+				<Check className="size-3 text-emerald-400" />
 			);
 		case "failure":
 		case "cancelled":
@@ -1114,17 +1091,11 @@ function checkIcon(run: GitPrCheckRun) {
 		case "skipped":
 		case "neutral":
 			return (
-				<HugeiconsIcon
-					icon={MinusSignCircleIcon}
-					className="size-3.5 text-muted-foreground"
-				/>
+				<CircleMinus className="size-3.5 text-muted-foreground" />
 			);
 		default:
 			return (
-				<HugeiconsIcon
-					icon={CircleIcon}
-					className="size-3.5 text-muted-foreground"
-				/>
+				<Circle className="size-3.5 text-muted-foreground" />
 			);
 	}
 }

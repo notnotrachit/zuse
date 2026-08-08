@@ -1,11 +1,5 @@
+import { Plus, QrCode, Settings, Wifi, X } from "lucide-react-native";
 import { useAtomValue } from "@effect/atom-react";
-import {
-	Cancel01Icon,
-	PlusSignIcon,
-	QrCodeIcon,
-	Settings01Icon,
-	Wifi01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
 import { router, Stack } from "expo-router";
 import { MessageSquare, Search } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -337,7 +331,7 @@ export default function HomeScreen() {
 								hitSlop={12}
 								onPress={() => router.push("/connect/scan")}
 							>
-								<HugeIcon icon={QrCodeIcon} size={21} color={colors.accent} />
+								<HugeIcon icon={QrCode} size={21} color={colors.accent} />
 							</Pressable>
 							<Pressable
 								accessibilityRole="button"
@@ -346,7 +340,7 @@ export default function HomeScreen() {
 								onPress={() => router.push("/settings")}
 							>
 								<HugeIcon
-									icon={Settings01Icon}
+									icon={Settings}
 									size={22}
 									color={colors.accent}
 								/>
@@ -388,7 +382,7 @@ export default function HomeScreen() {
 								onPress={() => setSearch("")}
 							>
 								<HugeIcon
-									icon={Cancel01Icon}
+									icon={X}
 									size={15}
 									color={colors.secondaryFg}
 								/>
@@ -463,7 +457,7 @@ export default function HomeScreen() {
 								<View className="mt-8 gap-3 px-4">
 									<Button onPress={() => router.push("/connect/nearby")}>
 										<HugeIcon
-											icon={Wifi01Icon}
+											icon={Wifi}
 											size={18}
 											color={colors.primaryForeground}
 										/>
@@ -473,7 +467,7 @@ export default function HomeScreen() {
 										variant="secondary"
 										onPress={() => router.push("/connect/manual")}
 									>
-										<HugeIcon icon={PlusSignIcon} size={18} color={colors.fg} />
+										<HugeIcon icon={Plus} size={18} color={colors.fg} />
 										Add manually
 									</Button>
 									{account === null ? (

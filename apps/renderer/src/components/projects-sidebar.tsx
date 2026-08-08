@@ -1,23 +1,4 @@
-import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
-import {
-	Analytics01Icon,
-	ArchiveArrowDownIcon,
-	ArchiveArrowUpIcon,
-	ArchiveIcon,
-	ArrowDown01Icon,
-	ArrowRight01Icon,
-	Delete02Icon,
-	Edit01Icon,
-	FolderAddIcon,
-	HelpCircleIcon,
-	Login03Icon,
-	Logout01Icon,
-	PencilIcon,
-	Settings01Icon,
-	SquareLock01Icon,
-	TaskDone01Icon,
-	UserCircleIcon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Archive, ArchiveRestore, ChartColumn, ChevronDown, ChevronRight, CircleHelp, FolderPlus, ListChecks, Lock, LogIn, LogOut, Pencil, Settings, Trash2, UserCircle, type LucideIcon } from "lucide-react";
 import type {
 	Chat,
 	ChatId,
@@ -29,15 +10,13 @@ import type {
 	SessionStatus,
 } from "@zuse/contracts";
 import { Effect, Fiber, Stream } from "effect";
-import {
-	Fragment,
+import { Fragment,
 	lazy,
 	Suspense,
 	useEffect,
 	useMemo,
 	useRef,
-	useState,
-} from "react";
+	useState, } from "react";
 import { BlurredEmail } from "~/components/blurred-email.tsx";
 import { TypewriterText } from "~/components/typewriter-text.tsx";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
@@ -492,13 +471,13 @@ function SidebarActions() {
 	return (
 		<div className="flex flex-col gap-0.5 border-b border-sidebar-border/40 px-1.5 py-1.5">
 			<SidebarActionRow
-				icon={Edit01Icon}
+				icon={Pencil}
 				label="New chat"
 				shortcut={formatShortcut("new-chat")}
 				onClick={() => dispatchCommand("new-chat")}
 			/>
 			<SidebarActionRow
-				icon={FolderAddIcon}
+				icon={FolderPlus}
 				label="New project"
 				onClick={() => dispatchCommand("open-project")}
 			/>
@@ -507,12 +486,12 @@ function SidebarActions() {
 }
 
 function SidebarActionRow({
-	icon,
+	icon: Icon,
 	label,
 	shortcut,
 	onClick,
 }: {
-	icon: IconSvgElement;
+	icon: LucideIcon;
 	label: string;
 	shortcut?: string;
 	onClick: () => void;
@@ -523,7 +502,7 @@ function SidebarActionRow({
 			onClick={onClick}
 			className="flex min-h-6 w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 		>
-			<HugeiconsIcon icon={icon} className="size-4 shrink-0" />
+			<Icon className="size-4 shrink-0" />
 			<span className="min-w-0 flex-1 truncate">{label}</span>
 			{shortcut !== undefined && shortcut !== "" ? (
 				<kbd className="shrink-0 font-sans text-[11px] text-muted-foreground/60">
@@ -567,7 +546,7 @@ function SidebarAccount() {
 							type="button"
 							className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground outline-none hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
 						>
-							<HugeiconsIcon icon={UserCircleIcon} className="size-4" />
+							<UserCircle className="size-4" />
 							<span className="min-w-0 flex-1 truncate text-left">
 								Zuse account
 							</span>
@@ -585,7 +564,7 @@ function SidebarAccount() {
 						onClick={() => void signOutHostedProduct()}
 						className="min-h-9 rounded-lg px-2.5 text-xs"
 					>
-						<HugeiconsIcon icon={Logout01Icon} />
+						<LogOut />
 						Sign out of this browser
 					</MenuItem>
 				</MenuPopup>
@@ -613,7 +592,7 @@ function SidebarAccount() {
 								</AvatarFallback>
 							</Avatar>
 						) : (
-							<HugeiconsIcon icon={Login03Icon} className="size-3.5" />
+							<LogIn className="size-3.5" />
 						)}
 						{!isSignedIn ? (
 							<span>{signingIn ? "Signing in…" : "Sign in"}</span>
@@ -629,7 +608,7 @@ function SidebarAccount() {
 				{!isSignedIn ? (
 					<>
 						<MenuItem disabled={signingIn} onClick={() => void signIn()}>
-							<HugeiconsIcon icon={Login03Icon} />
+							<LogIn />
 							Sign in
 						</MenuItem>
 						<MenuSeparator />
@@ -641,20 +620,20 @@ function SidebarAccount() {
 							setView("settings");
 						}}
 					>
-						<HugeiconsIcon icon={UserCircleIcon} />
+						<UserCircle />
 						Account settings
 					</MenuItem>
 				)}
 				<UsageLimitsMenuItems />
 				<MenuItem onClick={() => setView("settings")}>
-					<HugeiconsIcon icon={Settings01Icon} />
+					<Settings />
 					Settings<MenuShortcut>{formatShortcut("settings")}</MenuShortcut>
 				</MenuItem>
 				{isSignedIn ? (
 					<>
 						<MenuSeparator />
 						<MenuItem variant="destructive" onClick={() => void signOut()}>
-							<HugeiconsIcon icon={Logout01Icon} />
+							<LogOut />
 							Sign out
 						</MenuItem>
 					</>
@@ -778,7 +757,7 @@ function ProjectGroup({
 	]);
 	const showHeaderAttention = headerAttention !== "idle" && !isExpanded;
 
-	const chevron = isExpanded ? ArrowDown01Icon : ArrowRight01Icon;
+	const Chevron = isExpanded ? ChevronDown : ChevronRight;
 
 	return (
 		<Fragment>
@@ -829,14 +808,10 @@ function ProjectGroup({
 								context="project"
 							/>
 						)}
-						<HugeiconsIcon
-							icon={chevron}
-							aria-hidden="true"
-							className={cn(
-								"col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
-								"group-hover:opacity-100 motion-reduce:transition-none",
-							)}
-						/>
+						<Chevron aria-hidden="true" className={cn(
+ "col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
+ "group-hover:opacity-100 motion-reduce:transition-none",
+ )} />
 					</div>
 					<span
 						className="min-w-0 flex-1 truncate text-[11px]"
@@ -860,7 +835,7 @@ function ProjectGroup({
 									className="rounded-md p-0.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
 									aria-label={`Settings for ${displayName}`}
 								>
-									<HugeiconsIcon icon={Settings01Icon} className="size-3.5" />
+									<Settings className="size-3.5" />
 								</button>
 							}
 						/>
@@ -925,28 +900,28 @@ function ProjectContextMenu({
 					onClick={onOpenSettings}
 					className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 				>
-					<HugeiconsIcon icon={Settings01Icon} className="size-3.5" />
+					<Settings className="size-3.5" />
 					Settings
 				</MenuItem>
 				<MenuItem
 					onClick={onOpenArchives}
 					className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 				>
-					<HugeiconsIcon icon={ArchiveIcon} className="size-3.5" />
+					<Archive className="size-3.5" />
 					Archived chats
 				</MenuItem>
 				<MenuItem
 					onClick={onOpenUsage}
 					className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 				>
-					<HugeiconsIcon icon={Analytics01Icon} className="size-3.5" />
+					<ChartColumn className="size-3.5" />
 					Usage
 				</MenuItem>
 				<MenuItem
 					onClick={onRemove}
 					className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-red-300 hover:bg-red-500/20"
 				>
-					<HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
+					<Trash2 className="size-3.5" />
 					Remove project
 				</MenuItem>
 			</MenuPopup>
@@ -1006,7 +981,7 @@ function NewChatButton({ projectId }: { projectId: FolderId }) {
 						className="rounded-md p-0.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
 						aria-label="New chat"
 					>
-						<HugeiconsIcon icon={Edit01Icon} className="size-3.5" />
+						<Pencil className="size-3.5" />
 					</button>
 				}
 			/>
@@ -1194,9 +1169,9 @@ function ChatRow({ chat }: { chat: Chat }) {
 		setMenuOpen(true);
 	};
 
-	const primaryActionIcon = isArchived
-		? ArchiveArrowUpIcon
-		: ArchiveArrowDownIcon;
+	const PrimaryActionIcon = isArchived
+		? Archive
+		: ArchiveRestore;
 	const isArchiving = archiveProgress !== null;
 	const archiveProgressText =
 		archiveProgress === null ? null : chatArchiveProgressLabel(archiveProgress);
@@ -1301,7 +1276,7 @@ function ChatRow({ chat }: { chat: Chat }) {
 							{isArchiving ? (
 								<Spinner className="size-3.5" />
 							) : (
-								<HugeiconsIcon icon={primaryActionIcon} className="size-3.5" />
+								<PrimaryActionIcon className="size-3.5" />
 							)}
 						</button>
 					</div>
@@ -1318,7 +1293,7 @@ function ChatRow({ chat }: { chat: Chat }) {
 						onClick={onRename}
 						className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 					>
-						<HugeiconsIcon icon={PencilIcon} className="size-3.5" />
+						<Pencil className="size-3.5" />
 						Rename
 					</MenuItem>
 					{isArchived ? (
@@ -1326,7 +1301,7 @@ function ChatRow({ chat }: { chat: Chat }) {
 							onClick={() => void unarchiveChat(chat.id)}
 							className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 						>
-							<HugeiconsIcon icon={ArchiveArrowUpIcon} className="size-3.5" />
+							<Archive className="size-3.5" />
 							Unarchive
 						</MenuItem>
 					) : (
@@ -1338,10 +1313,7 @@ function ChatRow({ chat }: { chat: Chat }) {
 							{isArchiving ? (
 								<Spinner className="size-3.5" />
 							) : (
-								<HugeiconsIcon
-									icon={ArchiveArrowDownIcon}
-									className="size-3.5"
-								/>
+								<ArchiveRestore className="size-3.5" />
 							)}
 							{archiveProgressText ?? "Archive"}
 						</MenuItem>
@@ -1350,7 +1322,7 @@ function ChatRow({ chat }: { chat: Chat }) {
 						onClick={onDelete}
 						className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-red-300 hover:bg-red-500/20"
 					>
-						<HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
+						<Trash2 className="size-3.5" />
 						Delete
 					</MenuItem>
 				</MenuPopup>
@@ -1412,23 +1384,14 @@ function ChatAttentionIcon({
 	return (
 		<span className={classes} role="img" aria-label={label} title={label}>
 			{state === "question" ? (
-				<HugeiconsIcon
-					icon={HelpCircleIcon}
-					className="size-3.5"
-					aria-hidden="true"
-				/>
+				<CircleHelp className="size-3.5"
+ aria-hidden="true" />
 			) : state === "permission" ? (
-				<HugeiconsIcon
-					icon={SquareLock01Icon}
-					className="size-3.5"
-					aria-hidden="true"
-				/>
+				<Lock className="size-3.5"
+ aria-hidden="true" />
 			) : (
-				<HugeiconsIcon
-					icon={TaskDone01Icon}
-					className="size-3.5"
-					aria-hidden="true"
-				/>
+				<ListChecks className="size-3.5"
+ aria-hidden="true" />
 			)}
 		</span>
 	);

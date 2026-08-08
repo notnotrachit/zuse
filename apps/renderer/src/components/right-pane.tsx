@@ -1,17 +1,6 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	CheckListIcon,
-	ComputerTerminal01Icon,
-	Folder01Icon,
-	GitBranchIcon,
-	GitCompareIcon,
-	GitPullRequestIcon,
-	GlobeIcon,
-	MagicWand01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Folder, GitBranch, GitCompare, GitPullRequest, Globe, ListChecks, Terminal, WandSparkles, type LucideIcon, Plus, X } from "lucide-react";
 import type { FolderId, Message, WorktreeId } from "@zuse/contracts";
 import { latestProposedPlanMarkdown } from "@zuse/utils/proposed-plan";
-import { Plus, X } from "lucide-react";
 import { lazy, Suspense, useMemo, useRef, useSyncExternalStore } from "react";
 import { rendererPlatformCapabilities } from "../lib/platform-capabilities.ts";
 import {
@@ -66,28 +55,28 @@ const BrowserPaneHost = lazy(() =>
 );
 
 /**
- * Metadata for each addable panel kind: launcher/tab label, icon, and the
+ * Metadata for each addable panel kind: launcher/tab label, icon: Icon, and the
  * keyboard shortcut to surface (only Terminal has one today).
  */
 const PANEL_META: Record<
 	PanelKind,
 	{
 		readonly label: string;
-		readonly icon: Parameters<typeof HugeiconsIcon>[0]["icon"];
+		readonly icon: LucideIcon;
 		readonly shortcut?: string;
 	}
 > = {
-	files: { label: "Files", icon: Folder01Icon },
+	files: { label: "Files", icon: Folder },
 	terminal: {
 		label: "Terminal",
-		icon: ComputerTerminal01Icon,
+		icon: Terminal,
 		shortcut: formatShortcut("toggle-terminal"),
 	},
-	changes: { label: "Changes", icon: GitCompareIcon },
-	pr: { label: "PR", icon: GitPullRequestIcon },
-	plan: { label: "Plan", icon: CheckListIcon },
-	browser: { label: "Browser", icon: GlobeIcon },
-	subagents: { label: "Subagents", icon: MagicWand01Icon },
+	changes: { label: "Changes", icon: GitCompare },
+	pr: { label: "PR", icon: GitPullRequest },
+	plan: { label: "Plan", icon: ListChecks },
+	browser: { label: "Browser", icon: Globe },
+	subagents: { label: "Subagents", icon: WandSparkles },
 };
 
 /** Primary surfaces shown in the empty launcher and standard add menu. */
@@ -492,6 +481,7 @@ function PanelLauncher({
 			<div className="flex w-full max-w-md flex-col gap-1.5">
 				{addable.map((kind) => {
 					const meta = PANEL_META[kind];
+					const Icon = meta.icon;
 					return (
 						<button
 							key={kind}
@@ -499,10 +489,7 @@ function PanelLauncher({
 							onClick={() => onAdd(kind)}
 							className="flex w-full items-center gap-3 rounded-lg bg-card/80 px-3 py-3 text-left text-sm text-foreground/90 transition-colors hover:bg-card/60"
 						>
-							<HugeiconsIcon
-								icon={meta.icon}
-								className="size-4 shrink-0 text-muted-foreground"
-							/>
+							<Icon className="size-4 shrink-0 text-muted-foreground" />
 							<span className="flex-1 truncate">{meta.label}</span>
 							{meta.shortcut !== undefined && meta.shortcut !== "" ? (
 								<kbd className="font-sans text-[11px] text-muted-foreground/70">
@@ -545,16 +532,14 @@ function AddPanelMenu({
 				{addable.length > 0
 					? addable.map((kind) => {
 							const meta = PANEL_META[kind];
+							const Icon = meta.icon;
 							return (
 								<MenuItem
 									key={kind}
 									onClick={() => onAdd(kind)}
 									className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-sm hover:bg-sidebar-accent"
 								>
-									<HugeiconsIcon
-										icon={meta.icon}
-										className="size-3.5 opacity-80"
-									/>
+									<Icon className="size-3.5 opacity-80" />
 									<span className="min-w-0 flex-1 truncate">{meta.label}</span>
 									{meta.shortcut !== undefined && meta.shortcut !== "" ? (
 										<MenuShortcut>{meta.shortcut}</MenuShortcut>
@@ -570,14 +555,14 @@ function AddPanelMenu({
 
 function PanelTab({
 	active,
-	icon,
+	icon: Icon,
 	label,
 	badge,
 	onSelect,
 	onClose,
 }: {
 	active: boolean;
-	icon: Parameters<typeof HugeiconsIcon>[0]["icon"];
+	icon: LucideIcon;
 	label: string;
 	badge?: React.ReactNode;
 	onSelect: () => void;
@@ -596,7 +581,7 @@ function PanelTab({
 				onClick={onSelect}
 				className="flex max-w-36 items-center gap-1.5"
 			>
-				<HugeiconsIcon icon={icon} className="size-3.5 shrink-0 opacity-80" />
+				<Icon className="size-3.5 shrink-0 opacity-80" />
 				<span className="truncate">{label}</span>
 				{badge}
 			</button>
@@ -639,12 +624,12 @@ function ActiveWorkspaceChip() {
 	});
 	if (ctx.status !== "ready") return null;
 	const onWorktree = ctx.rootKind === "worktree";
-	const icon = onWorktree ? GitBranchIcon : Folder01Icon;
+	const Icon = onWorktree ? GitBranch : Folder;
 	const label = onWorktree ? (worktree?.name ?? "Worktree") : "Main checkout";
 	const sub = onWorktree ? (worktree?.branch ?? null) : null;
 	return (
 		<div className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground">
-			<HugeiconsIcon icon={icon} className="size-3.5 shrink-0 opacity-70" />
+			<Icon className="size-3.5 shrink-0 opacity-70" />
 			<span className="truncate font-medium text-foreground/80">{label}</span>
 			{sub !== null ? (
 				<span className="truncate font-mono opacity-70">· {sub}</span>

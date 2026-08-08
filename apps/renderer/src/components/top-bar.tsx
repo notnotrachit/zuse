@@ -1,28 +1,27 @@
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
-	Alert01Icon,
-	ArchiveArrowDownIcon,
-	ArrowDown01Icon,
-	ArrowRight01Icon,
-	Copy01Icon,
-	GitBranchIcon,
-	GitMergeIcon,
-	GitPullRequestIcon,
-	LinkSquare01Icon,
-	Loading02Icon,
-	MagicWand01Icon,
-	Menu01Icon,
-	PanelLeftCloseIcon,
-	PanelLeftOpenIcon,
-	PanelRightCloseIcon,
-	PanelRightOpenIcon,
-	PencilEdit01Icon,
-	PlayIcon,
-	Search01Icon,
-	Tick01Icon,
-	Upload01Icon,
-	Wrench01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+	ArchiveRestore,
+	Check,
+	ChevronDown,
+	ChevronRight,
+	Copy,
+	ExternalLink,
+	GitBranch,
+	GitMerge,
+	GitPullRequest,
+	Loader,
+	Menu as MenuIcon,
+	PanelLeftClose,
+	PanelLeftOpen,
+	PanelRightClose,
+	PanelRightOpen,
+	Play,
+	Search,
+	SquarePen,
+	TriangleAlert,
+	Upload,
+	WandSparkles,
+	Wrench,
+} from "lucide-react";
 import {
 	ComposerInput,
 	type FolderId,
@@ -31,15 +30,13 @@ import {
 	type WorktreeId,
 } from "@zuse/contracts";
 import { Effect } from "effect";
-import {
-	type CSSProperties,
+import { type CSSProperties,
 	lazy,
 	type ReactNode,
 	Suspense,
 	useEffect,
 	useMemo,
-	useState,
-} from "react";
+	useState, } from "react";
 import {
 	canCreatePrFromSyncedBranch,
 	deriveBranchWorkflow,
@@ -140,7 +137,7 @@ export function TopBarLeft() {
 							className={ICON_BUTTON_CLASS}
 							aria-label="Hide projects panel"
 						>
-							<HugeiconsIcon icon={PanelLeftCloseIcon} className="size-3.5" />
+							<PanelLeftClose className="size-3.5" />
 						</button>
 					}
 				/>
@@ -326,7 +323,7 @@ export function TopBarMain() {
 								className={ICON_BUTTON_CLASS}
 								aria-label="Show projects panel"
 							>
-								<HugeiconsIcon icon={PanelLeftOpenIcon} className="size-3.5" />
+								<PanelLeftOpen className="size-3.5" />
 							</button>
 						}
 					/>
@@ -363,10 +360,7 @@ export function TopBarMain() {
 						</span>
 						{branchLabel ? (
 							<>
-								<HugeiconsIcon
-									icon={ArrowRight01Icon}
-									className="size-3 shrink-0 text-muted-foreground/50"
-								/>
+								<ChevronRight className="size-3 shrink-0 text-muted-foreground/50" />
 								<BranchMenuButton
 									branchLabel={branchLabel}
 									branches={branches}
@@ -423,7 +417,7 @@ export function TopBarMain() {
 								aria-label="Toggle environment summary"
 								aria-pressed={environmentSummaryOpen}
 							>
-								<HugeiconsIcon icon={Menu01Icon} className="size-3.5" />
+								<MenuIcon className="size-3.5" />
 							</button>
 						}
 					/>
@@ -442,12 +436,9 @@ export function TopBarMain() {
 							}
 						>
 							{rightSidebarOpen ? (
-								<HugeiconsIcon
-									icon={PanelRightCloseIcon}
-									className="size-3.5"
-								/>
+								<PanelRightClose className="size-3.5" />
 							) : (
-								<HugeiconsIcon icon={PanelRightOpenIcon} className="size-3.5" />
+								<PanelRightOpen className="size-3.5" />
 							)}
 						</button>
 					}
@@ -506,10 +497,7 @@ export function BranchMenuButton({
 				className={`flex items-center gap-1 rounded-sm px-1.5 py-0.5 font-medium text-foreground outline-none hover:bg-foreground/5 data-[popup-open]:bg-foreground/5 ${className ?? "max-w-64"}`}
 				aria-label="Switch branch"
 			>
-				<HugeiconsIcon
-					icon={GitBranchIcon}
-					className="size-3.5 shrink-0 text-muted-foreground"
-				/>
+				<GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
 				<span className="truncate" title={branchLabel}>
 					{branchLabel}
 				</span>
@@ -517,15 +505,9 @@ export function BranchMenuButton({
 					<span className="shrink-0 text-muted-foreground">· {dirtyFiles}</span>
 				) : null}
 				{loading ? (
-					<HugeiconsIcon
-						icon={Loading02Icon}
-						className="size-3 animate-spin text-muted-foreground"
-					/>
+					<Loader className="size-3 animate-spin text-muted-foreground" />
 				) : (
-					<HugeiconsIcon
-						icon={ArrowDown01Icon}
-						className="size-3 text-muted-foreground"
-					/>
+					<ChevronDown className="size-3 text-muted-foreground" />
 				)}
 			</MenuTrigger>
 			<MenuPopup
@@ -545,7 +527,7 @@ export function BranchMenuButton({
 							onClick={onRename}
 							className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 						>
-							<HugeiconsIcon icon={PencilEdit01Icon} className="size-3.5" />
+							<SquarePen className="size-3.5" />
 							Rename current branch…
 						</MenuItem>
 						<MenuSeparator />
@@ -553,10 +535,7 @@ export function BranchMenuButton({
 				) : null}
 				<div className="sticky top-0 z-10 bg-glass px-1 pb-1">
 					<label className="flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-background/50 px-2 focus-within:border-ring/60">
-						<HugeiconsIcon
-							icon={Search01Icon}
-							className="size-3.5 shrink-0 text-muted-foreground"
-						/>
+						<Search className="size-3.5 shrink-0 text-muted-foreground" />
 						<span className="sr-only">Search branches</span>
 						<input
 							type="search"
@@ -580,10 +559,7 @@ export function BranchMenuButton({
 								onClick={() => onSwitch(branch)}
 								className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 							>
-								<HugeiconsIcon
-									icon={Tick01Icon}
-									className={`size-3.5 ${branch.current ? "opacity-100" : "opacity-0"}`}
-								/>
+								<Check className={`size-3.5 ${branch.current ? "opacity-100" : "opacity-0"}`} />
 								<span className="min-w-0 flex-1 truncate">{branch.name}</span>
 								{branch.upstream !== null ? (
 									<span className="max-w-28 truncate text-[10px] text-muted-foreground">
@@ -608,7 +584,7 @@ export function BranchMenuButton({
 									onClick={() => onSwitch(branch)}
 									className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 								>
-									<HugeiconsIcon icon={GitBranchIcon} className="size-3.5" />
+									<GitBranch className="size-3.5" />
 									<span className="min-w-0 flex-1 truncate">{branch.name}</span>
 									{branch.remote !== null ? (
 										<span className="max-w-28 truncate text-[10px] text-muted-foreground">
@@ -731,18 +707,15 @@ function OpenInMenu({ rootPath }: { rootPath: string | null }) {
 						>
 							<span className="flex size-7 items-center justify-center border-r border-border/80">
 								{loading ? (
-									<HugeiconsIcon
-										icon={Loading02Icon}
-										className="size-3.5 animate-spin"
-									/>
+									<Loader className="size-3.5 animate-spin" />
 								) : primary !== undefined ? (
 									<OpenTargetIcon target={primary} />
 								) : (
-									<HugeiconsIcon icon={LinkSquare01Icon} className="size-3.5" />
+									<ExternalLink className="size-3.5" />
 								)}
 							</span>
 							<span className="flex size-7 items-center justify-center">
-								<HugeiconsIcon icon={ArrowDown01Icon} className="size-3.5" />
+								<ChevronDown className="size-3.5" />
 							</span>
 						</MenuTrigger>
 					}
@@ -766,7 +739,7 @@ function OpenInMenu({ rootPath }: { rootPath: string | null }) {
 					onClick={() => void copyPath()}
 					className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-sm hover:bg-sidebar-accent"
 				>
-					<HugeiconsIcon icon={Copy01Icon} className="size-4" />
+					<Copy className="size-4" />
 					<span className="min-w-0 flex-1 truncate">Copy path</span>
 					<MenuShortcut>⌘⇧C</MenuShortcut>
 				</MenuItem>
@@ -844,7 +817,7 @@ function RunButton() {
 	return (
 		<GlassActionButton
 			tone="zinc"
-			icon={<HugeiconsIcon icon={PlayIcon} />}
+			icon={<Play />}
 			label="Run"
 			onClick={() => void onRun()}
 		/>
@@ -998,11 +971,7 @@ export function ResolveConflictsButton({
 		<WorkflowActionButton
 			presentation={presentation}
 			tone="red"
-			icon={
-				<HugeiconsIcon
-					icon={presentation === "inline" ? Wrench01Icon : Alert01Icon}
-				/>
-			}
+			icon={presentation === "inline" ? <Wrench /> : <TriangleAlert />}
 			label={presentation === "inline" ? "Fix" : "Resolve conflicts"}
 			disabled={selectedSessionId === null}
 			onClick={() => {
@@ -1071,7 +1040,7 @@ export function WorkflowActions({
 				<WorkflowActionButton
 					presentation={presentation}
 					tone="amber"
-					icon={<HugeiconsIcon icon={Upload01Icon} />}
+					icon={<Upload />}
 					label="Commit & push"
 					disabled={!agentReady}
 					onClick={() => sendToAgent("commit and push the current changes")}
@@ -1082,7 +1051,7 @@ export function WorkflowActions({
 				<DirectActionButton
 					presentation={presentation}
 					tone="pink"
-					icon={<HugeiconsIcon icon={Upload01Icon} />}
+					icon={<Upload />}
 					label={presentation === "inline" ? "Push" : "Push commits"}
 					loadingLabel="Pushing…"
 					run={async () => {
@@ -1098,7 +1067,7 @@ export function WorkflowActions({
 				<WorkflowActionButton
 					presentation={presentation}
 					tone="pink"
-					icon={<HugeiconsIcon icon={GitPullRequestIcon} />}
+					icon={<GitPullRequest />}
 					label="Create PR"
 					disabled={!agentReady}
 					onClick={() => sendToAgent("create a pull request for this branch")}
@@ -1108,7 +1077,7 @@ export function WorkflowActions({
 				<DirectActionButton
 					presentation={presentation}
 					tone="zinc"
-					icon={<HugeiconsIcon icon={ArchiveArrowDownIcon} />}
+					icon={<ArchiveRestore />}
 					label={
 						archiveProgress === null
 							? presentation === "inline"
@@ -1150,7 +1119,7 @@ export function WorkflowActions({
 				<DirectActionButton
 					presentation={presentation}
 					tone="zinc"
-					icon={<HugeiconsIcon icon={GitMergeIcon} />}
+					icon={<GitMerge />}
 					label="Mark ready"
 					loadingLabel="Marking…"
 					run={async () => {
@@ -1207,7 +1176,7 @@ function PrHashChip({ workflow }: { workflow: OpenPrWorkflow }) {
 	const content =
 		checksRunning > 0 ? (
 			<span className="flex items-center gap-1.5">
-				<HugeiconsIcon icon={Loading02Icon} className="size-3 animate-spin" />
+				<Loader className="size-3 animate-spin" />
 				{label}
 			</span>
 		) : (
@@ -1252,7 +1221,7 @@ function CiStatus({ workflow }: { workflow: OpenPrWorkflow }) {
 		const n = workflow.checksFailing;
 		return (
 			<span className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-[var(--accent-red)]">
-				<HugeiconsIcon icon={Alert01Icon} className="size-3.5" />
+				<TriangleAlert className="size-3.5" />
 				{n} check{n === 1 ? "" : "s"} failing
 			</span>
 		);
@@ -1309,7 +1278,7 @@ function DirectActionButton({
 			tone={tone}
 			icon={
 				loading ? (
-					<HugeiconsIcon icon={Loading02Icon} className="animate-spin" />
+					<Loader className="animate-spin" />
 				) : (
 					icon
 				)
@@ -1351,7 +1320,7 @@ function MergeButton({
 			<DirectActionButton
 				presentation={presentation}
 				tone="green"
-				icon={<HugeiconsIcon icon={GitMergeIcon} />}
+				icon={<GitMerge />}
 				label="Merge"
 				loadingLabel="Merging…"
 				run={async () => {
@@ -1376,7 +1345,7 @@ function MergeButton({
 								className="flex size-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
 								aria-label="Choose merge method"
 							>
-								<HugeiconsIcon icon={ArrowDown01Icon} className="size-3.5" />
+								<ChevronDown className="size-3.5" />
 							</MenuTrigger>
 						}
 					/>
@@ -1389,10 +1358,7 @@ function MergeButton({
 							onClick={() => setMethod(m)}
 							className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
 						>
-							<HugeiconsIcon
-								icon={Tick01Icon}
-								className={`size-3.5 ${method === m ? "opacity-100" : "opacity-0"}`}
-							/>
+							<Check className={`size-3.5 ${method === m ? "opacity-100" : "opacity-0"}`} />
 							{MERGE_METHOD_LABEL[m]}
 						</MenuItem>
 					))}
@@ -1464,12 +1430,9 @@ function AutoMergeToggle({
 							tone="blue"
 							icon={
 								loading ? (
-									<HugeiconsIcon
-										icon={Loading02Icon}
-										className="animate-spin"
-									/>
+									<Loader className="animate-spin" />
 								) : (
-									<HugeiconsIcon icon={MagicWand01Icon} />
+									<WandSparkles />
 								)
 							}
 							label={enabled ? "Auto-merge on" : "Auto-merge"}
@@ -1501,9 +1464,9 @@ function AutoMergeToggle({
 							aria-pressed={enabled}
 						>
 							{loading ? (
-								<HugeiconsIcon icon={Loading02Icon} className="animate-spin" />
+								<Loader className="animate-spin" />
 							) : (
-								<HugeiconsIcon icon={MagicWand01Icon} />
+								<WandSparkles />
 							)}
 							{enabled ? "Auto-merge on" : "Auto-merge"}
 						</button>
@@ -1585,9 +1548,9 @@ export function FixActionsButton({
 			tone="red"
 			icon={
 				loading ? (
-					<HugeiconsIcon icon={Loading02Icon} className="animate-spin" />
+					<Loader className="animate-spin" />
 				) : (
-					<HugeiconsIcon icon={Wrench01Icon} />
+					<Wrench />
 				)
 			}
 			label={

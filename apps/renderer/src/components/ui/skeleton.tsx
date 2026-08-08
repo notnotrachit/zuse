@@ -13,6 +13,6 @@ export function Skeleton({
       )}
       data-slot="skeleton"
       {...props}
-    />
+ />
   );
 }

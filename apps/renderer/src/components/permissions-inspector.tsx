@@ -1,12 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Delete02Icon,
-	GlobeIcon,
-	PencilIcon,
-	Shield01Icon,
-	TerminalIcon,
-	Wrench01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Globe, Pencil, Shield, Terminal, Trash2, Wrench } from "lucide-react";
 import type { FolderId, PermissionKind, SavedDecision } from "@zuse/contracts";
 import { useEffect, useMemo, useState } from "react";
 
@@ -24,25 +16,19 @@ const kindIcon = (kind: PermissionKind) => {
 	switch (kind._tag) {
 		case "Bash":
 			return (
-				<HugeiconsIcon
-					icon={TerminalIcon}
-					className="size-3.5 text-amber-300"
-				/>
+				<Terminal className="size-3.5 text-amber-300" />
 			);
 		case "FileWrite":
 			return (
-				<HugeiconsIcon
-					icon={PencilIcon}
-					className="size-3.5 text-emerald-300"
-				/>
+				<Pencil className="size-3.5 text-emerald-300" />
 			);
 		case "Network":
 			return (
-				<HugeiconsIcon icon={GlobeIcon} className="size-3.5 text-sky-300" />
+				<Globe className="size-3.5 text-sky-300" />
 			);
 		case "Other":
 			return (
-				<HugeiconsIcon icon={Wrench01Icon} className="size-3.5 text-zinc-300" />
+				<Wrench className="size-3.5 text-zinc-300" />
 			);
 	}
 };
@@ -138,10 +124,7 @@ export function PermissionsInspector({
 			<DialogPopup className="max-w-2xl" showCloseButton>
 				<DialogHeader>
 					<div className="flex items-center gap-2 pr-8">
-						<HugeiconsIcon
-							icon={Shield01Icon}
-							className="size-4 text-violet-300"
-						/>
+						<Shield className="size-4 text-violet-300" />
 						<DialogTitle className="text-base">
 							Permissions — {projectName}
 						</DialogTitle>
@@ -297,7 +280,7 @@ function DecisionRow({
 					aria-label="Revoke"
 					title="Revoke this decision"
 				>
-					<HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
+					<Trash2 className="size-3.5" />
 				</button>
 			)}
 		</li>

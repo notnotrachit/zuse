@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { LinkSquare01Icon, Tick01Icon } from "@hugeicons-pro/core-bulk-rounded";
+import { Check, ExternalLink } from "lucide-react";
 
 import type { AgentAvailability, ProviderId } from "@zuse/contracts";
 
@@ -156,7 +155,7 @@ export function ProviderStep() {
         // logins" — so here we just nudge them to pick and continue. Short
         // subtitle keeps the cards above the fold.
         subtitle="Choose the agent you use most. You can change it anytime."
-      />
+ />
 
       <div className="grid grid-cols-2 gap-2.5">
         {providers.map((pid) => (
@@ -166,7 +165,7 @@ export function ProviderStep() {
             state={deriveState(pid, availability, initialLoading)}
             active={pid === defaultProviderId}
             onClick={() => setDefaultProvider(pid)}
-          />
+ />
         ))}
       </div>
 
@@ -222,11 +221,8 @@ function ProviderCard({
       </span>
       {active ? (
         <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-          <HugeiconsIcon
-            icon={Tick01Icon}
-            className="size-2.5"
-            strokeWidth={3.5}
-          />
+          <Check className="size-2.5"
+ strokeWidth={3.5} />
         </span>
       ) : (
         <StateDot state={state} />
@@ -249,7 +245,7 @@ function StateDot({ state }: { state: ProviderState }) {
     <span
       className={cn("size-1.5 shrink-0 rounded-full", styles[state.kind])}
       aria-hidden
-    />
+ />
   );
 }
 
@@ -318,7 +314,7 @@ function ProviderStatus({
         : `${PROVIDER_LABEL[providerId]} API key saved. You're all set.`;
     return (
       <div className="flex items-center gap-2 rounded-full bg-alert-success-bg px-3 py-2 text-[12px] text-success">
-        <HugeiconsIcon icon={Tick01Icon} className="size-3.5" strokeWidth={3} />
+        <Check className="size-3.5" strokeWidth={3} />
         <span className="leading-none">{label}</span>
       </div>
     );
@@ -395,7 +391,7 @@ function ProviderStatus({
           providerId={providerId}
           plan={subscriptionInfo.plan}
           url={subscriptionInfo.url}
-        />
+ />
       )}
 
       {command !== null && (
@@ -445,7 +441,7 @@ function SubscriptionNotice({
           onClick={() => openExternal(url)}
           className="gap-1.5 rounded-full bg-violet-500/15 px-2.5 text-[11px] text-violet-700 hover:bg-violet-500/25 hover:text-violet-800 dark:text-violet-200 dark:hover:text-violet-100"
         >
-          <HugeiconsIcon icon={LinkSquare01Icon} className="size-3" />
+          <ExternalLink className="size-3" />
           Subscribe to {plan}
         </Button>
       </div>

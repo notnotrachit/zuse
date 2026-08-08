@@ -1,9 +1,7 @@
 "use client";
+import { ArrowUpDown, X } from "lucide-react";
 
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowUpDownIcon } from "@hugeicons-pro/core-solid-rounded";
-import { X } from "lucide-react";
 import * as React from "react";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -118,7 +116,7 @@ export function ComboboxInput({
 					{...triggerProps}
 				>
 					<ComboboxPrimitive.Icon data-slot="combobox-icon">
-						<HugeiconsIcon icon={ArrowUpDownIcon} />
+						<ArrowUpDown />
 					</ComboboxPrimitive.Icon>
 				</ComboboxTrigger>
 			)}

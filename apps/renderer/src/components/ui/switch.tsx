@@ -38,7 +38,7 @@ export function Switch({
           "group-active/switch:scale-[0.92]",
         )}
         data-slot="switch-thumb"
-      />
+ />
     </SwitchPrimitive.Root>
   );
 }

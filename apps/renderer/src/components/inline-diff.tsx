@@ -237,7 +237,7 @@ export function UnifiedPatchDiff({
             name={name}
             kind="file"
             className="inline-flex size-3.5 shrink-0"
-          />
+ />
           <Tooltip>
             <TooltipTrigger
               render={
@@ -245,7 +245,7 @@ export function UnifiedPatchDiff({
                   {name}
                 </span>
               }
-            />
+ />
             <TooltipPopup>{path}</TooltipPopup>
           </Tooltip>
           <span className="text-muted-foreground">{kind}</span>
@@ -273,7 +273,7 @@ export function UnifiedPatchDiff({
               disableFileHeader: true,
             }}
             disableWorkerPool
-          />
+ />
 					</Suspense>
         ) : (
           <RawPatchBlock patch={patch} />
@@ -317,7 +317,7 @@ export function EditDiff({
             name={name}
             kind="file"
             className="inline-flex size-3.5 shrink-0"
-          />
+ />
           <Tooltip>
             <TooltipTrigger
               render={
@@ -325,7 +325,7 @@ export function EditDiff({
                   {name}
                 </span>
               }
-            />
+ />
             <TooltipPopup>{edit.path}</TooltipPopup>
           </Tooltip>
           <span className="text-muted-foreground">{edit.mode === "create" ? "add" : "update"}</span>
@@ -352,7 +352,7 @@ export function EditDiff({
             disableFileHeader: true,
           }}
           disableWorkerPool
-        />
+ />
 				</Suspense>
       </div>
     </div>

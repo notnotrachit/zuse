@@ -197,9 +197,9 @@ export function ComposerChipOverlay({
               height: rect.height,
               pointerEvents: "none",
             }}
-          />
+ />
         }
-      />
+ />
       <TooltipPopup
         className={
           state.kind === "image"
@@ -220,7 +220,7 @@ export function ComposerChipOverlay({
               alt=""
               className="block max-h-72 max-w-full rounded-md object-contain"
               draggable={false}
-            />
+ />
             <div className="mt-1.5 max-w-80 truncate px-0.5 text-[11px] text-muted-foreground">
               {state.originalName}
             </div>

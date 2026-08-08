@@ -1,9 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowDown01Icon,
-	CheckListIcon,
-	Tick02Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, ChevronDown, ListChecks } from "lucide-react";
 import type { Message, SessionId } from "@zuse/contracts";
 import { useMemo, useState } from "react";
 
@@ -254,12 +249,9 @@ export function ProjectPlanTray({ sessionId }: { sessionId: SessionId }) {
 
 	const icon =
 		headerTodo === undefined ? (
-			<HugeiconsIcon
-				icon={CheckListIcon}
-				strokeWidth={2}
-				className="size-3.5"
-				aria-hidden="true"
-			/>
+			<ListChecks strokeWidth={2}
+ className="size-3.5"
+ aria-hidden="true" />
 		) : (
 			<TodoStatusIcon status={headerTodo.status} />
 		);
@@ -275,14 +267,11 @@ export function ProjectPlanTray({ sessionId }: { sessionId: SessionId }) {
 			ariaExpanded={expanded}
 			ariaLabel={expanded ? "Collapse plan" : "Expand plan"}
 			actions={
-				<HugeiconsIcon
-					icon={ArrowDown01Icon}
-					className={cn(
-						"size-4 text-muted-foreground transition-transform",
-						expanded ? "rotate-180" : "",
-					)}
-					aria-hidden="true"
-				/>
+				<ChevronDown className={cn(
+ "size-4 text-muted-foreground transition-transform",
+ expanded ? "rotate-180" : "",
+ )}
+ aria-hidden="true" />
 			}
 			expanded={
 				expanded ? (
@@ -321,12 +310,9 @@ export function ProjectPlanTray({ sessionId }: { sessionId: SessionId }) {
 function TodoStatusIcon({ status }: { status: TodoStatus }) {
 	if (status === TODO_STATUS.completed) {
 		return (
-			<HugeiconsIcon
-				icon={Tick02Icon}
-				strokeWidth={2.5}
-				className="size-3.5 text-primary"
-				aria-label="Completed"
-			/>
+			<Check strokeWidth={2.5}
+ className="size-3.5 text-primary"
+ aria-label="Completed" />
 		);
 	}
 	if (status === TODO_STATUS.inProgress) {

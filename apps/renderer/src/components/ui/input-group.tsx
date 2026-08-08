@@ -40,7 +40,7 @@ export function InputGroup({
       data-slot="input-group"
       role="group"
       {...props}
-    />
+ />
   );
 }
 
@@ -71,7 +71,7 @@ export function InputGroupAddon({
         }
       }}
       {...props}
-    />
+ />
   );
 }
 
@@ -86,7 +86,7 @@ export function InputGroupText({
         className,
       )}
       {...props}
-    />
+ />
   );
 }
 

@@ -1,5 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Message01Icon } from "@hugeicons-pro/core-solid-rounded";
+import { MessageSquare } from "lucide-react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import type { Message, SessionId } from "@zuse/contracts";
 import {
@@ -616,10 +615,7 @@ export function ChatView({
 							</div>
 							{setupActive ? null : (
 								<div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-									<HugeiconsIcon
-										icon={Message01Icon}
-										className="size-10 opacity-40"
-									/>
+									<MessageSquare className="size-10 opacity-40" />
 									<div>
 										<p className="text-sm">{session?.title ?? "New chat"}</p>
 										<p className="mt-1 text-xs">

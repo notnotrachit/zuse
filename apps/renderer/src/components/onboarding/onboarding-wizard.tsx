@@ -1,8 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	ArrowLeft01Icon,
-	ArrowRight01Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -148,7 +144,7 @@ export function OnboardingWizard() {
 									isFirst && "invisible",
 								)}
 							>
-								<HugeiconsIcon icon={ArrowLeft01Icon} />
+								<ChevronLeft />
 								Back
 							</Button>
 							<div className="flex items-center gap-1">
@@ -171,7 +167,7 @@ export function OnboardingWizard() {
 									className="px-4"
 								>
 									{isFirst ? "Get started" : "Continue"}
-									<HugeiconsIcon icon={ArrowRight01Icon} />
+									<ChevronRight />
 								</Button>
 							</div>
 						</div>

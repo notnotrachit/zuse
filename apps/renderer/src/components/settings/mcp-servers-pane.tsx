@@ -1,16 +1,9 @@
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-	Alert02Icon,
-	Key01Icon,
-	Loading02Icon,
-	Tick02Icon,
-} from "@hugeicons-pro/core-solid-rounded";
+import { Check, Key, Loader, RefreshCw, TriangleAlert } from "lucide-react";
 import type {
 	McpServerDescriptor,
 	McpServerSource,
 	McpServerStatus,
 } from "@zuse/contracts";
-import { RefreshCw as RefreshIcon } from "lucide-react";
 import { useEffect } from "react";
 
 import { cn } from "~/lib/utils";
@@ -71,11 +64,8 @@ function StatusBadge({ status }: { status: McpServerStatus | undefined }) {
 	if (status === undefined || status.state === "connecting") {
 		return (
 			<span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-				<HugeiconsIcon
-					icon={Loading02Icon}
-					className="size-3 animate-spin motion-reduce:animate-none"
-					aria-hidden
-				/>
+				<Loader className="size-3 animate-spin motion-reduce:animate-none"
+ aria-hidden />
 				checking
 			</span>
 		);
@@ -83,7 +73,7 @@ function StatusBadge({ status }: { status: McpServerStatus | undefined }) {
 	if (status.state === "connected") {
 		return (
 			<span className="flex items-center gap-1 text-[11px] text-emerald-500">
-				<HugeiconsIcon icon={Tick02Icon} className="size-3" aria-hidden />
+				<Check className="size-3" aria-hidden />
 				{status.toolCount ?? 0} {status.toolCount === 1 ? "tool" : "tools"}
 			</span>
 		);
@@ -91,7 +81,7 @@ function StatusBadge({ status }: { status: McpServerStatus | undefined }) {
 	if (status.state === "needs-auth") {
 		return (
 			<span className="flex items-center gap-1 text-[11px] text-amber-400">
-				<HugeiconsIcon icon={Key01Icon} className="size-3" aria-hidden />
+				<Key className="size-3" aria-hidden />
 				auth required
 			</span>
 		);
@@ -102,11 +92,8 @@ function StatusBadge({ status }: { status: McpServerStatus | undefined }) {
 				className="flex max-w-56 items-center gap-1 truncate text-[11px] text-red-400"
 				title={status.error ?? "error"}
 			>
-				<HugeiconsIcon
-					icon={Alert02Icon}
-					className="size-3 shrink-0"
-					aria-hidden
-				/>
+				<TriangleAlert className="size-3 shrink-0"
+ aria-hidden />
 				<span className="truncate">{status.error ?? "error"}</span>
 			</span>
 		);
@@ -227,7 +214,7 @@ export function McpServersPane() {
 					disabled={refreshing}
 					onClick={() => void refresh({})}
 				>
-					<RefreshIcon
+					<RefreshCw
 						className={cn(
 							"size-3.5",
 							refreshing && "animate-spin motion-reduce:animate-none",

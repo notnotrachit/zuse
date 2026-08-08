@@ -12,7 +12,7 @@ export function CheckboxGroup({
     <CheckboxGroupPrimitive
       className={cn("flex flex-col items-start gap-3", className)}
       {...props}
-    />
+ />
   );
 }
 

@@ -97,7 +97,7 @@ export function PopoverTitle({
       className={cn("font-semibold text-lg leading-none", className)}
       data-slot="popover-title"
       {...props}
-    />
+ />
   );
 }
 
@@ -110,7 +110,7 @@ export function PopoverDescription({
       className={cn("text-muted-foreground text-sm", className)}
       data-slot="popover-description"
       {...props}
-    />
+ />
   );
 }
 
