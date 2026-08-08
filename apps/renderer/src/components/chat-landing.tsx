@@ -54,13 +54,28 @@ import {
 import { applyPreparedLinearContext } from "~/composer/linear-context-input";
 import { resolveChatWorkspacePolicy } from "~/lib/auto-worktree";
 import { saveContextFile } from "~/lib/context-handoff";
-import { getRpcClient } from "~/lib/rpc-client";
+import { formatError } from "~/lib/format-error";
+import {
+	buildLogicalProjectGroups,
+	defaultNewChatTarget,
+	type LogicalProjectGroup,
+	type LogicalProjectMember,
+	type NewChatTarget,
+	preferredGroupMember,
+} from "~/lib/project-groups";
+import { getLocalEnvironmentId, getRpcClient } from "~/lib/rpc-client";
+import { switchToEnvironment } from "~/lib/switch-environment";
 import { cn } from "~/lib/utils";
 import { useAttachmentsStore } from "~/store/attachments";
 import { useChatsStore } from "~/store/chats";
 import { useComposerBridge } from "~/store/composer-bridge";
-import { composerDraftKeyForLanding } from "~/store/composer-drafts";
+import {
+	composerDraftKeyForLanding,
+	composerDraftKeyForRemoteLanding,
+} from "~/store/composer-drafts";
+import { useEnvironmentCatalogStore } from "~/store/environment-catalog";
 import { useExternalThreadsStore } from "~/store/external-threads";
+import { useFolderOriginsStore } from "~/store/folder-origins";
 import { useMessagesStore } from "~/store/messages";
 import { useRepositorySettingsStore } from "~/store/repository-settings.ts";
 import { DRAFT_SESSION_ID, useSessionsStore } from "~/store/sessions";
@@ -68,6 +83,7 @@ import { useSettingsStore } from "~/store/settings";
 import { useWorkspaceStore } from "~/store/workspace";
 import { EMPTY_WORKTREES, useWorktreesStore } from "~/store/worktrees";
 import { PROVIDER_LABEL } from "../lib/provider-labels.ts";
+import { ComputerPicker } from "./composer/computer-picker.tsx";
 import {
 	CreateFromMenu,
 	type CreateFromSelection,
@@ -78,6 +94,11 @@ import { SetupCardView } from "./worktree-setup-card.tsx";
 const ChatComposer = lazy(() =>
 	import("./chat-composer.tsx").then((module) => ({
 		default: module.ChatComposer,
+	})),
+);
+const ProjectSetupDialog = lazy(() =>
+	import("./project-setup-dialog.tsx").then((module) => ({
+		default: module.ProjectSetupDialog,
 	})),
 );
 
@@ -112,6 +133,13 @@ const migrateModelOptions = (fromId: string, toId: string): void => {
 		window.sessionStorage.removeItem(from);
 	}
 };
+
+/**
+ * The landing pickers only need group membership (which repos on which
+ * computers), never the merged chat lists — so the builder gets an empty
+ * chat map instead of subscribing this surface to every chat update.
+ */
+const EMPTY_CHATS_BY_PROJECT: Readonly<Record<string, never>> = {};
 
 const formatThreadRelative = (date: Date): string => {
 	const ms = Math.max(0, Date.now() - date.getTime());
@@ -227,19 +255,140 @@ export function ChatLanding() {
 		[folders, selectedFolderId],
 	);
 
+	const catalogEntries = useEnvironmentCatalogStore((s) => s.entries);
+	const activeEnvironmentId = useEnvironmentCatalogStore(
+		(s) => s.activeEnvironmentId,
+	);
+	const retryProfile = useEnvironmentCatalogStore((s) => s.retry);
+	const retryEnvironment = useEnvironmentCatalogStore(
+		(s) => s.retryEnvironment,
+	);
+	const [retryingEnvironmentId, setRetryingEnvironmentId] = useState<
+		string | null
+	>(null);
+	const origins = useFolderOriginsStore((s) => s.byFolder);
+	const hydrateOrigins = useFolderOriginsStore((s) => s.hydrate);
+	const desktopCatalogEnabled =
+		window.zuse?.ssh !== undefined || window.zuse?.tailnet !== undefined;
+	const unavailableComputers = catalogEntries.filter(
+		(entry) =>
+			entry.connectionKind !== "local" &&
+			(entry.status === "error" || entry.status === "offline"),
+	);
+	const retryComputer = (environmentId: string): void => {
+		const entry = catalogEntries.find(
+			(candidate) => candidate.environmentId === environmentId,
+		);
+		if (entry === undefined || entry.status === "connecting") return;
+		setRetryingEnvironmentId(environmentId);
+		const operation =
+			entry.profileId === null
+				? retryEnvironment(environmentId)
+				: retryProfile(entry.profileId);
+		void operation
+			.catch((cause) =>
+				toastManager.add({
+					title: "Could not reconnect",
+					description: formatError(cause),
+					type: "error",
+				}),
+			)
+			.finally(() => setRetryingEnvironmentId(null));
+	};
+
+	useEffect(() => {
+		void hydrateOrigins(folders.map((folder) => folder.id));
+	}, [folders, hydrateOrigins]);
+
+	// One picker row per repo across machines. In hosted mode the catalog is
+	// empty, so groups degrade to exactly the active workspace's folders.
+	const projectGroups = useMemo(
+		() =>
+			buildLogicalProjectGroups({
+				entries: catalogEntries,
+				activeEnvironmentId,
+				localEnvironmentId: getLocalEnvironmentId(),
+				activeFolders: folders,
+				activeOrigins: origins,
+				activeChatsByProject: EMPTY_CHATS_BY_PROJECT,
+			}),
+		[catalogEntries, activeEnvironmentId, folders, origins],
+	);
+	const selectedGroup = useMemo(
+		() =>
+			selectedFolderId === null
+				? null
+				: (projectGroups.find((group) =>
+						group.members.some(
+							(member) =>
+								member.isActive && member.folderId === selectedFolderId,
+						),
+					) ?? null),
+		[projectGroups, selectedFolderId],
+	);
+
+	// A project that exists ONLY on other computers, chosen from the project
+	// picker. Anchoring shows its composer WITHOUT switching the app there —
+	// the machine is decided per chat, at submit.
+	const [remoteAnchor, setRemoteAnchor] = useState<{
+		readonly groupKey: string;
+		readonly member: LogicalProjectMember;
+	} | null>(null);
+	// Explicit "Run on" pick for the pending draft. Null = the group default
+	// (this desktop's member when present, else the first connected one).
+	const [targetOverride, setTargetOverride] = useState<NewChatTarget | null>(
+		null,
+	);
+	const [projectSetupOpen, setProjectSetupOpen] = useState(false);
+	const anchoredGroup = useMemo(
+		() =>
+			remoteAnchor === null
+				? null
+				: (projectGroups.find((group) => group.key === remoteAnchor.groupKey) ??
+					null),
+		[projectGroups, remoteAnchor],
+	);
+	const pickerGroup = anchoredGroup ?? selectedGroup;
+	const resolvedTarget: NewChatTarget | null =
+		targetOverride ??
+		(remoteAnchor !== null
+			? {
+					environmentId: remoteAnchor.member.environmentId,
+					folderId: remoteAnchor.member.folderId,
+				}
+			: pickerGroup !== null
+				? defaultNewChatTarget(pickerGroup)
+				: null);
+	const pendingProjectSetup =
+		resolvedTarget?.folderId === null &&
+		pickerGroup?.origin?.cloneUrl !== undefined
+			? {
+					environmentId: resolvedTarget.environmentId,
+					label:
+						catalogEntries.find(
+							(entry) => entry.environmentId === resolvedTarget.environmentId,
+						)?.label ?? "the selected computer",
+					url: pickerGroup.origin.cloneUrl,
+					name: pickerGroup.displayName,
+				}
+			: null;
+
 	// Spin up (or re-spin, on project switch) the draft session that backs the
 	// composer. Re-runs only when the project changes — model/provider/runtime
 	// edits the user makes inside the composer mutate the draft in place, so we
 	// must not clobber them on unrelated default-settings changes.
 	useLayoutEffect(() => {
-		// A create-from source is scoped to the project it was picked in.
+		// A create-from source is scoped to the project it was picked in, and a
+		// "Run on" override to the draft it was picked for.
 		setCreateSource(null);
-		if (selectedFolderId === null) {
+		setTargetOverride(null);
+		const draftFolderId = remoteAnchor?.member.folderId ?? selectedFolderId;
+		if (draftFolderId === null) {
 			clearDraft();
 			return;
 		}
 		beginDraft({
-			projectId: selectedFolderId,
+			projectId: draftFolderId,
 			providerId: defaultProviderId,
 			model:
 				defaultModelByProvider[defaultProviderId] ??
@@ -248,18 +397,32 @@ export function ChatLanding() {
 		});
 		return () => clearDraft();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedFolderId]);
+	}, [selectedFolderId, remoteAnchor]);
 
 	useEffect(() => {
 		void hydrateExternalThreads();
 	}, [hydrateExternalThreads]);
 
-	const headline = selectedFolder
-		? `What should we build in ${selectedFolder.name}?`
-		: "What should we build today?";
+	const headline =
+		anchoredGroup !== null
+			? `What should we build in ${anchoredGroup.displayName}?`
+			: selectedFolder
+				? `What should we build in ${selectedFolder.name}?`
+				: "What should we build today?";
 
-	const onPick = (folderId: FolderId) => {
-		void selectFolder(folderId);
+	// Picking a group resolves to its preferred member: the active environment
+	// first, else the first connected computer. A remote-only group ANCHORS the
+	// composer to that project — it never switches the app; the machine is
+	// decided per chat, at submit.
+	const onPickGroup = (group: LogicalProjectGroup) => {
+		const member = preferredGroupMember(group);
+		if (member === null) return;
+		if (member.isActive) {
+			setRemoteAnchor(null);
+			void selectFolder(member.folderId);
+			return;
+		}
+		setRemoteAnchor({ groupKey: group.key, member });
 	};
 	const onAdd = () => {
 		void addFolder();
@@ -397,9 +560,83 @@ export function ChatLanding() {
 			readonly pendingContextFiles: ReadonlyArray<PendingDraftContextFile>;
 		},
 	): Promise<void> => {
-		if (selectedFolderId === null || submitting) return;
+		if (submitting) return;
 		const draft = useSessionsStore.getState().draftSession;
 		if (draft === null) return;
+		const target = resolvedTarget;
+		if (target !== null && target.folderId === null) {
+			setSubmitError(
+				"Clone this project onto the selected computer before starting the chat.",
+			);
+			return;
+		}
+		const remoteTarget =
+			target !== null &&
+			target.folderId !== null &&
+			(target.environmentId !== activeEnvironmentId ||
+				target.folderId !== selectedFolderId)
+				? { environmentId: target.environmentId, folderId: target.folderId }
+				: null;
+		if (remoteTarget !== null) {
+			// Create the chat ON the target computer first, then open it. The
+			// draft is consumed here, so nothing needs carrying across the
+			// activation — and with desktop-anchored badges the sidebar does not
+			// reorganize; the only visible effect is the chat opening.
+			if (
+				opts.pendingAttachments.length > 0 ||
+				opts.pendingContextFiles.length > 0 ||
+				createSource !== null ||
+				opts.asGoal
+			) {
+				setSubmitError(
+					"Attachments, context files, goals, and Create-from aren't supported yet when starting a chat on another computer.",
+				);
+				return;
+			}
+			setSubmitError(null);
+			setSubmitting(true);
+			setPendingPrompt(
+				input.text.trim().length > 0 ? input.text.trim() : "New chat",
+			);
+			const remoteResult = await create(
+				remoteTarget.folderId,
+				draft.providerId,
+				draft.model,
+				{
+					environmentId: remoteTarget.environmentId,
+					runtimeMode: draft.runtimeMode,
+					permissionMode: draft.permissionMode,
+					startupInput: ComposerInput.make({ ...input, asGoal: false }),
+				},
+			);
+			if (remoteResult === null) {
+				setSubmitError(
+					useChatsStore.getState().error ??
+						`Couldn't start ${draft.providerId} on the selected computer.`,
+				);
+				setPendingPrompt(null);
+				setSubmitting(false);
+				return;
+			}
+			const switched = await switchToEnvironment({
+				environmentId: remoteTarget.environmentId,
+				folderId: remoteTarget.folderId,
+				chatId: remoteResult.chatId,
+				seed: remoteResult.remoteSeed,
+			});
+			useSessionsStore.getState().clearDraft();
+			setRemoteAnchor(null);
+			setTargetOverride(null);
+			if (!switched.switched) {
+				setSubmitError(
+					"The chat was created, but the computer disconnected before it could open. It will appear in the sidebar when the computer reconnects.",
+				);
+				setPendingPrompt(null);
+			}
+			setSubmitting(false);
+			return;
+		}
+		if (selectedFolderId === null) return;
 		const startupInput = ComposerInput.make({ ...input, asGoal: opts.asGoal });
 		setSubmitError(null);
 		setSubmitting(true);
@@ -711,6 +948,59 @@ export function ChatLanding() {
 					{headline}
 				</h1>
 
+				{unavailableComputers.length > 0 ? (
+					<div
+						role="status"
+						aria-live="polite"
+						className="mx-auto flex w-full max-w-2xl items-center gap-2.5 rounded-lg border border-border/60 bg-muted/35 px-3 py-2"
+					>
+						<span className="size-1.5 shrink-0 rounded-full bg-destructive/80" />
+						<p className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+							<span className="font-medium text-foreground/90">
+								{unavailableComputers.length === 1
+									? unavailableComputers[0]?.label
+									: `${unavailableComputers.length} computers`}
+							</span>{" "}
+							{unavailableComputers.length === 1
+								? "is unavailable."
+								: "are unavailable."}{" "}
+							Zuse will keep trying.
+						</p>
+						<button
+							type="button"
+							disabled={retryingEnvironmentId !== null}
+							className="inline-flex h-6 shrink-0 items-center rounded-md border border-border/60 bg-muted px-2 text-[10px] font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+							onClick={() => {
+								for (const entry of unavailableComputers) {
+									retryComputer(entry.environmentId);
+								}
+							}}
+						>
+							{retryingEnvironmentId === null ? "Retry" : "Retrying…"}
+						</button>
+					</div>
+				) : null}
+
+				{pendingProjectSetup !== null ? (
+					<div className="mx-auto flex w-full max-w-2xl items-center gap-3 rounded-lg border border-border bg-muted/45 px-3 py-2">
+						<div className="min-w-0 flex-1">
+							<p className="text-xs font-medium text-foreground">
+								This project isn’t on {pendingProjectSetup.label}
+							</p>
+							<p className="text-[11px] text-muted-foreground">
+								Clone it there before starting this chat.
+							</p>
+						</div>
+						<button
+							type="button"
+							className="inline-flex min-h-8 shrink-0 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring"
+							onClick={() => setProjectSetupOpen(true)}
+						>
+							Clone project
+						</button>
+					</div>
+				) : null}
+
 				{submitError !== null && (
 					<div className="mx-auto flex w-full max-w-2xl items-start gap-2 rounded-lg border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-200">
 						<span className="mt-px shrink-0">⚠</span>
@@ -732,21 +1022,51 @@ export function ChatLanding() {
 				{draftSession !== null ? (
 					<Suspense fallback={<div className="h-28" aria-busy="true" />}>
 						<ChatComposer
-							key={selectedFolderId ?? "none"}
+							submitDisabled={pendingProjectSetup !== null}
+							// Keyed by the draft's anchor — NOT by the "Run on" target,
+							// so picking a computer never remounts the editor and the
+							// typed text stays exactly where it is.
+							key={
+								remoteAnchor !== null
+									? `remote:${remoteAnchor.member.environmentId}:${remoteAnchor.member.folderId}`
+									: `${activeEnvironmentId}:${selectedFolderId ?? "none"}`
+							}
 							session={draftSession}
-							composerDraftKey={composerDraftKeyForLanding(selectedFolderId)}
+							composerDraftKey={
+								remoteAnchor !== null
+									? composerDraftKeyForRemoteLanding(
+											remoteAnchor.member.environmentId,
+											remoteAnchor.member.folderId,
+										)
+									: composerDraftKeyForLanding(selectedFolderId)
+							}
 							onDraftSubmit={(input, opts) =>
 								void handleDraftSubmit(input, opts)
 							}
 							headerSlot={
 								<div className="flex w-full items-center justify-between gap-2">
-									<ProjectPicker
-										folders={folders}
-										selectedFolderId={selectedFolderId}
-										selectedName={selectedFolder?.name ?? null}
-										onPick={onPick}
-										onAdd={onAdd}
-									/>
+									<div className="flex min-w-0 items-center gap-1.5">
+										<ProjectPicker
+											groups={projectGroups}
+											selectedFolderId={selectedFolderId}
+											selectedName={
+												anchoredGroup?.displayName ??
+												selectedFolder?.name ??
+												null
+											}
+											onPickGroup={onPickGroup}
+											onAdd={onAdd}
+										/>
+										{desktopCatalogEnabled ? (
+											<ComputerPicker
+												group={pickerGroup}
+												target={resolvedTarget}
+												entries={catalogEntries}
+												onPickTarget={setTargetOverride}
+												onRetryEnvironment={retryComputer}
+											/>
+										) : null}
+									</div>
 									<div className="flex min-w-0 items-center gap-1.5">
 										{createSource !== null && (
 											<span className="flex min-w-0 items-center gap-1 overflow-x-auto">
@@ -815,10 +1135,14 @@ export function ChatLanding() {
 										{creatingSource && (
 											<Spinner className="size-3.5 text-muted-foreground" />
 										)}
-										<CreateFromMenu
-											folderId={selectedFolderId}
-											onSelect={(sel) => void handleCreateFromSelect(sel)}
-										/>
+										{/* Create-from browses the ACTIVE environment's PRs and
+										    branches — hidden for a remote-anchored draft. */}
+										{remoteAnchor === null ? (
+											<CreateFromMenu
+												folderId={selectedFolderId}
+												onSelect={(sel) => void handleCreateFromSelect(sel)}
+											/>
+										) : null}
 									</div>
 								</div>
 							}
@@ -837,6 +1161,22 @@ export function ChatLanding() {
 					onContinue={(thread) => void continueExternalThread(thread)}
 				/>
 			</div>
+			{projectSetupOpen && pendingProjectSetup !== null ? (
+				<Suspense fallback={null}>
+					<ProjectSetupDialog
+						open
+						onOpenChange={setProjectSetupOpen}
+						initialMode="clone"
+						initialEnvironmentId={pendingProjectSetup.environmentId}
+						sourceUrl={pendingProjectSetup.url}
+						sourceName={pendingProjectSetup.name}
+						onComplete={(folder, environmentId) => {
+							setTargetOverride({ environmentId, folderId: folder.id });
+							setSubmitError(null);
+						}}
+					/>
+				</Suspense>
+			) : null}
 		</div>
 	);
 }
@@ -1019,16 +1359,16 @@ function QueuedComposerPill({
 }
 
 function ProjectPicker({
-	folders,
+	groups,
 	selectedFolderId,
 	selectedName,
-	onPick,
+	onPickGroup,
 	onAdd,
 }: {
-	folders: ReturnType<typeof useWorkspaceStore.getState>["folders"];
+	groups: ReadonlyArray<LogicalProjectGroup>;
 	selectedFolderId: FolderId | null;
 	selectedName: string | null;
-	onPick: (folderId: FolderId) => void;
+	onPickGroup: (group: LogicalProjectGroup) => void;
 	onAdd: () => void;
 }) {
 	return (
@@ -1042,17 +1382,22 @@ function ProjectPicker({
 				<HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
 			</MenuTrigger>
 			<MenuPopup side="bottom" align="start" className="w-64 p-1">
-				{folders.length === 0 ? (
+				{groups.length === 0 ? (
 					<div className="px-2 py-1.5 text-xs text-muted-foreground">
 						No projects yet.
 					</div>
 				) : (
-					folders.map((folder) => {
-						const active = folder.id === selectedFolderId;
+					groups.map((group) => {
+						const active = group.members.some(
+							(member) =>
+								member.isActive && member.folderId === selectedFolderId,
+						);
+						const disabled = preferredGroupMember(group) === null;
 						return (
 							<MenuItem
-								key={folder.id}
-								onClick={() => onPick(folder.id)}
+								key={group.key}
+								disabled={disabled}
+								onClick={() => onPickGroup(group)}
 								className={cn(
 									"grid grid-cols-[1rem_auto_1fr] items-center gap-x-2 rounded-md px-2 py-1.5 text-sm",
 									active
@@ -1073,7 +1418,7 @@ function ProjectPicker({
 									className="col-start-2 row-start-1 size-3.5 opacity-80"
 								/>
 								<span className="col-start-3 row-start-1 truncate">
-									{folder.name}
+									{group.displayName}
 								</span>
 							</MenuItem>
 						);

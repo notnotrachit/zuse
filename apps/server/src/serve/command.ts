@@ -15,6 +15,8 @@ export interface ServeCommand {
 	readonly json: boolean;
 	readonly foreground: boolean;
 	readonly force: boolean;
+	readonly sshManaged: boolean;
+	readonly tailscale: boolean;
 	readonly dataDir?: string;
 }
 
@@ -64,7 +66,15 @@ export const parseServeCommand = (
 	}
 
 	for (const flag of flags) {
-		if (!["--json", "--foreground", "--force"].includes(flag)) {
+		if (
+			![
+				"--json",
+				"--foreground",
+				"--force",
+				"--ssh-managed",
+				"--tailscale",
+			].includes(flag)
+		) {
 			throw new Error(`Unknown zuse serve option "${flag}".`);
 		}
 	}
@@ -77,12 +87,23 @@ export const parseServeCommand = (
 	if (flags.has("--foreground") && action !== "start") {
 		throw new Error("--foreground is only valid when starting Zuse Serve.");
 	}
+	if (flags.has("--ssh-managed") && action !== "start") {
+		throw new Error("--ssh-managed is only valid when starting Zuse Serve.");
+	}
+	if (flags.has("--tailscale") && action !== "start") {
+		throw new Error("--tailscale is only valid when starting Zuse Serve.");
+	}
+	if (flags.has("--tailscale") && flags.has("--ssh-managed")) {
+		throw new Error("--tailscale and --ssh-managed cannot be used together.");
+	}
 
 	return {
 		action: action as ServeAction,
 		json: flags.has("--json"),
 		foreground: flags.has("--foreground"),
 		force: flags.has("--force"),
+		sshManaged: flags.has("--ssh-managed"),
+		tailscale: flags.has("--tailscale"),
 		dataDir,
 	};
 };

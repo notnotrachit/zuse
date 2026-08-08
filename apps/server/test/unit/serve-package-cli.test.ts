@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	activateServeRuntimeUpdate,
+	latestPairingLink,
 	removeServeRuntime,
+	requiresServeAccountAuthorization,
 	resolveServeDataDir,
 	runServePackageCli,
 	SERVE_HELP,
@@ -34,6 +36,29 @@ describe("serve data directory", () => {
 });
 
 describe("Serve package metadata commands", () => {
+	it("does not require account authorization for private or SSH-managed access", () => {
+		expect(
+			requiresServeAccountAuthorization({ sshManaged: false, tailscale: true }),
+		).toBe(false);
+		expect(
+			requiresServeAccountAuthorization({ sshManaged: true, tailscale: false }),
+		).toBe(false);
+		expect(
+			requiresServeAccountAuthorization({
+				sshManaged: false,
+				tailscale: false,
+			}),
+		).toBe(true);
+	});
+
+	it("selects the newest pairing link from service output", () => {
+		expect(
+			latestPairingLink(
+				"QR: zuse:///connect/pair?old\nready\nQR: zuse:///connect/pair?new#token=zp_new\n",
+			),
+		).toBe("zuse:///connect/pair?new#token=zp_new");
+	});
+
 	it("prints help without starting or mutating the runtime environment", async () => {
 		const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 		const env: NodeJS.ProcessEnv = {};

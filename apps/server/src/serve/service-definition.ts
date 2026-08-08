@@ -4,6 +4,8 @@ export interface ServeServiceDefinitionInput {
 	readonly dataDir: string;
 	readonly logDir?: string;
 	readonly relayUrl?: string;
+	readonly sshManaged?: boolean;
+	readonly tailscale?: boolean;
 }
 
 export interface LaunchAgentDefinition {
@@ -46,6 +48,8 @@ export const launchAgentDefinition = (
     <string>${escapeXml(input.executable)}</string>
     <string>serve</string>
     <string>--foreground</string>
+    ${input.sshManaged === true ? "<string>--ssh-managed</string>" : ""}
+    ${input.tailscale === true ? "<string>--tailscale</string>" : ""}
     <string>--data-dir</string>
     <string>${escapeXml(input.dataDir)}</string>
   </array>
@@ -60,8 +64,7 @@ export const launchAgentDefinition = (
   <string>Interactive</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>ZUSE_SERVE_AUTO_LINK</key>
-    <string>1</string>
+	${input.sshManaged === true || input.tailscale === true ? "" : "<key>ZUSE_SERVE_AUTO_LINK</key>\n    <string>1</string>"}
     <key>ZUSE_RELAY_URL</key>
     <string>${escapeXml(relayUrl)}</string>
   </dict>
@@ -88,8 +91,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${quoteSystemd(input.nodeExecutable)} ${quoteSystemd(input.executable)} serve --foreground --data-dir ${quoteSystemd(input.dataDir)}
-Environment=ZUSE_SERVE_AUTO_LINK=1
+ExecStart=${quoteSystemd(input.nodeExecutable)} ${quoteSystemd(input.executable)} serve --foreground${input.sshManaged === true ? " --ssh-managed" : ""}${input.tailscale === true ? " --tailscale" : ""} --data-dir ${quoteSystemd(input.dataDir)}
+${input.sshManaged === true || input.tailscale === true ? "" : "Environment=ZUSE_SERVE_AUTO_LINK=1"}
 Environment=ZUSE_RELAY_URL=${quoteSystemd(relayUrl)}
 Restart=on-failure
 RestartSec=3

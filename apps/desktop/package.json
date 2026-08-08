@@ -50,7 +50,9 @@
 	"devDependencies": {
 		"@electron/rebuild": "^4.0.4",
 		"@zusehq/server": "*",
+		"@zuse/client-runtime": "*",
 		"@zuse/ssh": "*",
+		"@zuse/tailnet": "*",
 		"@zuse/contracts": "*",
 		"@zuse/utils": "*",
 		"@repo/typescript-config": "*",

@@ -9,10 +9,56 @@ import {
 } from "@zuse/client-runtime/environment-scope";
 import { HOSTED_APP_URL, type RelayEnvironmentRecord } from "@zuse/contracts";
 import { Effect } from "effect";
+import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-
 import { getRpcClient } from "../lib/rpc-client.ts";
+import { useEnvironmentCatalogStore } from "../store/environment-catalog.ts";
+import {
+	AddComputerDialogHost,
+	openAddComputerDialog,
+} from "./add-computer-dialog.tsx";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu.tsx";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip.tsx";
+
+export function ComputerSwitcher() {
+	return window.zuse?.ssh === undefined &&
+		window.zuse?.tailnet === undefined ? (
+		<HostedComputerSwitcher />
+	) : (
+		<DesktopComputerSwitcher />
+	);
+}
+
+function DesktopComputerSwitcher() {
+	const initialize = useEnvironmentCatalogStore((state) => state.initialize);
+
+	useEffect(() => {
+		void initialize().catch((cause) =>
+			console.error("[zuse] environment catalog initialize failed", cause),
+		);
+	}, [initialize]);
+
+	return (
+		<>
+			<Tooltip>
+				<TooltipTrigger
+					render={
+						<button
+							type="button"
+							aria-label="Add computer"
+							className="relative flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+							onClick={() => openAddComputerDialog()}
+						>
+							<Plus aria-hidden="true" className="size-3.5" />
+						</button>
+					}
+				/>
+				<TooltipPopup>Add computer</TooltipPopup>
+			</Tooltip>
+			<AddComputerDialogHost />
+		</>
+	);
+}
 
 const ONLINE_WINDOW_MS = 90_000;
 
@@ -45,7 +91,7 @@ const openEnvironment = (environmentId: string): void => {
 	window.open(url, "_blank", "noopener,noreferrer");
 };
 
-export function ComputerSwitcher() {
+function HostedComputerSwitcher() {
 	const [environments, setEnvironments] = useState<
 		ReadonlyArray<RelayEnvironmentRecord>
 	>([]);
@@ -53,20 +99,20 @@ export function ComputerSwitcher() {
 		null,
 	);
 	const [failed, setFailed] = useState(false);
-
 	useEffect(() => {
 		let cancelled = false;
-		const refresh = async () => {
+		const refresh = async (): Promise<void> => {
 			try {
 				const client = await getRpcClient();
 				const [status, catalog] = await Promise.all([
 					Effect.runPromise(client["relay.status"]()),
 					Effect.runPromise(client["relay.environments"]()),
 				]);
-				if (cancelled) return;
-				setLocalEnvironmentId(status.environmentId ?? null);
-				setEnvironments(catalog.environments);
-				setFailed(false);
+				if (!cancelled) {
+					setLocalEnvironmentId(status.environmentId ?? null);
+					setEnvironments(catalog.environments);
+					setFailed(false);
+				}
 			} catch {
 				if (!cancelled) setFailed(true);
 			}
@@ -78,7 +124,6 @@ export function ComputerSwitcher() {
 			window.clearInterval(timer);
 		};
 	}, []);
-
 	const selectedId = routeEnvironmentId() ?? localEnvironmentId;
 	const selected = useMemo(
 		() =>
@@ -134,8 +179,8 @@ export function ComputerSwitcher() {
 						const active = environment.environmentId === selectedId;
 						return (
 							<MenuItem
-								className="min-h-11 items-start py-2"
 								key={environment.environmentId}
+								className="min-h-11 items-start py-2"
 								onClick={() =>
 									active
 										? undefined
@@ -144,9 +189,7 @@ export function ComputerSwitcher() {
 							>
 								<span
 									aria-hidden="true"
-									className={`mt-1.5 size-2 shrink-0 rounded-full ${
-										online ? "bg-emerald-500" : "bg-muted-foreground/35"
-									}`}
+									className={`mt-1.5 size-2 shrink-0 rounded-full ${online ? "bg-emerald-500" : "bg-muted-foreground/35"}`}
 								/>
 								<span className="min-w-0 flex-1">
 									<span className="flex items-center gap-2">

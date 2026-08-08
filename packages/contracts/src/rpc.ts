@@ -141,6 +141,7 @@ import {
 } from "./pty.ts";
 import {
 	RelayClientsRpc,
+	RelayConnectEnvironmentRpc,
 	RelayEnvironmentsRpc,
 	RelayRevokeClientRpc,
 } from "./relay.ts";
@@ -220,6 +221,7 @@ import { UsageOverviewRpc, UsageReportRpc, UsageSessionsRpc } from "./usage.ts";
 import { UsageLimitsHistoryRpc, UsageLimitsRpc } from "./usage-limits.ts";
 import {
 	WorkspaceAddRpc,
+	WorkspaceBrowseDirectoryRpc,
 	WorkspaceCloneRepoRpc,
 	WorkspaceCreateProjectRpc,
 	WorkspaceGetSelectedRpc,
@@ -230,6 +232,7 @@ import {
 	WorkspaceRemoveRpc,
 	WorkspaceSearchFilesRpc,
 	WorkspaceSetSelectedRpc,
+	WorkspaceStreamChangesRpc,
 } from "./workspace.ts";
 import {
 	WorktreeCreateRpc,
@@ -274,14 +277,17 @@ export const MemoizeRpcs = RpcGroup.make(
 	RelayStatusRpc,
 	RelayUnlinkRpc,
 	RelayEnvironmentsRpc,
+	RelayConnectEnvironmentRpc,
 	RelayClientsRpc,
 	RelayRevokeClientRpc,
 	WorkspaceAddRpc,
+	WorkspaceBrowseDirectoryRpc,
 	WorkspaceListRpc,
 	WorkspaceRemoveRpc,
 	WorkspacePickFolderRpc,
 	WorkspaceGetSelectedRpc,
 	WorkspaceSetSelectedRpc,
+	WorkspaceStreamChangesRpc,
 	WorkspaceSearchFilesRpc,
 	WorkspaceCloneRepoRpc,
 	WorkspaceCreateProjectRpc,
