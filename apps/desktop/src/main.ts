@@ -68,6 +68,7 @@ import {
 	type TailnetShareOptions,
 } from "@zuse/tailnet";
 import {
+	CredentialsServiceLive,
 	makeMainLayer,
 	readBrowserCredentialFromVault,
 	wsServerProtocolLayer,
@@ -91,6 +92,7 @@ import {
 } from "electron";
 import fixPath from "fix-path";
 import selfsigned from "selfsigned";
+import { ZUSE_APP_VERSION } from "./app-version.ts";
 import {
 	createTitleBarOverlay,
 	createWindowTitleBarOptions,
@@ -919,7 +921,7 @@ const sanitizePowerInteractions = (
 };
 
 const powerEnvironment = () => ({
-	appVersion: app.getVersion(),
+	appVersion: ZUSE_APP_VERSION,
 	platform: process.platform,
 	arch: osArch(),
 	osRelease: osRelease(),
@@ -2951,7 +2953,7 @@ async function createMainWindow() {
 			relayWsPort,
 		});
 	}
-	process.env.ZUSE_APP_VERSION = app.getVersion();
+	process.env.ZUSE_APP_VERSION = ZUSE_APP_VERSION;
 
 	runtimeFiber = Effect.runFork(
 		Layer.launch(
@@ -2965,6 +2967,7 @@ async function createMainWindow() {
 					...(nearbyWsProtocol === null ? [] : [nearbyWsProtocol]),
 				],
 				authShell,
+				credentialsLayer: CredentialsServiceLive,
 				lanAuth: {
 					policy: "protected",
 					advertisedHost: networkAccess.advertisedHost,
@@ -3506,8 +3509,8 @@ void app.whenReady().then(async () => {
 	// to call once on startup.
 	app.setAboutPanelOptions({
 		applicationName: "Zuse (Beta)",
-		applicationVersion: app.getVersion(),
-		version: app.getVersion(),
+		applicationVersion: ZUSE_APP_VERSION,
+		version: ZUSE_APP_VERSION,
 		copyright: "© Swaraj Bachu",
 		website: "https://github.com/swarajbachu/zuse",
 	});

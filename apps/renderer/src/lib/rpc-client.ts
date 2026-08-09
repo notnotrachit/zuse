@@ -98,6 +98,7 @@ const optionsForEnvironment = (
 };
 
 let online = globalThis.navigator?.onLine ?? true;
+export const RENDERER_MAX_AUTOMATIC_CONNECTION_ATTEMPTS = 3;
 
 const supervisor = createConnectionSupervisor<
 	RendererConnectionOptions,
@@ -146,6 +147,7 @@ const supervisor = createConnectionSupervisor<
 		(previous.kind === "websocket" &&
 			next.kind === "websocket" &&
 			previous.wsUrl !== next.wsUrl),
+	maxAutomaticAttempts: RENDERER_MAX_AUTOMATIC_CONNECTION_ATTEMPTS,
 });
 
 const rendererEntries = new Map<
@@ -186,6 +188,37 @@ export const getRpcClient = (environmentId?: unknown): Promise<MemoizeClient> =>
 			typeof environmentId === "string" ? environmentId : activeEnvironmentId,
 		).getClient(),
 	);
+
+/**
+ * Acquire a client and prove its socket is responsive before sending a
+ * non-idempotent command. Dialogs can remain open across machine restarts or
+ * multi-minute browser authorization flows.
+ */
+export const getVerifiedRpcClient = async (
+	environmentId = activeEnvironmentId,
+): Promise<MemoizeClient> => {
+	let client = await getRpcClient(environmentId);
+	try {
+		await Effect.runPromise(
+			client["ping.ping"]({}).pipe(Effect.timeout("5 seconds")),
+		);
+	} catch (cause) {
+		reportRendererRpcFailure(cause, environmentId);
+		retryRendererRpcConnection(environmentId);
+		client = await getRpcClient(environmentId);
+		await Effect.runPromise(
+			client["ping.ping"]({}).pipe(Effect.timeout("5 seconds")),
+		);
+	}
+	return client;
+};
+
+/**
+ * Account and machine lifecycle operations always belong to the desktop that
+ * owns this renderer, even while a project on another computer is active.
+ */
+export const getControlPlaneRpcClient = (): Promise<MemoizeClient> =>
+	getRpcClient(localEnvironmentId);
 
 export const registerWebSocketEnvironment = (
 	environmentId: string,

@@ -83,6 +83,7 @@ type EnvironmentCatalogState = {
 	readonly initialized: boolean;
 	readonly hiddenRelayEnvironmentIds: ReadonlyArray<string>;
 	initialize: () => Promise<void>;
+	syncAccountEnvironments: () => Promise<void>;
 	add: (target: SshEnvironmentTarget, label?: string) => Promise<void>;
 	/** Resolves with the connected computer's label once the link settles. */
 	addTailnet: (pairingLink: string, label?: string) => Promise<string>;
@@ -257,7 +258,6 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 	(set, get) => {
 		const recoverySubscriptions = new Map<string, () => void>();
 		const relayRecords = new Map<string, RelayEnvironmentRecord>();
-		const recovering = new Set<string>();
 		const connectionAttempts = new Map<string, Promise<void>>();
 		const fallbackPollers = new Map<string, number>();
 		const workspaceChangeFibers = new Map<
@@ -416,7 +416,6 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 			readonly catalogKey: string;
 			readonly environmentId: string;
 			readonly patch: Partial<EnvironmentCatalogEntry>;
-			readonly reconnect: () => Promise<void>;
 		}): Promise<void> => {
 			const catalog = await hydrateEntry(
 				input.environmentId,
@@ -455,17 +454,6 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 								error:
 									snapshot.error === null ? null : formatError(snapshot.error),
 							});
-						}
-						if (
-							(snapshot.status === "reconnecting" ||
-								snapshot.status === "error" ||
-								snapshot.status === "blockedAuth") &&
-							!recovering.has(input.catalogKey)
-						) {
-							recovering.add(input.catalogKey);
-							void input
-								.reconnect()
-								.finally(() => recovering.delete(input.catalogKey));
 						}
 					}, input.environmentId),
 				);
@@ -509,7 +497,6 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 							target: connection.profile.target,
 							descriptor: connection.descriptor,
 						},
-						reconnect: () => connectProfile(profileId),
 					});
 				} catch (cause) {
 					failConnection(catalogKey, cause, () => connectProfile(profileId));
@@ -546,7 +533,6 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 						label: confirmedProfile.label,
 						descriptor,
 					},
-					reconnect: () => connectTailnetProfile(profile.profileId),
 				});
 			} catch (cause) {
 				await removeRendererEnvironment(profile.environmentId).catch(
@@ -591,7 +577,7 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 				try {
 					const localClient = await getRpcClient(localEnvironmentId);
 					const grant = await Effect.runPromise(
-						localClient["relay.connectEnvironment"]({
+						localClient["environments.connect"]({
 							environmentId: environment.environmentId,
 						}),
 					);
@@ -601,7 +587,7 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 						async () =>
 							relayGrantUrl(
 								await Effect.runPromise(
-									localClient["relay.connectEnvironment"]({
+									localClient["environments.connect"]({
 										environmentId: environment.environmentId,
 									}),
 								),
@@ -616,7 +602,6 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 								endpoint: grant.endpoint,
 							},
 						},
-						reconnect: () => connectRelay(environment, localEnvironmentId),
 					});
 				} catch (cause) {
 					failConnection(catalogKey, cause, () =>
@@ -643,7 +628,7 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 					setActiveEnvironment(descriptor.environmentId);
 					const localCatalog = await hydrateEntry(descriptor.environmentId);
 					const relayEnvironments = await Effect.runPromise(
-						localClient["relay.environments"](),
+						localClient["environments.list"](),
 					).catch(() => ({ environments: [] as const }));
 					const profileEnvironmentIds = new Set(
 						[...profiles, ...tailnetProfiles].map(
@@ -702,6 +687,60 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 					]);
 					set({ initialized: true });
 				});
+			},
+			syncAccountEnvironments: async () => {
+				const local = get().entries.find(
+					(entry) => entry.connectionKind === "local",
+				);
+				if (local === undefined) {
+					await get().initialize();
+					return;
+				}
+
+				const localClient = await getRpcClient(local.environmentId);
+				const result = await Effect.runPromise(
+					localClient["environments.list"](),
+				);
+				const profileEnvironmentIds = new Set(
+					get()
+						.entries.filter(
+							(entry) =>
+								entry.connectionKind === "ssh" ||
+								entry.connectionKind === "tailnet",
+						)
+						.map((entry) => entry.environmentId),
+				);
+				const hiddenRelayIds = new Set(get().hiddenRelayEnvironmentIds);
+				const accountEnvironments = result.environments.filter(
+					(environment) =>
+						environment.environmentId !== local.environmentId &&
+						!profileEnvironmentIds.has(environment.environmentId),
+				);
+				for (const environment of accountEnvironments) {
+					relayRecords.set(environment.environmentId, environment);
+				}
+
+				const knownEnvironmentIds = new Set(
+					get().entries.map((entry) => entry.environmentId),
+				);
+				const added = accountEnvironments.filter(
+					(environment) =>
+						!hiddenRelayIds.has(environment.environmentId) &&
+						!knownEnvironmentIds.has(environment.environmentId),
+				);
+				if (added.length === 0) return;
+
+				set((state) => ({
+					entries: orderEnvironmentCatalog([
+						...state.entries,
+						...added.map(relayEntry),
+					]),
+				}));
+				await Promise.allSettled(
+					added.map((environment) =>
+						connectRelay(environment, local.environmentId),
+					),
+				);
 			},
 			add: async (target, label) => {
 				const bridge = window.zuse?.ssh;
