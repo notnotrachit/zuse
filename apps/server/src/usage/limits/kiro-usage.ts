@@ -1,6 +1,7 @@
 import {
 	kiroControlPlaneRequest,
 	readKiroAuthContext,
+	resolveKiroCliPath,
 } from "@zuse/agents/drivers/kiro-auth";
 import type { ProviderUsageLimits, UsageLimitWindow } from "@zuse/contracts";
 
@@ -101,8 +102,17 @@ export const mapKiroUsageLimits = (
 };
 
 export const fetchKiroUsage = async (): Promise<ProviderUsageLimits> => {
-	const auth = readKiroAuthContext({ refreshIfExpired: true });
+	const kiroPath = resolveKiroCliPath();
+	// Always allow a CLI refresh — short-lived OIDC tokens expire while the
+	// desktop still shows "authenticated" from the last availability probe.
+	const auth = readKiroAuthContext({
+		refreshIfExpired: true,
+		kiroPath,
+	});
 	if (auth === null) {
+		console.warn(
+			`[kiro-usage] no auth context (cli=${kiroPath}). Is kiro-cli data.sqlite3 readable?`,
+		);
 		return unavailable("kiro", "no-credentials");
 	}
 	if (
@@ -110,22 +120,63 @@ export const fetchKiroUsage = async (): Promise<ProviderUsageLimits> => {
 		!Number.isNaN(Date.parse(auth.token.expiresAt)) &&
 		Date.parse(auth.token.expiresAt) <= Date.now()
 	) {
+		console.warn(
+			`[kiro-usage] token expired at ${auth.token.expiresAt} after refresh`,
+		);
 		return unavailable("kiro", "expired");
 	}
+
+	const body = {
+		origin: "KIRO_CLI" as const,
+		...(auth.profileArn === null ? {} : { profileArn: auth.profileArn }),
+	};
 
 	try {
 		const response = await kiroControlPlaneRequest<GetUsageLimitsResponse>(
 			auth,
 			"GetUsageLimits",
-			{
-				origin: "KIRO_CLI",
-				...(auth.profileArn === null ? {} : { profileArn: auth.profileArn }),
-			},
+			body,
+			15_000,
 		);
 		return mapKiroUsageLimits(response);
 	} catch (cause) {
 		const message = cause instanceof Error ? cause.message : String(cause);
-		if (/invalid token|unauthori[sz]ed|access denied/i.test(message)) {
+		console.warn(`[kiro-usage] GetUsageLimits failed: ${message}`);
+		if (/invalid token|unauthori[sz]ed|access denied|expired/i.test(message)) {
+			// One more refresh + retry — common when the token expired mid-request.
+			const retried = readKiroAuthContext({
+				refreshIfExpired: true,
+				kiroPath,
+			});
+			if (
+				retried !== null &&
+				(retried.token.expiresAt === null ||
+					Date.parse(retried.token.expiresAt) > Date.now())
+			) {
+				try {
+					const response =
+						await kiroControlPlaneRequest<GetUsageLimitsResponse>(
+							retried,
+							"GetUsageLimits",
+							{
+								origin: "KIRO_CLI",
+								...(retried.profileArn === null
+									? {}
+									: { profileArn: retried.profileArn }),
+							},
+							15_000,
+						);
+					return mapKiroUsageLimits(response);
+				} catch (retryCause) {
+					console.warn(
+						`[kiro-usage] retry failed: ${
+							retryCause instanceof Error
+								? retryCause.message
+								: String(retryCause)
+						}`,
+					);
+				}
+			}
 			return unavailable("kiro", "expired");
 		}
 		return unavailable("kiro", "error");

@@ -551,7 +551,7 @@ function SidebarAccount() {
 	const { isSignedIn, user, name, signingIn, signIn, signOut } = useAuth();
 	const setView = useUiStore((s) => s.setView);
 	const setSettingsSection = useUiStore((s) => s.setSettingsSection);
-	const loadUsageLimits = useUsageLimitsStore((s) => s.load);
+	const refreshUsageLimits = useUsageLimitsStore((s) => s.refresh);
 
 	// Always render an affordance. Until auth state resolves (or whenever signed
 	// out) we show "Sign in" — a brief flash to the signed-in row on cold load
@@ -599,8 +599,14 @@ function SidebarAccount() {
 				render={
 					<button
 						type="button"
-						onPointerEnter={() => void loadUsageLimits()}
-						onFocus={() => void loadUsageLimits()}
+						onPointerEnter={() => {
+							// Force-refresh so Kiro OIDC misses cannot stick in the
+							// soft 60s cache (token is short-lived).
+							void refreshUsageLimits(true);
+						}}
+						onFocus={() => {
+							void refreshUsageLimits(true);
+						}}
 						className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-[11px] text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
 					>
 						{isSignedIn ? (
