@@ -82,6 +82,20 @@ const bridge = {
 				ipcRenderer.off("pairing:nearby-request", wrapped);
 			};
 		},
+		onPairingLink: (handler: (link: string) => void) => {
+			const wrapped = (_event: IpcRendererEvent, link: unknown) => {
+				if (typeof link === "string") handler(link);
+			};
+			ipcRenderer.on("pairing:link", wrapped);
+			return () => {
+				ipcRenderer.off("pairing:link", wrapped);
+			};
+		},
+		// Main buffers connect/pair deep links until this fires, so links that
+		// arrive before the renderer mounts (cold start) are not lost.
+		subscribePairingLinks: () => {
+			ipcRenderer.send("pairing:link-subscribe");
+		},
 	},
 	browser: {
 		/**
@@ -328,12 +342,67 @@ const bridge = {
 			ipcRenderer.invoke("network:setAccessEnabled", enabled) as Promise<
 				import("@zuse/contracts").NetworkAccessState
 			>,
+		getTailnetShareState: () =>
+			ipcRenderer.invoke("network:getTailnetShareState") as Promise<
+				import("@zuse/contracts").TailnetShareState
+			>,
+		setTailnetShareEnabled: (enabled: boolean) =>
+			ipcRenderer.invoke("network:setTailnetShareEnabled", enabled) as Promise<
+				import("@zuse/contracts").TailnetShareState
+			>,
 	},
 	ssh: {
-		listHosts: () =>
-			ipcRenderer.invoke("ssh:listHosts") as Promise<ReadonlyArray<string>>,
-		ensureEnvironment: (host: string) =>
-			ipcRenderer.invoke("ssh:ensureEnvironment", host) as Promise<unknown>,
+		discoverHosts: () =>
+			ipcRenderer.invoke("ssh:discoverHosts") as Promise<
+				ReadonlyArray<import("@zuse/contracts").DiscoveredSshHost>
+			>,
+		listProfiles: () =>
+			ipcRenderer.invoke("ssh:listProfiles") as Promise<
+				ReadonlyArray<import("@zuse/contracts").RemoteEnvironmentProfile>
+			>,
+		ensureEnvironment: (
+			input: import("@zuse/contracts").EnsureSshEnvironmentInput,
+		) =>
+			ipcRenderer.invoke("ssh:ensureEnvironment", input) as Promise<
+				import("@zuse/contracts").SshEnvironmentConnection
+			>,
+		disconnectEnvironment: (profileId: string) =>
+			ipcRenderer.invoke(
+				"ssh:disconnectEnvironment",
+				profileId,
+			) as Promise<void>,
+		removeProfile: (profileId: string) =>
+			ipcRenderer.invoke("ssh:removeProfile", profileId) as Promise<void>,
+		updateProfileLabel: (profileId: string, label: string) =>
+			ipcRenderer.invoke("ssh:updateProfileLabel", profileId, label) as Promise<
+				import("@zuse/contracts").RemoteEnvironmentProfile
+			>,
+	},
+	tailnet: {
+		listProfiles: () =>
+			ipcRenderer.invoke("tailnet:listProfiles") as Promise<
+				ReadonlyArray<import("@zuse/contracts").TailnetEnvironmentProfile>
+			>,
+		ensureEnvironment: (
+			input: import("@zuse/contracts").EnsureTailnetEnvironmentInput,
+		) =>
+			ipcRenderer.invoke("tailnet:ensureEnvironment", input) as Promise<
+				import("@zuse/contracts").TailnetEnvironmentConnection
+			>,
+		confirmEnvironment: (profileId: string, environmentId: string) =>
+			ipcRenderer.invoke(
+				"tailnet:confirmEnvironment",
+				profileId,
+				environmentId,
+			) as Promise<import("@zuse/contracts").TailnetEnvironmentProfile>,
+		removeProfile: (profileId: string) =>
+			ipcRenderer.invoke("tailnet:removeProfile", profileId) as Promise<void>,
+		updateProfileLabel: (profileId: string, label: string) =>
+			ipcRenderer.invoke(
+				"tailnet:updateProfileLabel",
+				profileId,
+				label,
+			) as Promise<import("@zuse/contracts").TailnetEnvironmentProfile>,
 	},
 	updates: {
 		onStatus: (handler: (status: UpdateStatus) => void) => {

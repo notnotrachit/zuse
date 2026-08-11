@@ -1,4 +1,7 @@
 import type {
+	DiscoveredSshHost,
+	EnsureSshEnvironmentInput,
+	EnsureTailnetEnvironmentInput,
 	HostDescriptor,
 	LagSample,
 	NearbyPairingRequest,
@@ -9,6 +12,11 @@ import type {
 	PowerMonitorState,
 	PowerRecordingDurationMinutes,
 	PowerWorkloadState,
+	RemoteEnvironmentProfile,
+	SshEnvironmentConnection,
+	TailnetEnvironmentConnection,
+	TailnetEnvironmentProfile,
+	TailnetShareState,
 	UpdateStatus,
 } from "@zuse/contracts";
 
@@ -35,6 +43,17 @@ export interface PairingBridge {
 	readonly onNearbyRequest: (
 		handler: (request: NearbyPairingRequest) => void,
 	) => () => void;
+	/**
+	 * Connect/pair deep links (`zuse:///connect/pair?...`) forwarded raw from
+	 * main. Optional — absent on preload builds that predate deep-link pairing.
+	 */
+	readonly onPairingLink?: (handler: (link: string) => void) => () => void;
+	/**
+	 * Tell main the renderer is ready for pairing links. Main buffers links
+	 * that arrive earlier (cold start) and flushes them, in order, on this
+	 * signal. Call after `onPairingLink` is registered.
+	 */
+	readonly subscribePairingLinks?: () => void;
 }
 
 export interface AppBridge {
@@ -60,6 +79,10 @@ export interface AppBridge {
 export interface NetworkBridge {
 	readonly getAccessState: () => Promise<NetworkAccessState>;
 	readonly setAccessEnabled: (enabled: boolean) => Promise<NetworkAccessState>;
+	readonly getTailnetShareState: () => Promise<TailnetShareState>;
+	readonly setTailnetShareEnabled: (
+		enabled: boolean,
+	) => Promise<TailnetShareState>;
 }
 
 export interface DiagnosticLogEntry {
@@ -306,8 +329,35 @@ export interface BrowserBridge {
 }
 
 export interface SshBridge {
-	readonly listHosts: () => Promise<ReadonlyArray<string>>;
-	readonly ensureEnvironment: (host: string) => Promise<unknown>;
+	readonly discoverHosts: () => Promise<ReadonlyArray<DiscoveredSshHost>>;
+	readonly listProfiles: () => Promise<ReadonlyArray<RemoteEnvironmentProfile>>;
+	readonly ensureEnvironment: (
+		input: EnsureSshEnvironmentInput,
+	) => Promise<SshEnvironmentConnection>;
+	readonly disconnectEnvironment: (profileId: string) => Promise<void>;
+	readonly removeProfile: (profileId: string) => Promise<void>;
+	readonly updateProfileLabel: (
+		profileId: string,
+		label: string,
+	) => Promise<RemoteEnvironmentProfile>;
+}
+
+export interface TailnetBridge {
+	readonly listProfiles: () => Promise<
+		ReadonlyArray<TailnetEnvironmentProfile>
+	>;
+	readonly ensureEnvironment: (
+		input: EnsureTailnetEnvironmentInput,
+	) => Promise<TailnetEnvironmentConnection>;
+	readonly confirmEnvironment: (
+		profileId: string,
+		environmentId: string,
+	) => Promise<TailnetEnvironmentProfile>;
+	readonly removeProfile: (profileId: string) => Promise<void>;
+	readonly updateProfileLabel: (
+		profileId: string,
+		label: string,
+	) => Promise<TailnetEnvironmentProfile>;
 }
 
 export type NotchTrayItemState =
@@ -366,6 +416,7 @@ export interface ZuseBridge {
 	readonly browser?: BrowserBridge;
 	readonly notch?: NotchBridge;
 	readonly ssh?: SshBridge;
+	readonly tailnet?: TailnetBridge;
 }
 
 declare global {

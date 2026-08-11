@@ -1,6 +1,6 @@
 {
 	"name": "@zusehq/server",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"private": false,
 	"type": "module",
 	"engines": {
@@ -40,6 +40,7 @@
 		"serve": "tsx src/bin.ts",
 		"build:bundle": "vp pack && tsc -p tsconfig.build.json",
 		"build": "bun run --filter renderer build && vp pack && tsc -p tsconfig.build.json && node scripts/copy-client.mjs",
+		"build:cloud-runtime": "node scripts/build-linux-runtime.mjs",
 		"check-types": "tsc --noEmit",
 		"test": "vp test run test/unit test/integration",
 		"test:unit": "vp test run test/unit",
@@ -49,6 +50,7 @@
 	"dependencies": {
 		"keytar": "^7.9.0",
 		"node-pty": "^1.1.0",
+		"strip-ansi": "^7.2.0",
 		"tree-sitter": "^0.21.1",
 		"tree-sitter-javascript": "^0.23.0",
 		"tree-sitter-json": "^0.24.0",
@@ -71,6 +73,7 @@
 		"@zuse/index": "*",
 		"@zuse/pokemon-data": "*",
 		"@zuse/sqlite": "*",
+		"@zuse/tailnet": "*",
 		"@zuse/utils": "*",
 		"effect": "catalog:",
 		"fuzzysort": "catalog:",

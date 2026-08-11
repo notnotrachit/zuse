@@ -16,6 +16,7 @@ import {
 	arch as osArch,
 	release as osRelease,
 	totalmem,
+	userInfo,
 } from "node:os";
 import * as Path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
@@ -25,6 +26,8 @@ import {
 	AGENTS_RUNNING_COUNT_CHANNEL,
 	AuthFlowError,
 	type DeepEnergySummary,
+	EnsureSshEnvironmentInput,
+	EnsureTailnetEnvironmentInput,
 	type HostPlatform,
 	LagSample as LagSampleSchema,
 	type PerformanceCapabilities,
@@ -49,8 +52,23 @@ import {
 	type PowerSnapshot,
 	type PowerThermalState,
 	PowerWorkloadState,
+	TailnetShareState,
 } from "@zuse/contracts";
 import {
+	authorizeTailnetOperator,
+	inspectTailnetShare,
+	isTailnetOperatorPermissionError,
+	makeTailnetCommandRunner,
+	probeZuseLoopback,
+	readServeOwnershipMarker,
+	repairTailnetShare,
+	runTailnetCommand,
+	setTailnetShareEnabled,
+	type TailnetDiagnosticEvent,
+	type TailnetShareOptions,
+} from "@zuse/tailnet";
+import {
+	CredentialsServiceLive,
 	makeMainLayer,
 	readBrowserCredentialFromVault,
 	wsServerProtocolLayer,
@@ -74,6 +92,7 @@ import {
 } from "electron";
 import fixPath from "fix-path";
 import selfsigned from "selfsigned";
+import { ZUSE_APP_VERSION } from "./app-version.ts";
 import {
 	createTitleBarOverlay,
 	createWindowTitleBarOptions,
@@ -117,6 +136,7 @@ import {
 	type DeepEnergyProfileHandle,
 	startDeepEnergyProfile,
 } from "./deep-energy-profiler.ts";
+import { createBufferedChannel, isPairingDeepLink } from "./deep-link.ts";
 import { listLocalServers } from "./host/local-port-inspector.ts";
 import {
 	listPortableOpenTargets,
@@ -154,11 +174,8 @@ import {
 	sanitizeRemoteConnectionLog,
 	sanitizeRemoteDiagnosticValue,
 } from "./remote-diagnostic-sanitizer.ts";
-import {
-	ensureSshEnvironment,
-	listSshHosts,
-	type SshEnvironmentHandle,
-} from "./ssh/environment-service.ts";
+import { SshEnvironmentManager } from "./ssh/environment-service.ts";
+import { TailnetEnvironmentManager } from "./tailnet/environment-service.ts";
 import {
 	getIsInstallingUpdate,
 	getLastStatus,
@@ -243,6 +260,27 @@ function persistOfflineDiagnostic(
 		// Fatal diagnostics must never mask the original exception.
 	}
 }
+
+function persistTailnetDiagnostic(event: TailnetDiagnosticEvent): void {
+	try {
+		const logPath = Path.join(
+			app.getPath("userData"),
+			"logs",
+			"tailscale.ndjson",
+		);
+		fsSync.mkdirSync(Path.dirname(logPath), { recursive: true });
+		fsSync.appendFileSync(
+			logPath,
+			`${JSON.stringify({ createdAt: new Date().toISOString(), ...event })}\n`,
+			{ encoding: "utf8", mode: 0o600 },
+		);
+		fsSync.chmodSync(logPath, 0o600);
+	} catch {
+		// Connectivity diagnostics must never interfere with the action itself.
+	}
+}
+
+const tailnetCommandRunner = makeTailnetCommandRunner(persistTailnetDiagnostic);
 
 function recordMainFailure(
 	source: string,
@@ -365,6 +403,24 @@ const AUTH_DEEP_LINK_SCHEMES = ["zuse://", "memoize://"] as const;
 
 const isAuthDeepLink = (arg: string): boolean =>
 	AUTH_DEEP_LINK_SCHEMES.some((scheme) => arg.startsWith(scheme));
+
+// Connect/pair deep links (`zuse:///connect/pair?...#token=...`) bypass the
+// auth flow entirely: they are routed to the renderer's Add-computer dialog.
+// A link can arrive before the renderer mounts its handler (cold start), so
+// publish into a buffered channel and flush once the renderer subscribes.
+// Raw strings pass through untouched — the `#token=` fragment must survive.
+const pairingLinkChannel = createBufferedChannel<string>();
+
+ipcMain.on("pairing:link-subscribe", () => {
+	pairingLinkChannel.subscribe((url) => {
+		mainWindow?.webContents.send("pairing:link", url);
+	});
+});
+
+const handlePairingDeepLink = (url: string): void => {
+	pairingLinkChannel.publish(url);
+	focusMainWindow();
+};
 
 let deliverAuthUrl: ((url: string) => void) | null = null;
 let pendingAuthUrls: string[] = [];
@@ -516,6 +572,10 @@ const desktopRunId = `desktop_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 // macOS: deep links arrive here (also on cold launch, before whenReady).
 app.on("open-url", (event, url) => {
 	event.preventDefault();
+	if (isPairingDeepLink(url)) {
+		handlePairingDeepLink(url);
+		return;
+	}
 	handleAuthCallback(url);
 });
 
@@ -534,6 +594,8 @@ ipcMain.on("window:setAppearanceMode", (_event, value: unknown) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
+let sshEnvironmentManager: SshEnvironmentManager | null = null;
+let tailnetEnvironmentManager: TailnetEnvironmentManager | null = null;
 let runtimeFiber: Fiber.Fiber<void, never> | null = null;
 let notchTray: NotchTrayController | null = null;
 let localConnectivityHelper: ChildProcessWithoutNullStreams | null = null;
@@ -859,7 +921,7 @@ const sanitizePowerInteractions = (
 };
 
 const powerEnvironment = () => ({
-	appVersion: app.getVersion(),
+	appVersion: ZUSE_APP_VERSION,
 	platform: process.platform,
 	arch: osArch(),
 	osRelease: osRelease(),
@@ -1112,7 +1174,11 @@ const rendererDistDir = (): string =>
 // the primary instance. Pull any auth deep-link arg out of its argv and focus
 // the existing window.
 app.on("second-instance", (_event, argv) => {
-	const url = argv.find(isAuthDeepLink);
+	const pairingUrl = argv.find(isPairingDeepLink);
+	if (pairingUrl !== undefined) pairingLinkChannel.publish(pairingUrl);
+	const url = argv.find(
+		(arg) => isAuthDeepLink(arg) && !isPairingDeepLink(arg),
+	);
 	if (url !== undefined) handleAuthCallback(url);
 	focusMainWindow();
 });
@@ -1664,6 +1730,32 @@ async function createMainWindow() {
 		configuredPort: process.env.ZUSE_DESKTOP_WS_PORT,
 	});
 	const userData = app.getPath("userData");
+	sshEnvironmentManager ??= new SshEnvironmentManager(userData);
+	await sshEnvironmentManager.initialize();
+	tailnetEnvironmentManager ??= new TailnetEnvironmentManager(userData);
+	await tailnetEnvironmentManager.initialize();
+	const tailnetShareOptions: TailnetShareOptions = {
+		ownershipDir: userData,
+		probe: probeZuseLoopback,
+	};
+	// The relay port can drift between launches (fallback or ephemeral bind).
+	// When a persisted marker shows Zuse owns the Tailscale Serve route on the
+	// old port, repoint it in the background so sharing survives the drift.
+	void readServeOwnershipMarker(userData)
+		.then(async (markerPort) => {
+			if (markerPort === null || markerPort === relayPort.port) return;
+			const repaired = await repairTailnetShare(
+				relayPort.port,
+				tailnetShareOptions,
+				tailnetCommandRunner,
+			);
+			if (repaired.enabled && repaired.managedBy === "this-app") {
+				console.log(
+					`desktop.tailnet.serve_repaired ${markerPort} -> ${relayPort.port}`,
+				);
+			}
+		})
+		.catch(() => undefined);
 	const networkAccessEnabled = await readNetworkAccessPreference(userData);
 	const systemHostname = hostname();
 	const stableLocalHost =
@@ -1755,7 +1847,6 @@ async function createMainWindow() {
 		mainWindow.webContents.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 
-	const sshEnvironmentHandles = new Map<string, SshEnvironmentHandle>();
 	mainWindow.on("enter-full-screen", sendFullScreenState);
 	mainWindow.on("leave-full-screen", sendFullScreenState);
 	mainWindow.webContents.on("did-finish-load", sendFullScreenState);
@@ -1902,6 +1993,61 @@ async function createMainWindow() {
 		endpointUrl: networkAccess.endpointUrl,
 		port: networkAccess.port,
 	}));
+	ipcMain.handle("network:getTailnetShareState", () =>
+		inspectTailnetShare(
+			relayPort.port,
+			tailnetCommandRunner,
+			tailnetShareOptions,
+		),
+	);
+	ipcMain.handle(
+		"network:setTailnetShareEnabled",
+		async (_event, enabled: unknown) => {
+			if (typeof enabled !== "boolean") {
+				throw new TypeError("Tailnet sharing must be enabled or disabled.");
+			}
+			const next = await setTailnetShareEnabled(
+				{
+					enabled,
+					port: relayPort.port,
+					...tailnetShareOptions,
+				},
+				tailnetCommandRunner,
+			);
+			if (
+				process.platform !== "linux" ||
+				!enabled ||
+				next.detail === null ||
+				!isTailnetOperatorPermissionError(next.detail)
+			) {
+				return next;
+			}
+			const authorization = await authorizeTailnetOperator(
+				{ username: userInfo().username },
+				(args, timeoutMs) =>
+					runTailnetCommand(
+						args,
+						timeoutMs,
+						"/usr/bin/pkexec",
+						persistTailnetDiagnostic,
+					),
+			);
+			if (authorization.authorized) {
+				return setTailnetShareEnabled(
+					{
+						enabled: true,
+						port: relayPort.port,
+						...tailnetShareOptions,
+					},
+					tailnetCommandRunner,
+				);
+			}
+			return TailnetShareState.make({
+				...next,
+				detail: `Linux administrator permission was not granted. Run ${authorization.manualCommand} once, then try again.`,
+			});
+		},
+	);
 	ipcMain.handle(
 		"network:setAccessEnabled",
 		async (_event, enabled: unknown) => {
@@ -1930,19 +2076,94 @@ async function createMainWindow() {
 		},
 	);
 
-	ipcMain.handle("ssh:listHosts", async () => listSshHosts());
-
-	ipcMain.handle("ssh:ensureEnvironment", async (_event, rawHost: unknown) => {
-		if (typeof rawHost !== "string" || rawHost.trim().length === 0) {
-			return null;
+	ipcMain.handle("ssh:discoverHosts", async () =>
+		sshEnvironmentManager?.discoverHosts(),
+	);
+	ipcMain.handle("ssh:listProfiles", async () =>
+		sshEnvironmentManager?.listProfiles(),
+	);
+	ipcMain.handle("ssh:ensureEnvironment", async (_event, input: unknown) => {
+		if (typeof input !== "object" || input === null) {
+			throw new Error("Invalid SSH environment request.");
 		}
-		const host = rawHost.trim();
-		const existing = sshEnvironmentHandles.get(host);
-		if (existing !== undefined) return existing.descriptor;
-		const handle = await ensureSshEnvironment(host);
-		sshEnvironmentHandles.set(host, handle);
-		return handle.descriptor;
+		if (sshEnvironmentManager === null) {
+			throw new Error("SSH environment service is unavailable.");
+		}
+		return sshEnvironmentManager.ensure(
+			Schema.decodeUnknownSync(EnsureSshEnvironmentInput)(input),
+		);
 	});
+	ipcMain.handle(
+		"ssh:disconnectEnvironment",
+		async (_event, profileId: unknown) => {
+			if (typeof profileId !== "string") return;
+			await sshEnvironmentManager?.disconnect(profileId);
+		},
+	);
+	ipcMain.handle("ssh:removeProfile", async (_event, profileId: unknown) => {
+		if (typeof profileId !== "string") return;
+		await sshEnvironmentManager?.remove(profileId);
+	});
+	ipcMain.handle(
+		"ssh:updateProfileLabel",
+		async (_event, profileId: unknown, label: unknown) => {
+			if (typeof profileId !== "string" || typeof label !== "string") {
+				throw new TypeError("Invalid SSH profile label request.");
+			}
+			if (sshEnvironmentManager === null) {
+				throw new Error("SSH environment service is unavailable.");
+			}
+			return sshEnvironmentManager.updateLabel(profileId, label);
+		},
+	);
+	ipcMain.handle("tailnet:listProfiles", async () =>
+		tailnetEnvironmentManager?.listProfiles(),
+	);
+	ipcMain.handle(
+		"tailnet:ensureEnvironment",
+		async (_event, input: unknown) => {
+			if (tailnetEnvironmentManager === null) {
+				throw new Error("Tailnet environment service is unavailable.");
+			}
+			return tailnetEnvironmentManager.ensure(
+				Schema.decodeUnknownSync(EnsureTailnetEnvironmentInput)(input),
+			);
+		},
+	);
+	ipcMain.handle(
+		"tailnet:confirmEnvironment",
+		async (_event, profileId: unknown, environmentId: unknown) => {
+			if (typeof profileId !== "string" || typeof environmentId !== "string") {
+				throw new TypeError("Invalid Tailnet environment confirmation.");
+			}
+			if (tailnetEnvironmentManager === null) {
+				throw new Error("Tailnet environment service is unavailable.");
+			}
+			return tailnetEnvironmentManager.confirmEnvironment(
+				profileId,
+				environmentId,
+			);
+		},
+	);
+	ipcMain.handle(
+		"tailnet:removeProfile",
+		async (_event, profileId: unknown) => {
+			if (typeof profileId !== "string") return;
+			await tailnetEnvironmentManager?.remove(profileId);
+		},
+	);
+	ipcMain.handle(
+		"tailnet:updateProfileLabel",
+		async (_event, profileId: unknown, label: unknown) => {
+			if (typeof profileId !== "string" || typeof label !== "string") {
+				throw new TypeError("Invalid Tailnet profile label request.");
+			}
+			if (tailnetEnvironmentManager === null) {
+				throw new Error("Tailnet environment service is unavailable.");
+			}
+			return tailnetEnvironmentManager.updateLabel(profileId, label);
+		},
+	);
 
 	// ---------------------------------------------------------------------------
 	// Agent browser CDP bridge
@@ -2732,7 +2953,7 @@ async function createMainWindow() {
 			relayWsPort,
 		});
 	}
-	process.env.ZUSE_APP_VERSION = app.getVersion();
+	process.env.ZUSE_APP_VERSION = ZUSE_APP_VERSION;
 
 	runtimeFiber = Effect.runFork(
 		Layer.launch(
@@ -2746,6 +2967,7 @@ async function createMainWindow() {
 					...(nearbyWsProtocol === null ? [] : [nearbyWsProtocol]),
 				],
 				authShell,
+				credentialsLayer: CredentialsServiceLive,
 				lanAuth: {
 					policy: "protected",
 					advertisedHost: networkAccess.advertisedHost,
@@ -3265,7 +3487,13 @@ void app.whenReady().then(async () => {
 	await startAuthLoopback();
 
 	// Win/Linux cold launch from a deep link: the URL is an argv entry.
-	const initialDeepLink = process.argv.find(isAuthDeepLink);
+	const initialPairingLink = process.argv.find(isPairingDeepLink);
+	if (initialPairingLink !== undefined) {
+		pairingLinkChannel.publish(initialPairingLink);
+	}
+	const initialDeepLink = process.argv.find(
+		(arg) => isAuthDeepLink(arg) && !isPairingDeepLink(arg),
+	);
 	if (initialDeepLink !== undefined) handleAuthCallback(initialDeepLink);
 
 	registerZuseProtocol();
@@ -3281,8 +3509,8 @@ void app.whenReady().then(async () => {
 	// to call once on startup.
 	app.setAboutPanelOptions({
 		applicationName: "Zuse (Beta)",
-		applicationVersion: app.getVersion(),
-		version: app.getVersion(),
+		applicationVersion: ZUSE_APP_VERSION,
+		version: ZUSE_APP_VERSION,
 		copyright: "© Swaraj Bachu",
 		website: "https://github.com/swarajbachu/zuse",
 	});
@@ -3344,6 +3572,8 @@ let runningAgentCount = 0;
 // re-entrant `before-quit` — Electron fires it again after `app.quit()` — does
 // not pop the dialog a second time.
 let quitConfirmed = false;
+let sshQuitCleanupComplete = false;
+let sshQuitCleanupInProgress = false;
 // Armed by the dialog's "Quit when idle" choice: keep running, then quit
 // automatically the moment the last agent finishes.
 let quitWhenIdle = false;
@@ -3360,12 +3590,34 @@ function pluralAgents(count: number): string {
 	return count === 1 ? "1 agent is running" : `${count} agents are running`;
 }
 
+const finishQuitAfterSshCleanup = (event: {
+	preventDefault: () => void;
+}): void => {
+	if (sshQuitCleanupComplete) return;
+	event.preventDefault();
+	if (sshQuitCleanupInProgress) return;
+	sshQuitCleanupInProgress = true;
+	const manager = sshEnvironmentManager;
+	void (manager?.close() ?? Promise.resolve()).finally(() => {
+		if (sshEnvironmentManager === manager) sshEnvironmentManager = null;
+		sshQuitCleanupComplete = true;
+		quitConfirmed = true;
+		app.quit();
+	});
+};
+
 app.on("before-quit", (event) => {
 	// An update-driven quit (user picked "Restart now") or an already-confirmed
 	// quit passes straight through — the user has opted in, and re-prompting
 	// would strand the relaunch.
-	if (quitConfirmed || getIsInstallingUpdate()) return;
-	if (runningAgentCount <= 0) return;
+	if (quitConfirmed || getIsInstallingUpdate()) {
+		finishQuitAfterSshCleanup(event);
+		return;
+	}
+	if (runningAgentCount <= 0) {
+		finishQuitAfterSshCleanup(event);
+		return;
+	}
 
 	event.preventDefault();
 
@@ -3382,7 +3634,7 @@ app.on("before-quit", (event) => {
 
 	if (choice === 1) {
 		quitConfirmed = true;
-		app.quit();
+		finishQuitAfterSshCleanup(event);
 	} else if (choice === 2) {
 		quitWhenIdle = true;
 		// Stay open; the running-count handler quits once the count hits zero.

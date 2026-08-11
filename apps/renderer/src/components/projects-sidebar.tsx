@@ -13,6 +13,7 @@ import {
 	Login03Icon,
 	Logout01Icon,
 	PencilIcon,
+	ServerStack01Icon,
 	Settings01Icon,
 	SquareLock01Icon,
 	TaskDone01Icon,
@@ -23,7 +24,6 @@ import type {
 	ChatId,
 	FolderId,
 	GitOriginInfo,
-	ProviderId,
 	Session,
 	SessionId,
 	SessionStatus,
@@ -64,7 +64,16 @@ import { isHostedProduct, signOutHostedProduct } from "~/lib/hosted-connect.ts";
 import { cn, formatCompactNumber } from "~/lib/utils";
 import { dispatchCommand } from "../lib/commands.ts";
 import { noteSessionRuntimeCompletion } from "../lib/completion-sounds.ts";
+import { openNewChatLanding } from "../lib/open-new-chat-landing.ts";
+import { branchStateFor, diffStatsFor } from "../lib/pr-branch-state.ts";
 import {
+	buildLogicalProjectGroups,
+	type LogicalChatRef,
+	type LogicalProjectGroup,
+	preferredGroupMember,
+} from "../lib/project-groups.ts";
+import {
+	getLocalEnvironmentId,
 	getRpcClient,
 	reportRendererRpcStreamFailure,
 	subscribeRendererRpcConnection,
@@ -74,6 +83,7 @@ import {
 	isSessionRuntimeBusy,
 } from "../lib/session-runtime-state.ts";
 import { formatShortcut } from "../lib/shortcuts.ts";
+import { switchToEnvironment } from "../lib/switch-environment.ts";
 import { useArchivePreviewStore } from "../store/archive-preview.ts";
 import {
 	archiveChatWithConfirm,
@@ -81,6 +91,11 @@ import {
 	isChatUnread,
 	useChatsStore,
 } from "../store/chats.ts";
+import {
+	type EnvironmentCatalogEntry,
+	useEnvironmentCatalogStore,
+} from "../store/environment-catalog.ts";
+import { useFolderOriginsStore } from "../store/folder-origins.ts";
 import { gitDiffStatKey, useGitDiffStatStore } from "../store/git-diff-stat.ts";
 import { useMessagesStore } from "../store/messages.ts";
 import { useRegisterPane } from "../store/pane-focus.ts";
@@ -94,8 +109,8 @@ import { getSessionById, useSessionsStore } from "../store/sessions.ts";
 import { useUiStore } from "../store/ui.ts";
 import { useUsageLimitsStore } from "../store/usage-limits.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
+import { openAddComputerDialog } from "./add-computer-dialog.tsx";
 import { BranchIcon, type BranchState } from "./branch-icon.tsx";
-import { ComputerSwitcher } from "./computer-switcher.tsx";
 import { ProjectAddMenu } from "./project-add-menu.tsx";
 import { AgentActivityOrb } from "./ui/agent-activity-orb.tsx";
 import { Spinner } from "./ui/spinner";
@@ -103,6 +118,11 @@ import { Spinner } from "./ui/spinner";
 const loadRenameDialog = () => import("./rename-dialog.tsx");
 const RenameDialog = lazy(() =>
 	loadRenameDialog().then((module) => ({ default: module.RenameDialog })),
+);
+const ComputerSwitcher = lazy(() =>
+	import("./computer-switcher.tsx").then((module) => ({
+		default: module.ComputerSwitcher,
+	})),
 );
 
 const sidebarErrorToastCache = {
@@ -177,6 +197,11 @@ const formatRelative = (iso: Date): string => {
 	return `${day}d ago`;
 };
 
+const environmentProjectKey = (
+	environmentId: string,
+	projectId: FolderId,
+): string => `${environmentId}\u0001${projectId}`;
+
 /** One summary feed per project replaces a transport stream for every row. */
 function applySessionSummary(
 	projectId: FolderId,
@@ -240,11 +265,12 @@ function applySessionSummary(
 
 function useProjectSessionSummarySubscriptions(
 	projectIds: ReadonlyArray<FolderId>,
+	environmentId: string,
 ) {
 	const fibersRef = useRef(new Map<FolderId, Fiber.Fiber<unknown, unknown>>());
 	const generationsRef = useRef(new Map<FolderId, number>());
 	const cursorsRef = useRef(new Map<FolderId, number>());
-	const idsKey = projectIds.join("\u0000");
+	const idsKey = `${environmentId}\u0001${projectIds.join("\u0000")}`;
 
 	useEffect(() => {
 		const wanted = new Set(projectIds);
@@ -268,7 +294,7 @@ function useProjectSessionSummarySubscriptions(
 				}
 				const generation = snapshot.generation;
 				const fiber = Effect.runFork(
-					Effect.tryPromise(() => getRpcClient()).pipe(
+					Effect.tryPromise(() => getRpcClient(environmentId)).pipe(
 						Effect.flatMap((client) =>
 							Stream.runForEach(
 								client["session.streamChanges"]({
@@ -302,7 +328,11 @@ function useProjectSessionSummarySubscriptions(
 						Effect.match({
 							onFailure: (cause) => {
 								if (generationsRef.current.get(projectId) === generation) {
-									reportRendererRpcStreamFailure(generation, cause);
+									reportRendererRpcStreamFailure(
+										generation,
+										cause,
+										environmentId,
+									);
 								}
 							},
 							onSuccess: () => {
@@ -310,6 +340,7 @@ function useProjectSessionSummarySubscriptions(
 									reportRendererRpcStreamFailure(
 										generation,
 										new Error("session summary stream completed unexpectedly"),
+										environmentId,
 									);
 								}
 							},
@@ -318,7 +349,7 @@ function useProjectSessionSummarySubscriptions(
 				);
 				fibersRef.current.set(projectId, fiber);
 			}
-		});
+		}, environmentId);
 		return unsubscribe;
 	}, [idsKey]);
 
@@ -361,15 +392,18 @@ export function ProjectsSidebar() {
 	const load = useWorkspaceStore((s) => s.load);
 	const remove = useWorkspaceStore((s) => s.remove);
 	const select = useWorkspaceStore((s) => s.select);
+	const catalogEntries = useEnvironmentCatalogStore((s) => s.entries);
+	const activeEnvironmentId = useEnvironmentCatalogStore(
+		(s) => s.activeEnvironmentId,
+	);
 
 	const sessionsByProject = useSessionsStore((s) => s.sessionsByProject);
 
 	const chatsByProject = useChatsStore((s) => s.chatsByProject);
 	const hydrateChats = useChatsStore((s) => s.hydrate);
 
-	const [origins, setOrigins] = useState<Record<string, GitOriginInfo | null>>(
-		{},
-	);
+	const origins = useFolderOriginsStore((s) => s.byFolder);
+	const hydrateOrigins = useFolderOriginsStore((s) => s.hydrate);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
 	useEffect(() => {
@@ -380,19 +414,19 @@ export function ProjectsSidebar() {
 	// reveal their session list.
 	useEffect(() => {
 		if (selectedFolderId === null) return;
-		setExpanded((prev) =>
-			prev[selectedFolderId] ? prev : { ...prev, [selectedFolderId]: true },
-		);
-	}, [selectedFolderId]);
+		const key = environmentProjectKey(activeEnvironmentId, selectedFolderId);
+		setExpanded((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+	}, [activeEnvironmentId, selectedFolderId]);
 
 	// Chat streams hydrate expanded projects. Session summary streams below own
 	// their snapshot and live continuation, so a second list request is unnecessary.
 	useEffect(() => {
 		for (const folder of folders) {
-			if (!expanded[folder.id]) continue;
+			if (!expanded[environmentProjectKey(activeEnvironmentId, folder.id)])
+				continue;
 			if (!(folder.id in chatsByProject)) void hydrateChats(folder.id);
 		}
-	}, [expanded, folders, chatsByProject, hydrateChats]);
+	}, [activeEnvironmentId, expanded, folders, chatsByProject, hydrateChats]);
 
 	// Eagerly hydrate the (lightweight) chat list for EVERY project, regardless
 	// of expansion. This is what lets read/unread — and the cross-project "Next
@@ -410,36 +444,49 @@ export function ProjectsSidebar() {
 	// inside `SessionRow` so each row pulls the entry that matches its
 	// session — no per-project bulk hydrate.
 
-	// Resolve git origin for avatar rendering. Lookups that fail stay `null`
-	// and the row falls back to initials.
+	// Resolve git origin for avatar rendering + logical grouping. Lookups that
+	// fail stay `null` and the row falls back to initials.
 	useEffect(() => {
-		let cancelled = false;
-		const missing = folders.filter((f) => !(f.id in origins));
-		if (missing.length === 0) return;
-		void (async () => {
-			const client = await getRpcClient();
-			for (const folder of missing) {
-				try {
-					const info = await Effect.runPromise(
-						client["git.origin"]({ folderId: folder.id }),
-					);
-					if (cancelled) return;
-					setOrigins((prev) => ({ ...prev, [folder.id]: info }));
-				} catch {
-					if (cancelled) return;
-					setOrigins((prev) => ({ ...prev, [folder.id]: null }));
-				}
-			}
-		})();
-		return () => {
-			cancelled = true;
-		};
-	}, [folders, origins]);
+		void hydrateOrigins(folders.map((folder) => folder.id));
+	}, [folders, hydrateOrigins]);
 
-	useProjectSessionSummarySubscriptions(folders.map((folder) => folder.id));
+	useProjectSessionSummarySubscriptions(
+		folders.map((folder) => folder.id),
+		activeEnvironmentId,
+	);
 
-	const onToggleExpanded = (id: FolderId) =>
-		setExpanded((previous) => ({ ...previous, [id]: !previous[id] }));
+	const onToggleKey = (key: string) => {
+		setExpanded((previous) => ({ ...previous, [key]: !previous[key] }));
+	};
+	const onToggleExpanded = (environmentId: string, id: FolderId) => {
+		onToggleKey(environmentProjectKey(environmentId, id));
+	};
+
+	const desktopCatalogEnabled = window.zuse?.ssh !== undefined;
+
+	// One merged timeline: computers never form sections. The same repo across
+	// machines collapses into one logical group; the computer is a row property.
+	const logicalGroups = useMemo(
+		() =>
+			desktopCatalogEnabled
+				? buildLogicalProjectGroups({
+						entries: catalogEntries,
+						activeEnvironmentId,
+						localEnvironmentId: getLocalEnvironmentId(),
+						activeFolders: folders,
+						activeOrigins: origins,
+						activeChatsByProject: chatsByProject,
+					})
+				: [],
+		[
+			desktopCatalogEnabled,
+			catalogEntries,
+			activeEnvironmentId,
+			folders,
+			origins,
+			chatsByProject,
+		],
+	);
 
 	return (
 		<aside
@@ -448,35 +495,111 @@ export function ProjectsSidebar() {
 			tabIndex={-1}
 			className="flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground outline-none"
 		>
-			<ComputerSwitcher />
+			{desktopCatalogEnabled ? null : (
+				<Suspense
+					fallback={
+						<div className="h-[60px] border-b border-sidebar-border/40" />
+					}
+				>
+					<ComputerSwitcher />
+				</Suspense>
+			)}
 			<SidebarActions />
 			<div className="flex items-center justify-between px-2.5 py-1.5 text-[11px] text-muted-foreground">
-				<span>Projects</span>
-				<ProjectAddMenu />
+				<span>{desktopCatalogEnabled ? "Computers" : "Projects"}</span>
+				{desktopCatalogEnabled ? (
+					<Suspense fallback={<span className="size-8" />}>
+						<ComputerSwitcher />
+					</Suspense>
+				) : (
+					<ProjectAddMenu />
+				)}
 			</div>
+			{desktopCatalogEnabled ? (
+				<CatalogConnectionNotice entries={catalogEntries} />
+			) : null}
 			<SidebarErrorToasts />
 
 			<ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
-				{folders.length === 0 && !loading && (
-					<li className="px-3 py-4 text-center text-xs text-muted-foreground">
-						No projects yet. Click + to add one.
-					</li>
+				{desktopCatalogEnabled ? (
+					<>
+						{logicalGroups.length === 0 && !loading ? (
+							<li className="px-3 py-4 text-center text-xs text-muted-foreground">
+								No projects yet. Click + to add one.
+							</li>
+						) : null}
+						{logicalGroups.map((group) => {
+							const activeMember = group.members.find(
+								(member) => member.isActive,
+							);
+							const folder =
+								activeMember === undefined
+									? undefined
+									: folders.find((f) => f.id === activeMember.folderId);
+							if (activeMember !== undefined && folder !== undefined) {
+								return (
+									<ProjectGroup
+										key={group.key}
+										id={folder.id}
+										name={folder.name}
+										path={folder.path}
+										origin={origins[folder.id] ?? null}
+										isExpanded={
+											expanded[
+												environmentProjectKey(activeEnvironmentId, folder.id)
+											] === true
+										}
+										chats={chatsByProject[folder.id] ?? []}
+										projectSessions={sessionsByProject[folder.id] ?? []}
+										remoteChats={remoteChatRows(group)}
+										onSelect={() => void select(folder.id)}
+										onToggleExpanded={() =>
+											onToggleExpanded(activeEnvironmentId, folder.id)
+										}
+										onRemove={() => void remove(folder.id)}
+									/>
+								);
+							}
+							return (
+								<LogicalCatalogGroup
+									key={group.key}
+									group={group}
+									isExpanded={expanded[group.key] === true}
+									onToggle={() => onToggleKey(group.key)}
+								/>
+							);
+						})}
+					</>
+				) : (
+					<>
+						{folders.length === 0 && !loading ? (
+							<li className="px-3 py-4 text-center text-xs text-muted-foreground">
+								No projects yet. Click + to add one.
+							</li>
+						) : null}
+						{folders.map((folder) => (
+							<ProjectGroup
+								key={folder.id}
+								id={folder.id}
+								name={folder.name}
+								path={folder.path}
+								origin={origins[folder.id] ?? null}
+								isExpanded={
+									expanded[
+										environmentProjectKey(activeEnvironmentId, folder.id)
+									] === true
+								}
+								chats={chatsByProject[folder.id] ?? []}
+								projectSessions={sessionsByProject[folder.id] ?? []}
+								onSelect={() => void select(folder.id)}
+								onToggleExpanded={() =>
+									onToggleExpanded(activeEnvironmentId, folder.id)
+								}
+								onRemove={() => void remove(folder.id)}
+							/>
+						))}
+					</>
 				)}
-				{folders.map((folder) => (
-					<ProjectGroup
-						key={folder.id}
-						id={folder.id}
-						name={folder.name}
-						path={folder.path}
-						origin={origins[folder.id] ?? null}
-						isExpanded={expanded[folder.id] === true}
-						chats={chatsByProject[folder.id] ?? []}
-						projectSessions={sessionsByProject[folder.id] ?? []}
-						onSelect={() => void select(folder.id)}
-						onToggleExpanded={() => onToggleExpanded(folder.id)}
-						onRemove={() => void remove(folder.id)}
-					/>
-				))}
 			</ul>
 			<SidebarFooter />
 		</aside>
@@ -670,6 +793,311 @@ function SidebarAccount() {
 	);
 }
 
+/** A remote chat row plus whether its computer is currently reachable. */
+type RemoteChatRow = {
+	readonly ref: LogicalChatRef;
+	readonly connected: boolean;
+};
+
+const remoteChatRows = (
+	group: LogicalProjectGroup,
+): ReadonlyArray<RemoteChatRow> => {
+	const connectedEnvironments = new Set(
+		group.members
+			.filter((member) => member.connected)
+			.map((member) => member.environmentId),
+	);
+	// Data-source split: everything NOT from the active environment's live
+	// stores renders as a catalog row. The remote BADGE is `ref.remote`,
+	// which is anchored to this physical desktop instead.
+	return group.chats
+		.filter((ref) => !ref.live)
+		.map((ref) => ({
+			ref,
+			connected: connectedEnvironments.has(ref.environmentId),
+		}));
+};
+
+/**
+ * Connection problems no longer occupy sidebar blocks — one quiet line under
+ * the "Computers" strip carries them, with the details in a tooltip and a
+ * click-through to the connect dialog.
+ */
+function CatalogConnectionNotice({
+	entries,
+}: {
+	entries: ReadonlyArray<EnvironmentCatalogEntry>;
+}) {
+	const failing = entries.filter((entry) => entry.status === "error");
+	const first = failing[0];
+	if (first === undefined) return null;
+	const label =
+		failing.length === 1
+			? `${first.label} can't connect`
+			: `${failing.length} computers can't connect`;
+	const detail = failing
+		.map((entry) =>
+			entry.error === null ? entry.label : `${entry.label}: ${entry.error}`,
+		)
+		.join("\n");
+	return (
+		<Tooltip>
+			<TooltipTrigger
+				render={
+					<button
+						type="button"
+						onClick={() => openAddComputerDialog()}
+						className="mx-1.5 flex min-h-6 items-center gap-1.5 rounded-md px-2 text-left text-[11px] text-muted-foreground/80 outline-none hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<span
+							aria-hidden="true"
+							className="size-1.5 shrink-0 rounded-full bg-muted-foreground/35"
+						/>
+						<span className="min-w-0 flex-1 truncate">{label}</span>
+					</button>
+				}
+			/>
+			<TooltipPopup className="max-w-64 whitespace-pre-line">
+				{detail}
+			</TooltipPopup>
+		</Tooltip>
+	);
+}
+
+function RemoteComputerIndicator({
+	label,
+	className,
+}: {
+	readonly label: string;
+	readonly className?: string;
+}) {
+	const context = `Runs on ${label}`;
+	return (
+		<Tooltip>
+			<TooltipTrigger
+				render={
+					<span
+						className={cn(
+							"inline-flex shrink-0 text-muted-foreground/70",
+							className,
+						)}
+					>
+						<HugeiconsIcon
+							icon={ServerStack01Icon}
+							aria-hidden
+							className="size-3"
+						/>
+						<span className="sr-only">{context}</span>
+					</span>
+				}
+			/>
+			<TooltipPopup>{context}</TooltipPopup>
+		</Tooltip>
+	);
+}
+
+/**
+ * A logical project group with no folder on the active environment: a light
+ * header (avatar ↔ chevron swap, same anatomy as the full `ProjectGroup`)
+ * over `CatalogChatRow`s. Clicking a chat switches to its computer.
+ */
+function LogicalCatalogGroup({
+	group,
+	isExpanded,
+	onToggle,
+}: {
+	group: LogicalProjectGroup;
+	isExpanded: boolean;
+	onToggle: () => void;
+}) {
+	const preferred = preferredGroupMember(group);
+	const rows = remoteChatRows(group);
+	const chevron = isExpanded ? ArrowDown01Icon : ArrowRight01Icon;
+	const avatarUrl = avatarUrlFor(group.origin);
+	const listId = `catalog-project-${group.key.replace(/[^\w-]/gu, "-")}`;
+	const memberLabels = group.members
+		.map((member) => member.environmentLabel)
+		.join(", ");
+
+	return (
+		<Fragment>
+			<li>
+				<div className="group flex min-h-7 items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-sidebar-accent/30 motion-reduce:transition-none">
+					<button
+						type="button"
+						aria-expanded={isExpanded}
+						aria-controls={listId}
+						className="flex min-w-0 flex-1 items-center gap-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						onClick={onToggle}
+					>
+						<span className="relative grid size-5 shrink-0 place-items-center">
+							<Avatar className="col-start-1 row-start-1 size-5 rounded transition-opacity duration-150 ease-out group-hover:opacity-0 motion-reduce:transition-none">
+								{avatarUrl !== null && (
+									<AvatarImage src={avatarUrl} alt={group.displayName} />
+								)}
+								<AvatarFallback className="rounded text-[9px]">
+									{initialsOf(group.origin?.owner ?? group.displayName)}
+								</AvatarFallback>
+							</Avatar>
+							<HugeiconsIcon
+								aria-hidden="true"
+								icon={chevron}
+								className="col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 motion-reduce:transition-none"
+							/>
+						</span>
+						<span className="min-w-0 flex-1 truncate text-[11px]">
+							{group.displayName}
+						</span>
+					</button>
+					{group.environmentPresence === "remote-only" ? (
+						<RemoteComputerIndicator label={memberLabels} />
+					) : null}
+					{preferred?.connected ? (
+						<button
+							type="button"
+							aria-label={`New chat in ${group.displayName}`}
+							className="rounded-md p-1 text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+							onClick={() =>
+								void switchToEnvironment({
+									environmentId: preferred.environmentId,
+									folderId: preferred.folderId,
+								})
+							}
+						>
+							<HugeiconsIcon icon={Edit01Icon} className="size-3.5" />
+						</button>
+					) : null}
+				</div>
+			</li>
+			<li id={listId} className="list-none" hidden={!isExpanded}>
+				<ul aria-label={`${group.displayName} chats`}>
+					{rows.length === 0 ? (
+						<li className="px-12 py-1 text-[11px] text-muted-foreground">
+							No chats yet.
+						</li>
+					) : null}
+					{rows.map((row) => (
+						<CatalogChatRow
+							key={`${row.ref.environmentId}:${row.ref.chat.id}`}
+							chatRef={row.ref}
+							connected={row.connected}
+						/>
+					))}
+				</ul>
+			</li>
+		</Fragment>
+	);
+}
+
+/**
+ * A chat rendered from the environment catalog (any computer that is not the
+ * ACTIVE environment), mirroring `ChatRow`'s anatomy — including the branch
+ * icon and `+N −N` diff stats, fetched from the chat's own computer. The
+ * muted computer icon marks rows on a different physical machine than this
+ * desktop. Clicking switches the whole app to that chat's environment.
+ */
+function CatalogChatRow({
+	chatRef,
+	connected,
+}: {
+	chatRef: LogicalChatRef;
+	connected: boolean;
+}) {
+	const { chat, environmentId, environmentLabel, remote, busy } = chatRef;
+	const isArchived = chat.archivedAt !== null;
+	const prInfo = usePrStateStore(
+		(s) =>
+			s.byKey[prStateKey(environmentId, chat.projectId, chat.worktreeId)] ??
+			null,
+	);
+	const hydratePrState = usePrStateStore((s) => s.hydrate);
+	const diffStat = useGitDiffStatStore(
+		(s) =>
+			s.byKey[gitDiffStatKey(environmentId, chat.projectId, chat.worktreeId)] ??
+			null,
+	);
+	const hydrateDiffStat = useGitDiffStatStore((s) => s.hydrate);
+	useEffect(() => {
+		// Only reachable computers get asked — never hammer an offline env.
+		if (!connected) return;
+		void hydratePrState(environmentId, chat.projectId, chat.worktreeId);
+		void hydrateDiffStat(environmentId, chat.projectId, chat.worktreeId);
+	}, [
+		connected,
+		environmentId,
+		chat.projectId,
+		chat.worktreeId,
+		hydratePrState,
+		hydrateDiffStat,
+	]);
+	const stats = diffStatsFor(diffStat, prInfo);
+	return (
+		<li>
+			<button
+				type="button"
+				aria-disabled={!connected}
+				onClick={() => {
+					if (!connected) return;
+					void switchToEnvironment({
+						environmentId,
+						folderId: chat.projectId,
+						chatId: chat.id,
+					});
+				}}
+				title={chat.title}
+				className={cn(
+					"group flex min-h-6 w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+					connected
+						? "cursor-pointer hover:bg-sidebar-accent/40"
+						: "cursor-default opacity-60",
+				)}
+			>
+				<span className="ml-3 inline-grid size-5 shrink-0 place-items-center">
+					{busy ? (
+						<>
+							<span
+								aria-hidden="true"
+								className="size-1.5 rounded-full bg-emerald-500"
+							/>
+							<span className="sr-only">Agent running</span>
+						</>
+					) : (
+						<BranchIcon
+							state={branchStateFor(prInfo, isArchived)}
+							selected={false}
+						/>
+					)}
+				</span>
+				<span className="min-w-0 flex-1 truncate">
+					{chat.title || "New chat"}
+				</span>
+				<div className="relative flex h-4 w-16 shrink-0 items-center justify-end">
+					{remote ? (
+						<RemoteComputerIndicator
+							label={environmentLabel}
+							className="mr-1"
+						/>
+					) : null}
+					<span className="tabular-nums text-[10px] text-muted-foreground">
+						{stats !== null ? (
+							<>
+								<span className="text-success">
+									+{formatCompactNumber(stats.additions)}
+								</span>{" "}
+								<span className="text-destructive">
+									−{formatCompactNumber(stats.deletions)}
+								</span>
+							</>
+						) : (
+							formatRelative(chat.updatedAt)
+						)}
+					</span>
+				</div>
+			</button>
+		</li>
+	);
+}
+
 function ProjectGroup({
 	id,
 	name,
@@ -678,6 +1106,7 @@ function ProjectGroup({
 	isExpanded,
 	chats,
 	projectSessions,
+	remoteChats,
 	onSelect,
 	onToggleExpanded,
 	onRemove,
@@ -694,6 +1123,8 @@ function ProjectGroup({
 		readonly archivedAt: Date | null;
 		readonly status: SessionStatus;
 	}>;
+	/** Same-repo chats on other computers, interleaved into the chat list. */
+	remoteChats?: ReadonlyArray<RemoteChatRow>;
 	onSelect: () => void;
 	onToggleExpanded: () => void;
 	onRemove: () => void;
@@ -739,6 +1170,24 @@ function ProjectGroup({
 		() => chats.filter((c) => c.archivedAt === null),
 		[chats],
 	);
+
+	// One merged timeline inside the group: local chats and same-repo chats on
+	// other computers interleave by recency instead of forming sections.
+	const chatRows = useMemo(() => {
+		const local = visibleChats.map((chat) => ({
+			kind: "local" as const,
+			chat,
+			updatedAt: chat.updatedAt.getTime(),
+		}));
+		const remote = (remoteChats ?? []).map((row) => ({
+			kind: "remote" as const,
+			row,
+			updatedAt: row.ref.chat.updatedAt.getTime(),
+		}));
+		return [...local, ...remote].sort(
+			(left, right) => right.updatedAt - left.updatedAt,
+		);
+	}, [visibleChats, remoteChats]);
 
 	// Surface the highest-priority attention hint on the collapsed project
 	// header when any session inside this project needs attention.
@@ -888,14 +1337,22 @@ function ProjectGroup({
 
 			<li className="list-none" hidden={!isExpanded}>
 				<ul aria-label={`${displayName} chats`}>
-					{visibleChats.length === 0 && (
+					{chatRows.length === 0 && (
 						<li className="px-12 py-1 text-[11px] text-muted-foreground">
 							No chats yet.
 						</li>
 					)}
-					{visibleChats.map((chat) => (
-						<ChatRow key={chat.id} chat={chat} />
-					))}
+					{chatRows.map((entry) =>
+						entry.kind === "local" ? (
+							<ChatRow key={entry.chat.id} chat={entry.chat} />
+						) : (
+							<CatalogChatRow
+								key={`${entry.row.ref.environmentId}:${entry.row.ref.chat.id}`}
+								chatRef={entry.row.ref}
+								connected={entry.row.connected}
+							/>
+						),
+					)}
 				</ul>
 			</li>
 		</Fragment>
@@ -999,7 +1456,7 @@ export function createNewSession(projectId: FolderId): void {
 function NewChatButton({ projectId }: { projectId: FolderId }) {
 	const onClick = (e: React.MouseEvent) => {
 		e.stopPropagation();
-		createNewSession(projectId);
+		openNewChatLanding(projectId);
 	};
 
 	return (
@@ -1063,27 +1520,58 @@ function ChatRow({ chat }: { chat: Chat }) {
 		(s) => s.pendingCreationByChat[chat.id] !== undefined,
 	);
 
-	// PR state is keyed by (project, worktree). A chat owns its worktree,
-	// so all its sessions share the same PR row — hydrate once per chat.
+	// Live rows always belong to the ACTIVE environment; the row is "remote"
+	// when that environment is not this physical desktop.
+	const activeEnvironmentId = useEnvironmentCatalogStore(
+		(s) => s.activeEnvironmentId,
+	);
+	const environmentLabel = useEnvironmentCatalogStore(
+		(s) =>
+			s.entries.find((entry) => entry.environmentId === s.activeEnvironmentId)
+				?.label ?? "another computer",
+	);
+	const onRemoteEnvironment = activeEnvironmentId !== getLocalEnvironmentId();
+
+	// PR state is keyed by (environment, project, worktree). A chat owns its
+	// worktree, so all its sessions share the same PR row — hydrate once per
+	// chat.
 	const prInfo = usePrStateStore(
-		(s) => s.byKey[prStateKey(chat.projectId, chat.worktreeId)] ?? null,
+		(s) =>
+			s.byKey[
+				prStateKey(activeEnvironmentId, chat.projectId, chat.worktreeId)
+			] ?? null,
 	);
 	const hydratePrState = usePrStateStore((s) => s.hydrate);
 	useEffect(() => {
 		if (creationPending) return;
-		void hydratePrState(chat.projectId, chat.worktreeId);
-	}, [creationPending, hydratePrState, chat.projectId, chat.worktreeId]);
+		void hydratePrState(activeEnvironmentId, chat.projectId, chat.worktreeId);
+	}, [
+		creationPending,
+		hydratePrState,
+		activeEnvironmentId,
+		chat.projectId,
+		chat.worktreeId,
+	]);
 
 	// Per-branch diff stats (additions/deletions vs base), shown even when no
 	// PR exists yet — so a working branch surfaces its size in the sidebar.
 	const diffStat = useGitDiffStatStore(
-		(s) => s.byKey[gitDiffStatKey(chat.projectId, chat.worktreeId)] ?? null,
+		(s) =>
+			s.byKey[
+				gitDiffStatKey(activeEnvironmentId, chat.projectId, chat.worktreeId)
+			] ?? null,
 	);
 	const hydrateDiffStat = useGitDiffStatStore((s) => s.hydrate);
 	useEffect(() => {
 		if (creationPending) return;
-		void hydrateDiffStat(chat.projectId, chat.worktreeId);
-	}, [creationPending, hydrateDiffStat, chat.projectId, chat.worktreeId]);
+		void hydrateDiffStat(activeEnvironmentId, chat.projectId, chat.worktreeId);
+	}, [
+		creationPending,
+		hydrateDiffStat,
+		activeEnvironmentId,
+		chat.projectId,
+		chat.worktreeId,
+	]);
 
 	// Ids of this chat's non-archived sessions — so the sidebar busy
 	// indicator reflects ANY tab being active, not just the currently
@@ -1148,29 +1636,8 @@ function ChatRow({ chat }: { chat: Chat }) {
 		(isChatUnread(chat, selectedChatId) ||
 			permissionAttention === "permission");
 
-	const branchState: BranchState = isArchived
-		? "archived"
-		: prInfo === null || prInfo.state === "none"
-			? "default"
-			: prInfo.state === "merged"
-				? "pr-merged"
-				: prInfo.state === "closed"
-					? "pr-closed"
-					: // open PR — reflect CI / conflict status
-						prInfo.checks === "failure" || prInfo.mergeable === "conflicting"
-						? "pr-failing"
-						: prInfo.checks === "pending"
-							? "pr-pending"
-							: "pr-open";
-
-	// Prefer the live branch diff (works without a PR); fall back to the PR's
-	// own counts so merged/closed branches still show their size.
-	const stats =
-		diffStat !== null && (diffStat.additions > 0 || diffStat.deletions > 0)
-			? diffStat
-			: prInfo !== null && (prInfo.additions > 0 || prInfo.deletions > 0)
-				? { additions: prInfo.additions, deletions: prInfo.deletions }
-				: null;
+	const branchState: BranchState = branchStateFor(prInfo, isArchived);
+	const stats = diffStatsFor(diffStat, prInfo);
 	const showDiff = stats !== null;
 
 	const [renameOpen, setRenameOpen] = useState(false);
@@ -1272,6 +1739,12 @@ function ChatRow({ chat }: { chat: Chat }) {
 						className="min-w-0 flex-1 truncate"
 					/>
 					<div className="relative flex h-4 w-16 shrink-0 items-center justify-end">
+						{onRemoteEnvironment ? (
+							<RemoteComputerIndicator
+								label={environmentLabel}
+								className="mr-1"
+							/>
+						) : null}
 						<span className="tabular-nums text-[10px] text-muted-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover:hidden">
 							{showDiff && stats !== null ? (
 								<>
