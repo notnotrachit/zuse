@@ -1440,8 +1440,8 @@ function ProvidersPane() {
 				<FrameFooter className="px-2 py-1 w-full">
 					<p className="text-xs leading-relaxed text-muted-foreground">
 						Zuse (Beta) uses your existing CLI credentials — Claude Code, Codex,
-						Grok, Gemini, Cursor, and OpenCode all sign in through their own
-						login flows.
+						Grok, Gemini, Cursor, OpenCode, and Kiro all sign in through their
+						own login flows.
 					</p>
 				</FrameFooter>
 			</Frame>
