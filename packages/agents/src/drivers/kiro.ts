@@ -24,6 +24,10 @@ import { issueProviderMcpSession } from "../kernel/provider-mcp-session.ts";
 import { makeStdioMcpFallback } from "../kernel/stdio-mcp-fallback.ts";
 import { prefixFirstPromptWithWorkspaceInstructions } from "../kernel/workspace-instructions.ts";
 import { handleFsRequest } from "./acp/fs.ts";
+import {
+	handleAcpNativePermissionRequest,
+	isAcpNativePermissionMethod,
+} from "./acp/native-permission.ts";
 import { replyToAcpRequest } from "./acp/request-reply.ts";
 import { handleTerminalRequest } from "./acp/terminal.ts";
 import { createAcpTranslator } from "./acp/translate.ts";
@@ -311,10 +315,12 @@ export const startKiroSession = (
 
 				// Kiro extension notifications (`_kiro.dev/*`) are optional
 				// enhancements (slash commands, MCP lifecycle, compaction,
-				// metering). Safe to ignore until we wire dedicated UI for them.
+				// metering). Requests with ids are handled below so the child never
+				// waits forever for a response.
 				if (
-					msg.method.startsWith("_kiro.") ||
-					msg.method.startsWith("_session/")
+					msg.id === undefined &&
+					(msg.method.startsWith("_kiro.") ||
+						msg.method.startsWith("_session/"))
 				) {
 					if (KIRO_RPC_TRACE) {
 						process.stderr.write(
@@ -362,6 +368,41 @@ export const startKiroSession = (
 								acpHandlerContext(),
 							),
 						);
+						return;
+					}
+
+					if (isAcpNativePermissionMethod(msg.method)) {
+						process.stderr.write(
+							`[kiro.rpc] native permission request method=${msg.method} id=${msg.id}\n`,
+						);
+						handleAcpNativePermissionRequest(
+							msg.method,
+							msg.params,
+							acpHandlerContext(),
+						)
+							.then((result) => {
+								if (result === null) {
+									writeMessage({
+										jsonrpc: "2.0",
+										id: msg.id,
+										error: {
+											code: -32601,
+											message: `Method not supported by Zuse ACP client: ${msg.method}`,
+										},
+									});
+									return;
+								}
+								writeMessage({ jsonrpc: "2.0", id: msg.id, result });
+							})
+							.catch((err) => {
+								const message =
+									err instanceof Error ? err.message : String(err);
+								writeMessage({
+									jsonrpc: "2.0",
+									id: msg.id,
+									error: { code: -32603, message },
+								});
+							});
 						return;
 					}
 
