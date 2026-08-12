@@ -1,19 +1,5 @@
 import type { EditorView } from "@codemirror/view";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronDown } from "lucide-react";
-import {
-	AttachmentIcon,
-	DashboardSpeedIcon,
-	Delete02Icon,
-	FlashIcon,
-	InformationCircleIcon,
-	MapsIcon,
-	PencilIcon,
-	PlayIcon,
-	SentIcon,
-	SquareIcon,
-	Upload01Icon,
-} from "@zuse/icons/solid-rounded";
 import {
 	type BooleanOptionDescriptor,
 	type BrowserAnnotation,
@@ -30,7 +16,21 @@ import {
 	type SessionId,
 	type ThreadGoal,
 } from "@zuse/contracts";
+import {
+	AttachmentIcon,
+	DashboardSpeedIcon,
+	Delete02Icon,
+	FlashIcon,
+	InformationCircleIcon,
+	MapsIcon,
+	PencilIcon,
+	PlayIcon,
+	SentIcon,
+	SquareIcon,
+	Upload01Icon,
+} from "@zuse/icons/solid-rounded";
 import { Effect } from "effect";
+import { ChevronDown } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { CostChip } from "~/components/cost-footer";
 import { Button } from "~/components/ui/button";
@@ -105,6 +105,10 @@ import type {
 } from "../composer/draft-attachments.ts";
 import { composerSnapshotFromInput } from "../composer/input-snapshot.ts";
 import { parseComposerInput } from "../composer/segment-parser.ts";
+import {
+	cloudChatShowsWorking,
+	deriveCloudChatActivity,
+} from "../lib/cloud-chat-activity.ts";
 import { effectiveSessionRuntimeState } from "../lib/session-runtime-state.ts";
 import { useActiveWorkspaceRoot } from "../store/active-workspace.ts";
 import {
@@ -112,6 +116,12 @@ import {
 	useAnnotationsStore,
 } from "../store/annotations.ts";
 import { useAttachmentsStore } from "../store/attachments.ts";
+import { useCloudExecutionStore } from "../store/cloud-chat-registry.ts";
+import {
+	shouldUseLocalMessageQueue,
+	useCloudChatSummaryForSession,
+	useCloudChatsStore,
+} from "../store/cloud-chats.ts";
 import { useComposerBridge } from "../store/composer-bridge.ts";
 import {
 	composerDraftKeyForSession,
@@ -218,8 +228,43 @@ export function ChatComposer({
 	const runtimeState = useSessionRuntimeStore((s) =>
 		effectiveSessionRuntimeState(s.bySession[sessionId]),
 	);
-	const interrupting = runtimeState === "stopping";
-	const inFlight = runtimeState === "running" || runtimeState === "stopping";
+	const cloudSummary = useCloudChatSummaryForSession(sessionId);
+	const isCloudSession = cloudSummary !== null;
+	const cloudAttachment = useCloudExecutionStore((state) =>
+		cloudSummary === null
+			? "detached"
+			: (state.stateByWorkspace[cloudSummary.workspaceId] ?? "detached"),
+	);
+	const cloudCommand = useCloudChatsStore((state) =>
+		cloudSummary === null
+			? null
+			: (state.commandByWorkspace[cloudSummary.workspaceId]?.state ?? null),
+	);
+	const cloudActivity =
+		cloudSummary === null
+			? null
+			: deriveCloudChatActivity({
+					summary: cloudSummary,
+					attachment: cloudAttachment,
+					runtime: runtimeState,
+					command: cloudCommand,
+				});
+	const interrupting =
+		cloudActivity === null
+			? runtimeState === "stopping"
+			: cloudActivity === "stopping";
+	const inFlight =
+		cloudActivity === null
+			? runtimeState === "running" ||
+				runtimeState === "stopping" ||
+				(isCloudSession && runtimeState === "starting")
+			: cloudChatShowsWorking(cloudActivity);
+	const showActiveTimer =
+		cloudActivity === null
+			? inFlight
+			: cloudActivity !== "idle" &&
+				cloudActivity !== "paused" &&
+				cloudActivity !== "failed";
 	// Hold messages only while the provider is unavailable or an earlier message
 	// is already queued. Worktree setup is independent background work and must
 	// not delay an agent that has finished booting.
@@ -1074,7 +1119,10 @@ export function ChatComposer({
 				? chooseComposerSubmitRoute({
 						sendPlanFeedbackNow,
 						goalSendMode,
-						shouldQueue: inFlight || holdForAgent,
+						shouldQueue: shouldUseLocalMessageQueue({
+							queueRequested: inFlight || holdForAgent,
+							isCloudSession,
+						}),
 					})
 				: null;
 		clearComposer(view, {
@@ -1434,7 +1482,10 @@ export function ChatComposer({
 								{!isDraft ? <ContextStatusPopover session={session} /> : null}
 								{!isDraft ? <CostChip sessionId={sessionId} /> : null}
 								{!isDraft ? (
-									<SessionTimer sessionId={sessionId} inFlight={inFlight} />
+									<SessionTimer
+										sessionId={sessionId}
+										inFlight={showActiveTimer}
+									/>
 								) : null}
 								{sendPlanFeedbackNow && hasText ? (
 									<Button

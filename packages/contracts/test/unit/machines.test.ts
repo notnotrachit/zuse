@@ -9,7 +9,9 @@ import {
 	AccountAccessStatus,
 	AccountAccessTransferEvent,
 	BillingCheckoutRequest,
+	CLOUD_WORKSPACE_OFFER_ID,
 	MachineCreateRequest,
+	MachineOffer,
 	MachineRecord,
 	MachineRuntimeStatus,
 	PERSISTENT_STANDARD_OFFER_ID,
@@ -32,6 +34,12 @@ const offer = {
 };
 
 describe("managed machine contracts", () => {
+	it("defaults legacy machine offers to the persistent kind", () => {
+		const decoded = Schema.decodeUnknownSync(MachineOffer)(offer);
+
+		expect(decoded.kind).toBe("persistent");
+	});
+
 	it("decodes the server-owned offer and public machine fields", () => {
 		const record = Schema.decodeUnknownSync(MachineRecord)({
 			machineId: "machine_1",
@@ -68,10 +76,12 @@ describe("managed machine contracts", () => {
 
 	it("keeps the checkout return URL server-owned", () => {
 		const decoded = Schema.decodeUnknownSync(BillingCheckoutRequest)({
-			offerId: PERSISTENT_STANDARD_OFFER_ID,
+			offerId: CLOUD_WORKSPACE_OFFER_ID,
 		});
 
-		expect(decoded).toEqual({ offerId: PERSISTENT_STANDARD_OFFER_ID });
+		expect(decoded).toEqual({
+			offerId: CLOUD_WORKSPACE_OFFER_ID,
+		});
 	});
 
 	it("rejects legacy client-controlled provider placement", () => {

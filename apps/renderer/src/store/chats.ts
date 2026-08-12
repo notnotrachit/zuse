@@ -35,6 +35,7 @@ import { createAtomStore as create } from "../state/atom-store.ts";
 import { batchAtomUpdates } from "../state/registry.tsx";
 import { useArchivePreviewStore } from "./archive-preview.ts";
 import { registerChatCommands } from "./chat-commands.ts";
+import { cloudSummaryForChat } from "./cloud-chat-registry.ts";
 import {
 	acknowledgeTimelineSessionCreated,
 	deferTimelineUntilSessionCreated,
@@ -1343,6 +1344,28 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 	rename: async (chatId, title) => {
 		set({ error: null });
 		try {
+			const cloud = cloudSummaryForChat(chatId);
+			if (cloud !== null) {
+				const [{ getControlPlaneRpcClient }, cloudChats] = await Promise.all([
+					import("../lib/rpc-client.ts"),
+					import("./cloud-chats.ts"),
+				]);
+				const control = await getControlPlaneRpcClient();
+				const renamed = await Effect.runPromise(
+					control["cloud.chats.rename"]({
+						workspaceId: cloud.workspaceId,
+						title,
+					}),
+				);
+				cloudChats.stageCloudChat(
+					renamed,
+					cloudChats.localProjectForCloudChat(chatId) ??
+						(() => {
+							throw new Error("Cloud chat project is not available.");
+						})(),
+				);
+				return;
+			}
 			const client = await getRpcClient();
 			const renamed = await Effect.runPromise(
 				client["chat.rename"]({ chatId, title }),
@@ -1425,6 +1448,10 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				},
 			};
 		});
+		// Cloud chat/session selection is projected from the control plane. The
+		// sandbox-local conversation row may not exist while compute is paused,
+		// so selecting a durable transcript must never issue this local RPC.
+		if (cloudSummaryForChat(chatId) !== null) return;
 		try {
 			const client = await getRpcClient();
 			await Effect.runPromise(
@@ -1440,6 +1467,23 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 		if (provisional?.phase === "failed") {
 			get().discardCreation(chatId);
 			return { ok: true } as const;
+		}
+		const cloudSummary = cloudSummaryForChat(chatId);
+		if (cloudSummary !== null) {
+			try {
+				const { useCloudChatsStore } = await import("./cloud-chats.ts");
+				await useCloudChatsStore.getState().archive(cloudSummary);
+				return { ok: true } as const;
+			} catch (cause) {
+				const reason = formatError(cause);
+				set({ error: reason });
+				toastManager.add({
+					type: "error",
+					title: "Cloud chat could not be archived",
+					description: reason,
+				});
+				return { ok: false, reason } as const;
+			}
 		}
 		const projectIdBeforeArchive = findChatProject(
 			get().chatsByProject,
@@ -1647,6 +1691,53 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 			archives.setRestoring(chatId, true);
 			archives.setRestoreError(chatId, null);
 			try {
+				const cloud = cloudSummaryForChat(chatId);
+				if (cloud !== null) {
+					const [{ getControlPlaneRpcClient }, cloudChats] = await Promise.all([
+						import("../lib/rpc-client.ts"),
+						import("./cloud-chats.ts"),
+					]);
+					const control = await getControlPlaneRpcClient();
+					const workspace = await Effect.runPromise(
+						control["cloud.workspaces.unarchive"]({
+							workspaceId: cloud.workspaceId,
+						}),
+					);
+					const projectId = cloudChats.localProjectForCloudChat(chatId);
+					if (projectId === null)
+						throw new Error("Cloud chat project is not available.");
+					const restoredSummary = {
+						...cloud,
+						state: workspace.state,
+						desiredState: workspace.desiredState,
+						runtimeState: workspace.runtimeState,
+						statusCode: workspace.statusCode,
+						startupPhase: workspace.startupPhase,
+						revision: workspace.revision,
+						updatedAt: workspace.updatedAt,
+						archivedAt: undefined,
+					};
+					cloudChats.stageCloudChat(restoredSummary, projectId);
+					archives.removeChat(chatId, projectId);
+					get().select(chatId);
+					const chat = get().chatsByProject[projectId]?.find(
+						(candidate) => candidate.id === chatId,
+					);
+					const sessions = useSessionsStore
+						.getState()
+						.sessionsByProject[projectId]?.filter(
+							(session) => session.chatId === chatId,
+						);
+					if (chat === undefined || sessions === undefined)
+						throw new Error("Cloud chat projection is not available.");
+					return {
+						ok: true,
+						chat,
+						sessions,
+						worktree: null,
+						directoryStatus: { _tag: "available" },
+					} as const;
+				}
 				const client = await getRpcClient();
 				const result = await Effect.runPromise(
 					client["chat.unarchive"]({ chatId }),
@@ -1820,6 +1911,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 		void get().markRead(chatId);
 	},
 	markRead: async (chatId) => {
+		if (cloudSummaryForChat(chatId) !== null) return;
 		const projectId = findChatProject(get().chatsByProject, chatId);
 		if (projectId === null) return;
 		const chat = (get().chatsByProject[projectId] ?? []).find(

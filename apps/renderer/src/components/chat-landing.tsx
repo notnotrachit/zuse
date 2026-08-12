@@ -1,13 +1,9 @@
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronDown } from "lucide-react";
-import {
-	Folder01Icon,
-	FolderAddIcon,
-	Tick01Icon,
-} from "@zuse/icons/solid-rounded";
 import {
 	type ChatId,
 	type ChatWorkspacePolicy,
+	type CloudProject,
+	type CloudProviderOption,
 	ComposerInput,
 	defaultModelFor,
 	type FolderId,
@@ -17,14 +13,20 @@ import {
 	type WorktreeCreateSource,
 	type WorktreeId,
 } from "@zuse/contracts";
+import {
+	Folder01Icon,
+	FolderAddIcon,
+	Tick01Icon,
+} from "@zuse/icons/solid-rounded";
 import { Effect } from "effect";
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import {
 	lazy,
 	Suspense,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import {
@@ -53,6 +55,8 @@ import {
 } from "~/composer/draft-attachments";
 import { applyPreparedLinearContext } from "~/composer/linear-context-input";
 import { resolveChatWorkspacePolicy } from "~/lib/auto-worktree";
+import { chatLandingProgress } from "~/lib/chat-landing-progress";
+import { cloudWorkspaceBetaAvailable } from "~/lib/cloud-machines-availability.ts";
 import { saveContextFile } from "~/lib/context-handoff";
 import { formatError } from "~/lib/format-error";
 import {
@@ -63,11 +67,20 @@ import {
 	type NewChatTarget,
 	preferredGroupMember,
 } from "~/lib/project-groups";
-import { getLocalEnvironmentId, getRpcClient } from "~/lib/rpc-client";
+import {
+	getControlPlaneRpcClient,
+	getLocalEnvironmentId,
+	getRpcClient,
+} from "~/lib/rpc-client";
 import { switchToEnvironment } from "~/lib/switch-environment";
 import { cn } from "~/lib/utils";
 import { useAttachmentsStore } from "~/store/attachments";
 import { useChatsStore } from "~/store/chats";
+import {
+	ensureCloudWorkspaceAttached,
+	stageCloudChat,
+	summaryFromLaunch,
+} from "~/store/cloud-chats";
 import { useComposerBridge } from "~/store/composer-bridge";
 import {
 	composerDraftKeyForLanding,
@@ -80,10 +93,14 @@ import { useMessagesStore } from "~/store/messages";
 import { useRepositorySettingsStore } from "~/store/repository-settings.ts";
 import { DRAFT_SESSION_ID, useSessionsStore } from "~/store/sessions";
 import { useSettingsStore } from "~/store/settings";
+import { useUiStore } from "~/store/ui";
 import { useWorkspaceStore } from "~/store/workspace";
 import { EMPTY_WORKTREES, useWorktreesStore } from "~/store/worktrees";
 import { PROVIDER_LABEL } from "../lib/provider-labels.ts";
-import { ComputerPicker } from "./composer/computer-picker.tsx";
+import {
+	type CloudComputerPickerItem,
+	ComputerPicker,
+} from "./composer/computer-picker.tsx";
 import {
 	CreateFromMenu,
 	type CreateFromSelection,
@@ -115,12 +132,12 @@ const migrateModelOptions = (fromId: string, toId: string): void => {
 	const moves: Array<[string, string]> = [];
 	for (let i = 0; i < window.sessionStorage.length; i++) {
 		const key = window.sessionStorage.key(i);
-		if (key !== null && key.startsWith(prefix)) {
+		if (key?.startsWith(prefix)) {
 			moves.push([
 				key,
 				`zuse.modelOptions.${toId}.${key.slice(prefix.length)}`,
 			]);
-		} else if (key !== null && key.startsWith(legacyPrefix)) {
+		} else if (key?.startsWith(legacyPrefix)) {
 			moves.push([
 				key,
 				`zuse.modelOptions.${toId}.${key.slice(legacyPrefix.length)}`,
@@ -140,6 +157,7 @@ const migrateModelOptions = (fromId: string, toId: string): void => {
  * chat map instead of subscribing this surface to every chat update.
  */
 const EMPTY_CHATS_BY_PROJECT: Readonly<Record<string, never>> = {};
+const CLOUD_WORKSPACE_BETA_AVAILABLE = cloudWorkspaceBetaAvailable();
 
 const formatThreadRelative = (date: Date): string => {
 	const ms = Math.max(0, Date.now() - date.getTime());
@@ -216,6 +234,9 @@ export function ChatLanding() {
 	// The worktree resolved for this submit (null = main checkout). Lets the
 	// bridge card show the real worktree name/branch the instant it exists.
 	const [pendingWorktreeId, setPendingWorktreeId] = useState<WorktreeId | null>(
+		null,
+	);
+	const [pendingCloudStatus, setPendingCloudStatus] = useState<string | null>(
 		null,
 	);
 	// The provider chosen in the composer for this submit (may differ from the
@@ -339,6 +360,18 @@ export function ChatLanding() {
 	const [targetOverride, setTargetOverride] = useState<NewChatTarget | null>(
 		null,
 	);
+	const [selectedCloudProviderId, setSelectedCloudProviderId] = useState<
+		string | null
+	>(null);
+	const [cloudProviders, setCloudProviders] = useState<
+		ReadonlyArray<CloudProviderOption>
+	>([]);
+	const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
+	const [cloudSubscribed, setCloudSubscribed] = useState(false);
+	const [cloudPlacementError, setCloudPlacementError] = useState(false);
+	const setView = useUiStore((state) => state.setView);
+	const setSettingsSection = useUiStore((state) => state.setSettingsSection);
+	const cloudCacheRefreshRequests = useRef(new Set<string>());
 	const [projectSetupOpen, setProjectSetupOpen] = useState(false);
 	const anchoredGroup = useMemo(
 		() =>
@@ -349,17 +382,141 @@ export function ChatLanding() {
 		[projectGroups, remoteAnchor],
 	);
 	const pickerGroup = anchoredGroup ?? selectedGroup;
-	const resolvedTarget: NewChatTarget | null =
-		targetOverride ??
-		(remoteAnchor !== null
-			? {
-					environmentId: remoteAnchor.member.environmentId,
-					folderId: remoteAnchor.member.folderId,
+	const cloudRepositoryIdentity =
+		pickerGroup?.origin === null || pickerGroup?.origin === undefined
+			? null
+			: `${pickerGroup.origin.host}/${pickerGroup.origin.owner}/${pickerGroup.origin.repo}`.toLowerCase();
+	useEffect(() => {
+		let cancelled = false;
+		let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+		cloudCacheRefreshRequests.current.clear();
+		setSelectedCloudProviderId(null);
+		setCloudProviders([]);
+		setCloudProject(null);
+		setCloudSubscribed(false);
+		setCloudPlacementError(false);
+		if (!CLOUD_WORKSPACE_BETA_AVAILABLE || cloudRepositoryIdentity === null)
+			return;
+		const loadCloudPlacement = async (): Promise<void> => {
+			try {
+				const client = await getControlPlaneRpcClient();
+				const [providerResult, projectResult, entitlementResult] =
+					await Promise.all([
+						Effect.runPromise(client["cloud.providers"]()),
+						Effect.runPromise(client["cloud.projects.list"]()),
+						Effect.runPromise(client["machines.entitlements"]()),
+					]);
+				if (cancelled) return;
+				const project =
+					projectResult.projects.find(
+						(project) =>
+							project.repositoryIdentity.toLowerCase() ===
+							cloudRepositoryIdentity,
+					) ?? null;
+				const subscribed = entitlementResult.entitlements.some(
+					(item) =>
+						item.kind === "cloud-workspace" &&
+						(item.status === "active" ||
+							item.status === "grace" ||
+							(item.status === "ended" &&
+								item.paidThrough !== undefined &&
+								item.paidThrough > Date.now())),
+				);
+				setCloudProviders(providerResult.providers);
+				setCloudProject(project);
+				setCloudSubscribed(subscribed);
+				setCloudPlacementError(false);
+
+				const staleProviders =
+					project === null || !subscribed
+						? []
+						: providerResult.providers.filter((provider) => {
+								const latest = project.latestBuilds[provider.providerId];
+								return (
+									project.activeBuilds[provider.providerId] === undefined &&
+									(latest?.state === "ready" || latest?.state === "failed")
+								);
+							});
+				for (const provider of staleProviders) {
+					const latest = project?.latestBuilds[provider.providerId];
+					if (project === null || latest === undefined) continue;
+					const requestKey = `${project.projectId}:${provider.providerId}`;
+					if (cloudCacheRefreshRequests.current.has(requestKey)) continue;
+					cloudCacheRefreshRequests.current.add(requestKey);
+					try {
+						await Effect.runPromise(
+							client["cloud.projects.prepare"]({
+								projectId: project.projectId,
+								providerId: provider.providerId,
+								idempotencyKey: `automatic-refresh:${requestKey}:${latest.buildId}`,
+							}),
+						);
+					} catch (cause) {
+						cloudCacheRefreshRequests.current.delete(requestKey);
+						throw cause;
+					}
 				}
-			: pickerGroup !== null
-				? defaultNewChatTarget(pickerGroup)
-				: null);
+				const buildIsChanging =
+					staleProviders.length > 0 ||
+					(project !== null &&
+						Object.values(project.latestBuilds).some(
+							(build) =>
+								build.state === "queued" ||
+								build.state === "building" ||
+								build.state === "sanitizing",
+						));
+				if (buildIsChanging && !cancelled)
+					refreshTimer = setTimeout(() => {
+						void loadCloudPlacement();
+					}, 2_000);
+			} catch {
+				if (!cancelled) setCloudPlacementError(true);
+			}
+		};
+		void loadCloudPlacement();
+		return () => {
+			cancelled = true;
+			if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+		};
+	}, [cloudRepositoryIdentity]);
+	const cloudPickerItems = useMemo<ReadonlyArray<CloudComputerPickerItem>>(
+		() =>
+			cloudProviders.map((provider) => {
+				const build = cloudProject?.latestBuilds[provider.providerId];
+				const ready =
+					cloudProject?.activeBuilds[provider.providerId] !== undefined;
+				const statusText = cloudPlacementError
+					? "Unavailable"
+					: !cloudSubscribed
+						? "Subscription required"
+						: cloudProject === null
+							? "Connect repository"
+							: ready || build !== undefined
+								? provider.displayName
+								: "Getting ready";
+				return {
+					providerId: provider.providerId,
+					providerLabel: provider.displayName,
+					disabled: cloudPlacementError || !cloudSubscribed,
+					statusText,
+				};
+			}),
+		[cloudPlacementError, cloudProject, cloudProviders, cloudSubscribed],
+	);
+	const resolvedTarget: NewChatTarget | null =
+		selectedCloudProviderId !== null
+			? null
+			: (targetOverride ??
+				(remoteAnchor !== null
+					? {
+							environmentId: remoteAnchor.member.environmentId,
+							folderId: remoteAnchor.member.folderId,
+						}
+					: pickerGroup !== null
+						? defaultNewChatTarget(pickerGroup)
+						: null));
 	const pendingProjectSetup =
+		selectedCloudProviderId === null &&
 		resolvedTarget?.folderId === null &&
 		pickerGroup?.origin?.cloneUrl !== undefined
 			? {
@@ -382,6 +539,7 @@ export function ChatLanding() {
 		// "Run on" override to the draft it was picked for.
 		setCreateSource(null);
 		setTargetOverride(null);
+		setSelectedCloudProviderId(null);
 		const draftFolderId = remoteAnchor?.member.folderId ?? selectedFolderId;
 		if (draftFolderId === null) {
 			clearDraft();
@@ -563,6 +721,82 @@ export function ChatLanding() {
 		if (submitting) return;
 		const draft = useSessionsStore.getState().draftSession;
 		if (draft === null) return;
+		if (selectedCloudProviderId !== null) {
+			if (!CLOUD_WORKSPACE_BETA_AVAILABLE) return;
+			if (cloudProject === null) {
+				setSubmitError(
+					"Connect this repository in Cloud Sandbox settings first.",
+				);
+				return;
+			}
+			if (draft.providerId !== "claude" && draft.providerId !== "codex") {
+				setSubmitError("Cloud Sandbox currently supports Claude and Codex.");
+				return;
+			}
+			if (
+				opts.pendingAttachments.length > 0 ||
+				opts.pendingContextFiles.length > 0 ||
+				createSource !== null ||
+				opts.asGoal
+			) {
+				setSubmitError(
+					"Attachments, context files, goals, and Create-from aren't supported yet when starting a cloud workspace.",
+				);
+				return;
+			}
+			setSubmitError(null);
+			setSubmitting(true);
+			setPendingPrompt(
+				input.text.trim().length > 0 ? input.text.trim() : "New chat",
+			);
+			setPendingCloudStatus("Creating cloud workspace…");
+			try {
+				const control = await getControlPlaneRpcClient();
+				const launch = await Effect.runPromise(
+					control["cloud.workspaces.create"]({
+						projectId: cloudProject.projectId,
+						providerId: selectedCloudProviderId,
+						baseRef: `origin/${cloudProject.defaultBranch}`,
+						agent: draft.providerId,
+						model: draft.model,
+						credentialKinds: [draft.providerId],
+						firstMessage: input.text,
+						idempotencyKey: crypto.randomUUID(),
+					}),
+				);
+				const title =
+					input.text.trim().split(/\r?\n/u, 1)[0]?.slice(0, 80) ||
+					launch.workspace.branch;
+				const summary = summaryFromLaunch({
+					workspace: launch.workspace,
+					repositoryIdentity: cloudProject.repositoryIdentity,
+					repositoryDisplayName: cloudProject.displayName,
+					title,
+					agent: draft.providerId,
+					model: draft.model,
+				});
+				if (selectedFolderId === null)
+					throw new Error("Select a repository before starting a cloud chat.");
+				stageCloudChat(summary, selectedFolderId, input.text);
+				useChatsStore.getState().select(summary.chatId);
+				void ensureCloudWorkspaceAttached(summary).catch((cause) =>
+					toastManager.add({
+						type: "error",
+						title: "Cloud workspace needs attention",
+						description: formatError(cause),
+					}),
+				);
+				useSessionsStore.getState().clearDraft();
+				setSelectedCloudProviderId(null);
+			} catch (cause) {
+				setSubmitError(formatError(cause));
+				setPendingPrompt(null);
+			} finally {
+				setPendingCloudStatus(null);
+				setSubmitting(false);
+			}
+			return;
+		}
 		const target = resolvedTarget;
 		if (target !== null && target.folderId === null) {
 			setSubmitError(
@@ -912,12 +1146,28 @@ export function ChatLanding() {
 	// Mirrors that layout — the unified setup card on top, the queued message
 	// pinned at the bottom — so the handoff to the live card is seamless.
 	if (submitting && pendingPrompt !== null) {
+		const progress = chatLandingProgress({
+			cloudStatus: pendingCloudStatus,
+			hasPendingWorktree:
+				pendingWorktreeId !== null ||
+				defaultAutoCreateWorktree ||
+				repositoryAutoCreateWorktree,
+		});
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				<div className="min-h-0 flex-1 overflow-y-auto">
-					{pendingWorktreeId !== null ||
-					defaultAutoCreateWorktree ||
-					repositoryAutoCreateWorktree ? (
+					{progress.kind === "cloud" ? (
+						<div className="mx-auto mt-8 flex w-full max-w-2xl items-center gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+							<Spinner className="size-4" />
+							<div className="min-w-0">
+								<p className="text-sm font-medium">Starting Cloud Sandbox</p>
+								<p className="text-xs text-muted-foreground">
+									{progress.status}
+								</p>
+							</div>
+						</div>
+					) : null}
+					{progress.kind === "worktree" ? (
 						<SetupCardView
 							data={{
 								repoName: selectedFolder?.name ?? "this repo",
@@ -1057,12 +1307,26 @@ export function ChatLanding() {
 											onPickGroup={onPickGroup}
 											onAdd={onAdd}
 										/>
-										{desktopCatalogEnabled ? (
+										{desktopCatalogEnabled || cloudPickerItems.length > 0 ? (
 											<ComputerPicker
 												group={pickerGroup}
 												target={resolvedTarget}
 												entries={catalogEntries}
-												onPickTarget={setTargetOverride}
+												onPickTarget={(target) => {
+													setSelectedCloudProviderId(null);
+													setTargetOverride(target);
+												}}
+												cloudItems={cloudPickerItems}
+												selectedCloudProviderId={selectedCloudProviderId}
+												onPickCloud={(providerId) => {
+													if (cloudProject === null) {
+														setSettingsSection({ kind: "machines" });
+														setView("settings");
+														return;
+													}
+													setTargetOverride(null);
+													setSelectedCloudProviderId(providerId);
+												}}
 												onRetryEnvironment={retryComputer}
 											/>
 										) : null}

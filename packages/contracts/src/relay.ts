@@ -66,6 +66,39 @@ export const RelayPaths = {
 	billingWebhook: "/v1/billing/webhook",
 	billingProviderWebhook: (providerId: string) =>
 		`/v1/billing/webhook/${encodeURIComponent(providerId)}`,
+	cloudProviders: "/v1/cloud/providers",
+	cloudProjects: "/v1/cloud/projects",
+	cloudProjectPrepare: (projectId: string) =>
+		`/v1/cloud/projects/${encodeURIComponent(projectId)}/prepare`,
+	cloudWorkspaces: "/v1/cloud/workspaces",
+	cloudWorkspace: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}`,
+	cloudWorkspaceConnectionGrant: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/connection-grant`,
+	cloudWorkspaceGateway: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/gateway`,
+	cloudWorkspaceBootstrap: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/bootstrap`,
+	cloudWorkspaceCommands: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/commands`,
+	cloudWorkspaceEvents: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/events`,
+	cloudWorkspaceActivity: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/activity`,
+	cloudWorkspaceHistory: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/chat`,
+	cloudWorkspaceMessages: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/messages`,
+	cloudWorkspaceChatRename: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/chat/rename`,
+	cloudChats: "/v1/cloud/chats",
+	cloudWorkspaceAction: (workspaceId: string, action: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/${encodeURIComponent(action)}`,
+	cloudWorkspaceReady: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/ready`,
+	cloudCredentials: "/v1/cloud/credentials",
+	cloudCredentialDisconnect: (kind: string) =>
+		`/v1/cloud/credentials/${encodeURIComponent(kind)}/disconnect`,
 } as const;
 
 export const RelayAuthTokenGrant = Schema.Union([

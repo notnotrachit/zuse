@@ -2,6 +2,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import type {
 	Chat,
 	ChatId,
+	CloudChatSummary,
 	FolderId,
 	GitOriginInfo,
 	Session,
@@ -13,6 +14,7 @@ import {
 	ArchiveArrowDownIcon,
 	ArchiveArrowUpIcon,
 	ArchiveIcon,
+	CloudIcon,
 	Delete02Icon,
 	Edit01Icon,
 	FolderAddIcon,
@@ -59,8 +61,12 @@ import {
 	mergeChatAttentionStates,
 } from "~/lib/chat-attention-state";
 import { displayPath } from "~/lib/display-path";
+import { formatError } from "~/lib/format-error.ts";
 import { isHostedProduct, signOutHostedProduct } from "~/lib/hosted-connect.ts";
 import { cn, formatCompactNumber } from "~/lib/utils";
+import { deriveCloudChatActivity } from "../lib/cloud-chat-activity.ts";
+import { cloudChatRowPresentation } from "../lib/cloud-chat-row-presentation.ts";
+import { cloudWorkspaceBetaAvailable } from "../lib/cloud-machines-availability.ts";
 import { dispatchCommand } from "../lib/commands.ts";
 import { noteSessionRuntimeCompletion } from "../lib/completion-sounds.ts";
 import { openNewChatLanding } from "../lib/open-new-chat-landing.ts";
@@ -90,6 +96,12 @@ import {
 	isChatUnread,
 	useChatsStore,
 } from "../store/chats.ts";
+import { useCloudExecutionStore } from "../store/cloud-chat-registry.ts";
+import {
+	openCloudChat,
+	repositoryIdentityForOrigin,
+	useCloudChatsStore,
+} from "../store/cloud-chats.ts";
 import {
 	type EnvironmentCatalogEntry,
 	useEnvironmentCatalogStore,
@@ -113,6 +125,9 @@ import { BranchIcon, type BranchState } from "./branch-icon.tsx";
 import { ProjectAddMenu } from "./project-add-menu.tsx";
 import { AgentActivityOrb } from "./ui/agent-activity-orb.tsx";
 import { Spinner } from "./ui/spinner";
+
+const CLOUD_WORKSPACE_BETA_AVAILABLE = cloudWorkspaceBetaAvailable();
+const EMPTY_CLOUD_CHATS: ReadonlyArray<CloudChatSummary> = [];
 
 const loadRenameDialog = () => import("./rename-dialog.tsx");
 const RenameDialog = lazy(() =>
@@ -403,6 +418,11 @@ export function ProjectsSidebar() {
 
 	const chatsByProject = useChatsStore((s) => s.chatsByProject);
 	const hydrateChats = useChatsStore((s) => s.hydrate);
+	const storedCloudChats = useCloudChatsStore((s) => s.summaries);
+	const cloudChats = CLOUD_WORKSPACE_BETA_AVAILABLE
+		? storedCloudChats
+		: EMPTY_CLOUD_CHATS;
+	const hydrateCloudChats = useCloudChatsStore((s) => s.hydrate);
 
 	const origins = useFolderOriginsStore((s) => s.byFolder);
 	const hydrateOrigins = useFolderOriginsStore((s) => s.hydrate);
@@ -410,7 +430,28 @@ export function ProjectsSidebar() {
 
 	useEffect(() => {
 		void load();
-	}, [load]);
+		if (CLOUD_WORKSPACE_BETA_AVAILABLE) void hydrateCloudChats();
+	}, [load, hydrateCloudChats]);
+
+	useEffect(() => {
+		if (!CLOUD_WORKSPACE_BETA_AVAILABLE) return;
+		const hasTransitioningWorkspace = cloudChats.some(
+			(chat) =>
+				chat.state === "queued" ||
+				chat.state === "provisioning" ||
+				chat.state === "setup" ||
+				chat.state === "pausing" ||
+				chat.state === "resuming" ||
+				chat.state === "archiving" ||
+				chat.desiredState === "archived" ||
+				chat.runtimeState === "connecting",
+		);
+		const interval = window.setInterval(
+			() => void hydrateCloudChats(),
+			hasTransitioningWorkspace ? 2_000 : 30_000,
+		);
+		return () => window.clearInterval(interval);
+	}, [cloudChats, hydrateCloudChats]);
 
 	const desktopCatalogEnabled = window.zuse?.ssh !== undefined;
 
@@ -567,6 +608,11 @@ export function ProjectsSidebar() {
 										chats={chatsByProject[folder.id] ?? []}
 										projectSessions={sessionsByProject[folder.id] ?? []}
 										remoteChats={remoteChatRows(group)}
+										cloudChats={cloudChats.filter(
+											(chat) =>
+												chat.repositoryIdentity ===
+												repositoryIdentityForOrigin(origins[folder.id]),
+										)}
 										onSelect={() => void select(folder.id)}
 										onToggleExpanded={() =>
 											onToggleExpanded(activeEnvironmentId, folder.id)
@@ -606,6 +652,11 @@ export function ProjectsSidebar() {
 								}
 								chats={chatsByProject[folder.id] ?? []}
 								projectSessions={sessionsByProject[folder.id] ?? []}
+								cloudChats={cloudChats.filter(
+									(chat) =>
+										chat.repositoryIdentity ===
+										repositoryIdentityForOrigin(origins[folder.id]),
+								)}
 								onSelect={() => void select(folder.id)}
 								onToggleExpanded={() =>
 									onToggleExpanded(activeEnvironmentId, folder.id)
@@ -971,12 +1022,16 @@ function LogicalCatalogGroup({
 							type="button"
 							aria-label={`New chat in ${group.displayName}`}
 							className="rounded-md p-1 text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
-							onClick={() =>
+							onClick={(event) => {
+								event.stopPropagation();
 								void switchToEnvironment({
 									environmentId: preferred.environmentId,
 									folderId: preferred.folderId,
-								})
-							}
+								}).then((result) => {
+									if (result.switched && result.selectedFolderId !== null)
+										openNewChatLanding(result.selectedFolderId);
+								});
+							}}
 						>
 							<HugeiconsIcon icon={Edit01Icon} className="size-3.5" />
 						</button>
@@ -1121,6 +1176,7 @@ function ProjectGroup({
 	chats,
 	projectSessions,
 	remoteChats,
+	cloudChats,
 	onSelect,
 	onToggleExpanded,
 	onRemove,
@@ -1139,6 +1195,8 @@ function ProjectGroup({
 	}>;
 	/** Same-repo chats on other computers, interleaved into the chat list. */
 	remoteChats?: ReadonlyArray<RemoteChatRow>;
+	/** Durable cloud chats remain visible independently of sandbox state. */
+	cloudChats?: ReadonlyArray<CloudChatSummary>;
 	onSelect: () => void;
 	onToggleExpanded: () => void;
 	onRemove: () => void;
@@ -1180,10 +1238,12 @@ function ProjectGroup({
 		setMenuOpen(true);
 	};
 
-	const visibleChats = useMemo(
-		() => chats.filter((c) => c.archivedAt === null),
-		[chats],
-	);
+	const visibleChats = useMemo(() => {
+		const cloudIds = new Set((cloudChats ?? []).map((row) => row.chatId));
+		return chats.filter(
+			(chat) => chat.archivedAt === null && !cloudIds.has(chat.id),
+		);
+	}, [chats, cloudChats]);
 
 	// One merged timeline inside the group: local chats and same-repo chats on
 	// other computers interleave by recency instead of forming sections.
@@ -1198,10 +1258,17 @@ function ProjectGroup({
 			row,
 			updatedAt: row.ref.chat.updatedAt.getTime(),
 		}));
-		return [...local, ...remote].sort(
+		const cloud = (cloudChats ?? [])
+			.filter((summary) => summary.state !== "archived")
+			.map((summary) => ({
+				kind: "cloud" as const,
+				summary,
+				updatedAt: summary.lastMessageAt ?? summary.createdAt,
+			}));
+		return [...local, ...remote, ...cloud].sort(
 			(left, right) => right.updatedAt - left.updatedAt,
 		);
-	}, [visibleChats, remoteChats]);
+	}, [visibleChats, remoteChats, cloudChats]);
 
 	// Surface the highest-priority attention hint on the collapsed project
 	// header when any session inside this project needs attention.
@@ -1358,17 +1425,145 @@ function ProjectGroup({
 					{chatRows.map((entry) =>
 						entry.kind === "local" ? (
 							<ChatRow key={entry.chat.id} chat={entry.chat} />
-						) : (
+						) : entry.kind === "remote" ? (
 							<CatalogChatRow
 								key={`${entry.row.ref.environmentId}:${entry.row.ref.chat.id}`}
 								chatRef={entry.row.ref}
 								connected={entry.row.connected}
+							/>
+						) : (
+							<CloudChatRow
+								key={entry.summary.chatId}
+								summary={entry.summary}
+								projectId={id}
 							/>
 						),
 					)}
 				</ul>
 			</li>
 		</Fragment>
+	);
+}
+
+function CloudChatRow({
+	summary,
+	projectId,
+}: {
+	readonly summary: CloudChatSummary;
+	readonly projectId: FolderId;
+}) {
+	const selectedChatId = useChatsStore((state) => state.selectedChatId);
+	const historyLoading = useCloudChatsStore(
+		(state) => state.historyLoadingByChat[summary.chatId] === true,
+	);
+	const archive = useCloudChatsStore((state) => state.archive);
+	const [archiving, setArchiving] = useState(false);
+	const runtimeState = useSessionRuntimeStore((state) =>
+		effectiveSessionRuntimeState(state.bySession[summary.initialSessionId]),
+	);
+	const attachment = useCloudExecutionStore(
+		(state) => state.stateByWorkspace[summary.workspaceId] ?? "detached",
+	);
+	const command = useCloudChatsStore(
+		(state) => state.commandByWorkspace[summary.workspaceId]?.state ?? null,
+	);
+	const activity = deriveCloudChatActivity({
+		summary,
+		attachment,
+		runtime: runtimeState,
+		command,
+	});
+	const presentation = cloudChatRowPresentation(summary, activity);
+	const label = presentation.label;
+	const archivePending =
+		summary.desiredState === "archived" && summary.state !== "failed";
+	const cloudWorkspaceLoading = presentation.busy;
+	const selected = selectedChatId === summary.chatId;
+	const open = () => {
+		void openCloudChat(summary, projectId).catch((cause) =>
+			toastManager.add({
+				type: "error",
+				title: "Cloud chat could not refresh",
+				description: formatError(cause),
+			}),
+		);
+	};
+	const archiveChat = () => {
+		if (archiving || archivePending) return;
+		setArchiving(true);
+		void archive(summary)
+			.catch((cause) =>
+				toastManager.add({
+					type: "error",
+					title: "Cloud chat could not be archived",
+					description: formatError(cause),
+				}),
+			)
+			.finally(() => setArchiving(false));
+	};
+	return (
+		<li>
+			{/* biome-ignore lint/a11y/useSemanticElements: the row contains a nested archive action. */}
+			<div
+				role="button"
+				tabIndex={0}
+				aria-label={`${summary.title}. ${label}`}
+				aria-busy={cloudWorkspaceLoading || historyLoading || undefined}
+				className={cn(
+					"group flex min-h-7 w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent/40 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+					selected && "bg-sidebar-accent text-sidebar-accent-foreground",
+				)}
+				onClick={open}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						event.preventDefault();
+						open();
+					}
+				}}
+			>
+				<span className="ml-3 inline-grid size-5 shrink-0 place-items-center">
+					<BranchIcon state="default" selected={selected} />
+				</span>
+				<span className="min-w-0 flex-1 truncate">{summary.title}</span>
+				<div className="flex h-4 shrink-0 items-center justify-end gap-1">
+					<span className="text-[9px] text-muted-foreground/70 group-hover:hidden group-focus-within:hidden">
+						{label}
+					</span>
+					<button
+						type="button"
+						disabled={archiving || archivePending}
+						onClick={(event) => {
+							event.stopPropagation();
+							archiveChat();
+						}}
+						className="hidden rounded-md p-0.5 text-muted-foreground hover:text-sidebar-accent-foreground group-hover:flex group-focus-within:flex"
+						aria-label={`${summary.state === "failed" && summary.desiredState === "archived" ? "Retry archiving" : "Archive"} ${summary.title}`}
+						title={
+							summary.state === "failed" && summary.desiredState === "archived"
+								? "Retry archive"
+								: "Archive"
+						}
+					>
+						{archiving ? (
+							<Spinner className="size-3.5" />
+						) : (
+							<HugeiconsIcon icon={ArchiveArrowDownIcon} className="size-3.5" />
+						)}
+					</button>
+					{cloudWorkspaceLoading || historyLoading ? (
+						<Spinner className="size-3 shrink-0 motion-reduce:animate-none" />
+					) : null}
+					<HugeiconsIcon
+						icon={CloudIcon}
+						aria-hidden
+						className={cn(
+							"size-3 shrink-0",
+							summary.state === "paused" && "opacity-55",
+						)}
+					/>
+				</div>
+			</div>
+		</li>
 	);
 }
 

@@ -1,7 +1,10 @@
 import type { MachineRecord } from "@zuse/contracts";
 import { describe, expect, it } from "vitest";
 
-import { cloudMachineProgress } from "../../src/lib/cloud-machine-progress.ts";
+import {
+	cloudMachineProgress,
+	cloudMachineProgressSteps,
+} from "../../src/lib/cloud-machine-progress.ts";
 
 const progressFor = (
 	state: MachineRecord["state"],
@@ -75,5 +78,9 @@ describe("cloud machine progress", () => {
 			label: "Setup interrupted",
 			tone: "error",
 		});
+	});
+
+	it("uses the persistent server setup steps", () => {
+		expect(cloudMachineProgressSteps()).toHaveLength(7);
 	});
 });

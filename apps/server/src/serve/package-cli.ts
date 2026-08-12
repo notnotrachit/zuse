@@ -15,7 +15,7 @@ import { Effect } from "effect";
 import { SessionStoreLive } from "../auth/layers/session-store.ts";
 import { refreshSession, type SessionBundle } from "../auth/layers/workos.ts";
 import { SessionStore } from "../auth/services/session-store.ts";
-import { runHeadlessServer } from "../bin.ts";
+import { runHeadlessServer, type ServeOptions } from "../bin.ts";
 import { SUPPORTED_PROVIDER_CLIS } from "../provider/provider-cli-registry.ts";
 import { parseServeCommand } from "./command.ts";
 import { ensureServeSession } from "./device-login.ts";
@@ -78,6 +78,28 @@ export const requiresServeAccountAuthorization = (input: {
 	readonly sshManaged: boolean;
 	readonly tailscale: boolean;
 }): boolean => !input.sshManaged && !input.tailscale;
+
+export const shouldAutoLinkForeground = (input: {
+	readonly sshManaged: boolean;
+	readonly tailscale: boolean;
+	readonly cloudWorkspaceId?: string;
+}): boolean =>
+	!input.sshManaged && !input.tailscale && input.cloudWorkspaceId === undefined;
+
+export const foregroundServeOptions = (
+	env: NodeJS.ProcessEnv,
+	command: { readonly sshManaged: boolean; readonly dataDir?: string },
+	tailnetOrigin?: string,
+): ServeOptions => ({
+	host: env.ZUSE_HOST ?? "127.0.0.1",
+	port: Number(env.ZUSE_PORT ?? 4859),
+	dataDir: resolveServeDataDir(env, command.dataDir),
+	staticDir: undefined,
+	open: false,
+	policy: command.sshManaged ? "local" : "protected",
+	pairing: !command.sshManaged && env.ZUSE_ENABLE_PAIRING !== "0",
+	pairingPublicBaseUrl: tailnetOrigin,
+});
 
 export const resolveServeDataDir = (
 	env: NodeJS.ProcessEnv,
@@ -451,19 +473,18 @@ export const runServePackageCli = async (
 	};
 
 	if (command.action === "start" && command.foreground) {
-		if (!command.sshManaged && !command.tailscale)
+		if (
+			shouldAutoLinkForeground({
+				sshManaged: command.sshManaged,
+				tailscale: command.tailscale,
+				cloudWorkspaceId: env.ZUSE_CLOUD_WORKSPACE_ID,
+			})
+		)
 			env.ZUSE_SERVE_AUTO_LINK = "1";
 		const tailnetOrigin = await enableTailnet();
-		runHeadlessServer({
-			host: "127.0.0.1",
-			port: Number(env.ZUSE_PORT ?? 4859),
-			dataDir,
-			staticDir: undefined,
-			open: false,
-			policy: command.sshManaged ? "local" : "protected",
-			pairing: !command.sshManaged,
-			pairingPublicBaseUrl: tailnetOrigin ?? undefined,
-		});
+		runHeadlessServer(
+			foregroundServeOptions(env, command, tailnetOrigin ?? undefined),
+		);
 		return;
 	}
 

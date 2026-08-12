@@ -14,6 +14,14 @@ const credentialCleanupMigrationUrl = new URL(
 	"../../drizzle/migrations/0004_credential_cleanup_handshake.sql",
 	import.meta.url,
 );
+const cloudWorkspaceMigrationUrl = new URL(
+	"../../drizzle/migrations/0005_thin_rawhide_kid.sql",
+	import.meta.url,
+);
+const cloudChatEncryptionMigrationUrl = new URL(
+	"../../drizzle/migrations/0006_cloud_chat_encryption.sql",
+	import.meta.url,
+);
 
 describe("relay migration reconciliation", () => {
 	test("keeps the main migration history before managed cloud machines", async () => {
@@ -30,7 +38,43 @@ describe("relay migration reconciliation", () => {
 			{ idx: 2, tag: "0002_absurd_leader" },
 			{ idx: 3, tag: "0003_managed_cloud_machines" },
 			{ idx: 4, tag: "0004_credential_cleanup_handshake" },
+			{ idx: 5, tag: "0005_thin_rawhide_kid" },
+			{ idx: 6, tag: "0006_cloud_chat_encryption" },
 		]);
+	});
+
+	test("moves chat content into nullable encrypted envelopes", async () => {
+		const migration = await readFile(cloudChatEncryptionMigrationUrl, "utf8");
+		expect(migration).toContain('"chat_metadata_ciphertext" text');
+		expect(
+			migration.match(/ADD COLUMN "encrypted_payload" text/gu),
+		).toHaveLength(2);
+		expect(migration).toContain(
+			'"relay_cloud_workspace_commands" ALTER COLUMN "payload" DROP NOT NULL',
+		);
+		expect(migration).toContain(
+			'"relay_cloud_workspace_events" ALTER COLUMN "payload_json" DROP NOT NULL',
+		);
+	});
+
+	test("separates durable cloud control-plane resources from machine enrollment", async () => {
+		const migration = await readFile(cloudWorkspaceMigrationUrl, "utf8");
+		for (const table of [
+			"relay_cloud_projects",
+			"relay_cloud_project_builds",
+			"relay_cloud_workspaces",
+			"relay_cloud_credential_connections",
+			"relay_cloud_workspace_connection_grants",
+			"relay_cloud_workspace_commands",
+			"relay_cloud_workspace_events",
+			"relay_cloud_workspace_usage",
+		])
+			expect(migration).toContain(`CREATE TABLE "${table}"`);
+		expect(migration).toContain("relay_cloud_workspaces_active_branch_idx");
+		expect(migration).toContain("'cloud-workspace'");
+		expect(migration).toContain('"runtime_boot_token_hash" text');
+		expect(migration).not.toContain('"environment_id" text NOT NULL');
+		expect(migration).not.toContain('"enrolled_environment_public_key"');
 	});
 
 	test("converges both existing staging and main databases idempotently", async () => {

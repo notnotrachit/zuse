@@ -14,6 +14,7 @@ import {
 } from "./rpc-client.ts";
 import {
 	createTerminalInputPump,
+	retainPendingInitialInput,
 	type TerminalInputPump,
 } from "./terminal-input-pump.ts";
 
@@ -40,6 +41,9 @@ type LiveTerminal = {
 	streamEpoch: number;
 	streamFiber: Fiber.Fiber<unknown, unknown> | null;
 	inputPump: TerminalInputPump | null;
+	pendingInitialInput: string;
+	initialInputInFlight: boolean;
+	onInitialInputWritten: (() => void) | null;
 	disposables: { dispose: () => void } | null;
 	unsubscribeConnection: (() => void) | null;
 	resizeTimer: ReturnType<typeof setTimeout> | null;
@@ -58,6 +62,25 @@ const RESIZE_DEBOUNCE_MS = 75;
 const registry = new Map<string, LiveTerminal>();
 const statusListeners = new Set<() => void>();
 let statusSnapshot: Readonly<Record<string, TerminalRuntimeStatus>> = {};
+
+const flushInitialInput = (live: LiveTerminal): void => {
+	if (
+		live.inputPump === null ||
+		live.pendingInitialInput.length === 0 ||
+		live.initialInputInFlight
+	)
+		return;
+	const expected = live.pendingInitialInput;
+	live.initialInputInFlight = true;
+	void live.inputPump.enqueueAndWait(expected).then((written) => {
+		live.initialInputInFlight = false;
+		if (!written || live.pendingInitialInput !== expected) return;
+		live.pendingInitialInput = "";
+		const onWritten = live.onInitialInputWritten;
+		live.onInitialInputWritten = null;
+		onWritten?.();
+	});
+};
 
 export const terminalRuntimeKey = (
 	environmentId: string,
@@ -440,6 +463,8 @@ async function openPty(
 	opts: {
 		readonly cwd: string;
 		readonly command?: TerminalInstance["command"];
+		readonly initialInput?: string;
+		readonly onInitialInputWritten?: () => void;
 	},
 ): Promise<void> {
 	try {
@@ -487,6 +512,9 @@ async function openPty(
 				});
 			},
 		});
+		if (live.pendingInitialInput.length > 0) {
+			flushInitialInput(live);
+		}
 		scheduleFit(live);
 		scheduleResize(live);
 		if (live.connectedGeneration !== null) {
@@ -506,6 +534,8 @@ function makeLive(
 	opts: {
 		readonly cwd: string;
 		readonly command?: TerminalInstance["command"];
+		readonly initialInput?: string;
+		readonly onInitialInputWritten?: () => void;
 	},
 ): LiveTerminal {
 	const host = document.createElement("div");
@@ -573,6 +603,9 @@ function makeLive(
 		streamEpoch: 0,
 		streamFiber: null,
 		inputPump: null,
+		pendingInitialInput: opts.initialInput ?? "",
+		initialInputInFlight: false,
+		onInitialInputWritten: opts.onInitialInputWritten ?? null,
 		disposables: null,
 		unsubscribeConnection: null,
 		resizeTimer: null,
@@ -607,6 +640,8 @@ export function attach(
 	opts: {
 		readonly cwd: string;
 		readonly command?: TerminalInstance["command"];
+		readonly initialInput?: string;
+		readonly onInitialInputWritten?: () => void;
 	},
 ): void {
 	const key = terminalRuntimeKey(environmentId, instanceId);
@@ -619,6 +654,17 @@ export function attach(
 		existing.lastHostWidth = 0;
 		existing.lastHostHeight = 0;
 		scheduleFit(existing);
+		if (opts.initialInput !== undefined && opts.initialInput.length > 0) {
+			// React may remount while the cloud PTY write is still awaiting its
+			// acknowledgement. The retained terminal owns that trigger until it is
+			// acknowledged, so the remount only replaces the completion callback.
+			existing.pendingInitialInput = retainPendingInitialInput(
+				existing.pendingInitialInput,
+				opts.initialInput,
+			);
+			existing.onInitialInputWritten = opts.onInitialInputWritten ?? null;
+			flushInitialInput(existing);
+		}
 		return;
 	}
 	registry.set(key, makeLive(environmentId, instanceId, container, opts));

@@ -1,6 +1,6 @@
 import type { MachineRecord } from "@zuse/contracts";
 
-export const cloudMachineProgressSteps = [
+const persistentProgressSteps = [
 	"Payment confirmed",
 	"Creating server",
 	"Installing runtime",
@@ -9,6 +9,8 @@ export const cloudMachineProgressSteps = [
 	"Connecting securely",
 	"Ready",
 ] as const;
+
+export const cloudMachineProgressSteps = () => persistentProgressSteps;
 
 export type CloudMachineProgress = Readonly<{
 	activeStep: number | null;
@@ -156,9 +158,10 @@ export const cloudMachineProgress = (
 				tone: "error",
 			};
 		case "suspension-queued":
+		case "cancellation-scheduled":
 			return {
 				activeStep,
-				detail: "Your machine will stop at the end of its paid period.",
+				detail: "You can continue using it through the paid period.",
 				headline: "Cancellation scheduled",
 				label: "Cancellation scheduled",
 				tone: "warning",
@@ -196,14 +199,6 @@ export const cloudMachineProgress = (
 				headline: "Cloud machine removed",
 				label: "Removed",
 				tone: "success",
-			};
-		case "cancellation-scheduled":
-			return {
-				activeStep,
-				detail: "You can continue using it through the paid period.",
-				headline: "Cancellation scheduled",
-				label: "Cancellation scheduled",
-				tone: "warning",
 			};
 	}
 };

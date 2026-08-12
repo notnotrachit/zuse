@@ -5,6 +5,11 @@ import {
 } from "@zuse/billing-providers";
 import { RelayPaths } from "@zuse/contracts";
 import { MachineProvidersFake } from "@zuse/machine-providers/testing";
+import {
+	type SandboxProviderAdapter,
+	SandboxProviders,
+} from "@zuse/sandbox-providers";
+import { SandboxProvidersFake } from "@zuse/sandbox-providers/testing";
 import { Effect, Layer, Redacted } from "effect";
 import {
 	exportJWK,
@@ -19,6 +24,12 @@ import * as Config from "../../src/config.ts";
 import type { RelayContext } from "../../src/handler.ts";
 import {
 	AccountIdentity,
+	CloudChatCipher,
+	CloudChatCipherLive,
+	CloudCredentialVault,
+	CloudCredentialVaultLive,
+	CloudWorkspaceStoreMemory,
+	type MachineControlConfig,
 	MachineControlConfiguration,
 	MachineStoreMemory,
 	ManagedTunnelProviderLive,
@@ -26,6 +37,7 @@ import {
 	PushDelivery,
 	RelayStoreMemory,
 } from "../../src/index.ts";
+import { SandboxOfferConfiguration } from "../../src/sandbox-provider-module.ts";
 import { WorkosVerifierTest } from "../../src/workos.ts";
 
 const RELAY_ISSUER = "https://relay.test";
@@ -83,12 +95,36 @@ let pushCalls: ReadonlyArray<{
 }>[];
 let identityDeletes: string[];
 
+const placementAdapter = (providerId: string): SandboxProviderAdapter => ({
+	providerId,
+	displayName: "Fast compute",
+	templateVersion: "test-template",
+	create: () => Effect.die("unused"),
+	fork: () => Effect.die("unused"),
+	recoverByLabel: () => Effect.succeed(null),
+	startProcess: () => Effect.void,
+	pathExists: () => Effect.succeed(false),
+	readTextFile: () => Effect.succeed(""),
+	writeTextFile: () => Effect.void,
+	inspect: () => Effect.succeed(null),
+	resolveEndpoint: () => Effect.die("unused"),
+	pause: () => Effect.void,
+	resume: () => Effect.die("unused"),
+	extendTimeout: () => Effect.void,
+	setNetwork: () => Effect.void,
+	snapshot: () => Effect.die("unused"),
+	kill: () => Effect.void,
+	deleteSnapshot: () => Effect.void,
+});
+
 const makeLayer = async (
 	managedTunnel?: Config.ManagedTunnelConfig,
 	billingLayerOrMaxEnvironments:
 		| Layer.Layer<BillingProviders>
 		| number = BillingProvidersManual,
 	liveCheckoutEnabled = false,
+	machineControlOverrides: Partial<MachineControlConfig> = {},
+	sandboxProvidersLayer: Layer.Layer<SandboxProviders> = SandboxProvidersFake,
 ): Promise<Layer.Layer<RelayContext>> => {
 	const billingLayer =
 		typeof billingLayerOrMaxEnvironments === "number"
@@ -107,6 +143,10 @@ const makeLayer = async (
 			JSON.stringify(await exportJWK(mintKey.privateKey)),
 		),
 		mintPublicKey: JSON.stringify(await exportJWK(mintKey.publicKey)),
+		cloudChatEncryptionKeys: {
+			test: Redacted.make("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		},
+		cloudChatEncryptionActiveKeyId: "test",
 		managedTunnel,
 		maxEnvironmentsPerAccount,
 	});
@@ -133,7 +173,22 @@ const makeLayer = async (
 		WorkosVerifierTest,
 		RelayStoreMemory,
 		MachineStoreMemory,
+		CloudWorkspaceStoreMemory,
+		Layer.effect(CloudCredentialVault, CloudCredentialVaultLive).pipe(
+			Layer.provide(configLayer),
+			Layer.orDie,
+		),
+		Layer.effect(CloudChatCipher, CloudChatCipherLive).pipe(
+			Layer.provide(configLayer),
+			Layer.orDie,
+		),
 		MachineProvidersFake,
+		sandboxProvidersLayer,
+		Layer.succeed(SandboxOfferConfiguration, {
+			port: 47_837,
+			createTimeoutSeconds: 86_400,
+			keepAliveTimeoutSeconds: 86_400,
+		}),
 		billingLayer,
 		Layer.succeed(MachineControlConfiguration, {
 			allowlistedAccountIds: new Set(["user_a", "user_b"]),
@@ -143,6 +198,7 @@ const makeLayer = async (
 			recoveryWindowMs: 7 * 24 * 60 * 60 * 1_000,
 			finalSnapshotRetentionMs: 14 * 24 * 60 * 60 * 1_000,
 			reconcileLeaseMs: 5 * 60 * 1_000,
+			...machineControlOverrides,
 		}),
 		ManagedTunnelProviderLive.pipe(Layer.provide(configLayer)),
 		pushLayer,
@@ -155,6 +211,10 @@ const requestEnvironmentLink = async (input: {
 	environmentId: string;
 	runtimeVersion?: string;
 	wireProtocolVersion?: number;
+	endpoint?: {
+		readonly httpBaseUrl: string;
+		readonly wsBaseUrl: string;
+	};
 }): Promise<{ envKey: KeyPair; response: Response }> => {
 	const bearer = `test-token:${input.account}`;
 	const challengeRes = await relay.fetch(
@@ -187,7 +247,7 @@ const requestEnvironmentLink = async (input: {
 				environmentId: input.environmentId,
 				environmentPublicKey: JSON.stringify(await exportJWK(envKey.publicKey)),
 				providerKind: "desktop",
-				endpoint: {
+				endpoint: input.endpoint ?? {
 					httpBaseUrl: "http://127.0.0.1:8787",
 					wsBaseUrl: "ws://127.0.0.1:8787/rpc",
 				},
@@ -210,6 +270,10 @@ const linkEnvironment = async (input: {
 	environmentId: string;
 	runtimeVersion?: string;
 	wireProtocolVersion?: number;
+	endpoint?: {
+		readonly httpBaseUrl: string;
+		readonly wsBaseUrl: string;
+	};
 }): Promise<{ envKey: KeyPair; credential: string }> => {
 	const { envKey, response: linkRes } = await requestEnvironmentLink(input);
 	expect(linkRes.status).toBe(200);
@@ -268,7 +332,7 @@ beforeEach(async () => {
 });
 
 describe("@zuse/relay", () => {
-	test("offers one server-owned alpha machine and makes creation idempotent", async () => {
+	test("offers each server-owned cloud machine and makes creation idempotent", async () => {
 		const headers = {
 			authorization: "Bearer test-token:user_a",
 			"content-type": "application/json",
@@ -281,6 +345,7 @@ describe("@zuse/relay", () => {
 			offers: [
 				{
 					offerId: "persistent-standard-v1",
+					kind: "persistent",
 					vcpuCount: 4,
 					memoryMib: 8192,
 					diskGib: 80,
@@ -415,6 +480,57 @@ describe("@zuse/relay", () => {
 			expect(completion.status).toBe(200);
 			expect(completion.headers.get("content-type")).toContain("text/html");
 			expect(await completion.text()).toContain("Return to Zuse");
+		} finally {
+			await billingRelay.dispose();
+		}
+	});
+
+	test("creates cloud workspace entitlement checkout without provider placement", async () => {
+		let checkoutInput:
+			| Parameters<BillingProviderAdapter["checkout"]>[0]
+			| undefined;
+		const billing: BillingProviderAdapter = {
+			providerId: "billing-test",
+			checkout: (input) => {
+				checkoutInput = input;
+				return Effect.succeed("https://billing.test/sandbox-checkout");
+			},
+			verifyEvent: () => Effect.die("unused"),
+			reconcileSubscription: () => Effect.die("unused"),
+			cancel: () => Effect.void,
+			customerPortal: () => Effect.succeed("https://billing.test/portal"),
+		};
+		const billingRelay = makeRelay(
+			await makeLayer(
+				undefined,
+				BillingProviders.layer({
+					adapters: [billing],
+					defaultProviderId: billing.providerId,
+				}).pipe(Layer.orDie),
+				true,
+			),
+		);
+
+		try {
+			const response = await billingRelay.fetch(
+				new Request(`${RELAY_ISSUER}${RelayPaths.billingCheckout}`, {
+					method: "POST",
+					headers: {
+						authorization: "Bearer test-token:user_a",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						offerId: "cloud-workspace-standard-v1",
+					}),
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(checkoutInput).toMatchObject({
+				accountId: "user_a",
+				offerId: "cloud-workspace-standard-v1",
+			});
+			expect(checkoutInput).not.toHaveProperty("fulfillmentMetadata");
 		} finally {
 			await billingRelay.dispose();
 		}
@@ -1029,6 +1145,48 @@ describe("@zuse/relay", () => {
 		});
 	});
 
+	test("accepts a public HTTPS endpoint when managed connectivity is required", async () => {
+		const environmentId = "env_public_endpoint";
+		await linkEnvironment({
+			account: "user_public_endpoint",
+			environmentId,
+			wireProtocolVersion: 2,
+			endpoint: {
+				httpBaseUrl: "https://47837-sandbox.sandbox.test",
+				wsBaseUrl: "wss://47837-sandbox.sandbox.test",
+			},
+		});
+		const device = (await ec()) as KeyPair;
+		const jwk = await exportJWK(device.publicKey);
+		const accessToken = await mintAccess("user_public_endpoint", device, jwk);
+		const connectUrl = `${RELAY_ISSUER}/v1/environments/${environmentId}/connect`;
+		const response = await relay.fetch(
+			new Request(connectUrl, {
+				method: "POST",
+				headers: {
+					authorization: `DPoP ${accessToken}`,
+					dpop: await dpopProof(device, jwk, {
+						method: "POST",
+						url: connectUrl,
+					}),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					wireProtocolVersion: 2,
+					requireManaged: true,
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			endpoint: {
+				httpBaseUrl: "https://47837-sandbox.sandbox.test",
+				wsBaseUrl: "wss://47837-sandbox.sandbox.test",
+			},
+		});
+	});
+
 	test("rejects a request with no WorkOS bearer", async () => {
 		const res = await relay.fetch(
 			new Request(`${RELAY_ISSUER}/v1/environments`, { method: "GET" }),
@@ -1565,5 +1723,90 @@ describe("@zuse/relay managed tunnel", () => {
 		};
 		expect(body.connectorToken).toBeUndefined();
 		expect(body.endpoint.wsBaseUrl).toBe("ws://127.0.0.1:8787/rpc"); // LAN fallback
+	});
+
+	test("connects cloud projects idempotently and queues provider-scoped builds", async () => {
+		const provider = placementAdapter("fake");
+		relay = makeRelay(
+			await makeLayer(
+				undefined,
+				BillingProvidersManual,
+				false,
+				{},
+				SandboxProviders.layer({
+					registrations: [{ adapter: provider }],
+					defaultProviderId: provider.providerId,
+				}).pipe(Layer.orDie),
+			),
+		);
+		const connect = () =>
+			relay.fetch(
+				new Request(`${RELAY_ISSUER}${RelayPaths.cloudProjects}`, {
+					method: "POST",
+					headers: {
+						authorization: "Bearer test-token:user_a",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						repositoryUrl: "https://github.com/acme/app",
+						defaultBranch: "main",
+						visibility: "public",
+						idempotencyKey: "connect-app",
+					}),
+				}),
+			);
+		const first = await connect();
+		expect(first.status).toBe(201);
+		const project = (await first.json()) as { projectId: string };
+		const duplicate = await connect();
+		expect((await duplicate.json()) as { projectId: string }).toMatchObject({
+			projectId: project.projectId,
+		});
+
+		const prepare = await relay.fetch(
+			new Request(
+				`${RELAY_ISSUER}${RelayPaths.cloudProjectPrepare(project.projectId)}`,
+				{
+					method: "POST",
+					headers: {
+						authorization: "Bearer test-token:user_a",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						projectId: project.projectId,
+						providerId: "fake",
+						idempotencyKey: "prepare-app",
+					}),
+				},
+			),
+		);
+		expect(prepare.status).toBe(202);
+		expect(prepare.headers.get("x-zuse-reconcile-cloud-build")).toBeTruthy();
+		expect(await prepare.json()).toMatchObject({
+			projectId: project.projectId,
+			providerId: "fake",
+			state: "queued",
+		});
+	});
+
+	test("rejects repository URLs containing credentials", async () => {
+		relay = makeRelay(await makeLayer());
+		const response = await relay.fetch(
+			new Request(`${RELAY_ISSUER}${RelayPaths.cloudProjects}`, {
+				method: "POST",
+				headers: {
+					authorization: "Bearer test-token:user_a",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					repositoryUrl: "https://token@github.com/acme/app.git",
+					defaultBranch: "main",
+					visibility: "private",
+					idempotencyKey: "unsafe",
+				}),
+			}),
+		);
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_repository");
 	});
 });

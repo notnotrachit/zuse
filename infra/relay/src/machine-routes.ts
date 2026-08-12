@@ -1,6 +1,7 @@
 import { BillingProviders } from "@zuse/billing-providers";
 import {
 	BillingCheckoutRequest,
+	CLOUD_WORKSPACE_OFFER_ID,
 	type MachineBootPhase,
 	MachineBootStatusRequest,
 	MachineCreateRequest,
@@ -33,7 +34,11 @@ import {
 } from "./errors.ts";
 import { MachineControlConfiguration } from "./machine-config.ts";
 import { requestMachineDestruction } from "./machine-lifecycle.ts";
-import { findMachineOffer, MACHINE_OFFERS } from "./machine-offers.ts";
+import {
+	findMachineOffer,
+	MACHINE_OFFERS,
+	offerIdsOfKind,
+} from "./machine-offers.ts";
 import { machineProviderLabel } from "./machine-provider-label.ts";
 import {
 	type EntitlementPersistenceRecord,
@@ -52,6 +57,17 @@ export type MachineRouteContext =
 	| RelayConfiguration
 	| RelayStore
 	| ManagedTunnelProvider;
+
+const persistentProviderId = Effect.fn("persistentProviderId")(function* () {
+	return (yield* (yield* MachineProviders).getDefault).providerId;
+});
+
+const offerIsAvailable = (
+	offerId: string,
+	config: { readonly availableOfferIds?: ReadonlySet<string> },
+): boolean =>
+	(findMachineOffer(offerId)?.available ?? false) &&
+	(config.availableOfferIds?.has(offerId) ?? true);
 
 const json = (body: unknown, status = 200): Response =>
 	new Response(JSON.stringify(body), {
@@ -469,10 +485,19 @@ export const routeMachineRequest = (
 					`${billing.providerId}:${subscription.providerSubscriptionId}`,
 				)
 			).slice(0, 24)}`;
+			const subscriptionOffer =
+				subscription.offerId === CLOUD_WORKSPACE_OFFER_ID
+					? undefined
+					: subscription.offerId === undefined
+						? undefined
+						: findMachineOffer(subscription.offerId);
 			const entitlement: EntitlementPersistenceRecord = {
 				entitlementId,
 				accountId: subscription.accountId,
-				kind: "persistent-machine",
+				kind:
+					subscription.offerId === CLOUD_WORKSPACE_OFFER_ID
+						? "cloud-workspace"
+						: "persistent-machine",
 				offerId: subscription.offerId,
 				provider: billing.providerId,
 				providerSubscriptionId: subscription.providerSubscriptionId,
@@ -483,21 +508,23 @@ export const routeMachineRequest = (
 				updatedAtMs: nowMs,
 			};
 			const machineConfig = yield* MachineControlConfiguration;
+			const offer = subscriptionOffer;
 			const shouldProvision =
 				subscription.status === "active" &&
+				offer !== undefined &&
 				machineConfig.allowlistedAccountIds.has(subscription.accountId);
 			const machineId = shouldProvision
 				? yield* randomToken("machine", 12)
 				: undefined;
-			const providers = yield* MachineProviders;
-			const provider = shouldProvision
-				? yield* providers.getDefault.pipe(
+			const computeProviderId = shouldProvision
+				? yield* persistentProviderId().pipe(
 						Effect.mapError(() =>
 							serviceUnavailable("machine_provider_unavailable"),
 						),
 					)
 				: undefined;
 			const outcome = yield* store.applyBillingEvent({
+				sameKindOfferIds: offer === undefined ? [] : offerIdsOfKind(offer.kind),
 				event: {
 					provider: billing.providerId,
 					eventId: event.eventId,
@@ -505,12 +532,12 @@ export const routeMachineRequest = (
 				},
 				entitlement,
 				provisioning:
-					machineId === undefined || provider === undefined
+					machineId === undefined || computeProviderId === undefined
 						? undefined
 						: {
 								machineId,
 								idempotencyKey: `billing:${entitlementId}`,
-								provider: provider.providerId,
+								provider: computeProviderId,
 								providerLabel: machineProviderLabel(machineId),
 							},
 				recoveryWindowMs: machineConfig.recoveryWindowMs,
@@ -523,7 +550,9 @@ export const routeMachineRequest = (
 			});
 			if (
 				outcome.machine !== undefined &&
-				(outcome.machineCreated || outcome.machine.state === "creating")
+				(outcome.machineCreated ||
+					outcome.machine.state === "creating" ||
+					outcome.machine.state === "resuming")
 			) {
 				response.headers.set(
 					"x-zuse-reconcile-machine",
@@ -565,26 +594,6 @@ export const routeMachineRequest = (
 			});
 
 			const relayStore = yield* RelayStore;
-			const claimed = yield* relayStore.registerEnvironment(
-				{
-					environmentId: body.environmentId,
-					accountId: machine.accountId,
-					providerKind: "cloud",
-					label: body.label ?? machine.label,
-					environmentPublicKey: body.environmentPublicKey,
-					httpBaseUrl: body.endpoint.httpBaseUrl,
-					wsBaseUrl: body.endpoint.wsBaseUrl,
-					linkedAtMs: nowMs,
-				},
-				// An entitled managed machine has its own one-machine-per-account
-				// limit. Do not strand an already-provisioned VPS behind the hosted
-				// computer catalog limit.
-				null,
-				"preserve-identity",
-			);
-			if (!claimed) {
-				return yield* Effect.fail(conflict("enrollment_identity_conflict"));
-			}
 			const tunnel = yield* ManagedTunnelProvider;
 			if (!tunnel.enabled) {
 				return yield* Effect.fail(
@@ -596,6 +605,30 @@ export const routeMachineRequest = (
 				environmentId: body.environmentId,
 				origin: body.origin,
 			});
+			const endpoint = {
+				httpBaseUrl: `https://${provisioned.tunnelHostname}`,
+				wsBaseUrl: `wss://${provisioned.tunnelHostname}`,
+			};
+			const claimed = yield* relayStore.registerEnvironment(
+				{
+					environmentId: body.environmentId,
+					accountId: machine.accountId,
+					providerKind: "cloud",
+					label: body.label ?? machine.label,
+					environmentPublicKey: body.environmentPublicKey,
+					httpBaseUrl: endpoint.httpBaseUrl,
+					wsBaseUrl: endpoint.wsBaseUrl,
+					linkedAtMs: nowMs,
+				},
+				// An entitled managed machine has its own one-machine-per-account
+				// limit. Do not strand an already-provisioned VPS behind the hosted
+				// computer catalog limit.
+				null,
+				"preserve-identity",
+			);
+			if (!claimed) {
+				return yield* Effect.fail(conflict("enrollment_identity_conflict"));
+			}
 			yield* relayStore.setTunnelAllocation(body.environmentId, {
 				tunnelHostname: provisioned.tunnelHostname,
 				tunnelId: provisioned.tunnelId,
@@ -646,6 +679,7 @@ export const routeMachineRequest = (
 			}
 			if (!completed) {
 				if (machine.enrolledEnvironmentPublicKey === undefined) {
+					const tunnel = yield* ManagedTunnelProvider;
 					yield* tunnel
 						.deprovision({
 							tunnelId: provisioned.tunnelId,
@@ -677,15 +711,12 @@ export const routeMachineRequest = (
 
 			return json({
 				environmentId: body.environmentId,
-				endpoint: {
-					httpBaseUrl: `https://${provisioned.tunnelHostname}`,
-					wsBaseUrl: `wss://${provisioned.tunnelHostname}`,
-				},
+				endpoint,
 				relayIssuer: config.relayIssuer,
 				environmentCredential: credentialSecret,
 				mintPublicKey: config.mintPublicKey,
-				tunnelHostname: provisioned.tunnelHostname,
-				connectorToken: provisioned.connectorToken,
+				tunnelHostname: provisioned?.tunnelHostname,
+				connectorToken: provisioned?.connectorToken,
 			});
 		}
 
@@ -726,7 +757,13 @@ export const routeMachineRequest = (
 
 		if (method === "GET" && path === RelayPaths.machineOffers) {
 			yield* requireMachineAlphaPrincipal(request);
-			return json({ offers: MACHINE_OFFERS });
+			const machineConfig = yield* MachineControlConfiguration;
+			return json({
+				offers: MACHINE_OFFERS.map((offer) => ({
+					...offer,
+					available: offerIsAvailable(offer.offerId, machineConfig),
+				})),
+			});
 		}
 
 		if (method === "GET" && path === RelayPaths.machines) {
@@ -739,13 +776,16 @@ export const routeMachineRequest = (
 			const principal = yield* requireMachineAlphaPrincipal(request);
 			const body = yield* decodeBody(MachineCreateRequest, request);
 			const offer = findMachineOffer(body.offerId);
-			if (offer === undefined || !offer.available) {
+			const machineConfig = yield* MachineControlConfiguration;
+			if (
+				offer === undefined ||
+				!offerIsAvailable(offer.offerId, machineConfig)
+			) {
 				return yield* Effect.fail(badRequest("invalid_machine_offer"));
 			}
 			yield* ensureManualEntitlement(principal.accountId, offer.offerId, nowMs);
 			const machineId = yield* randomToken("machine", 12);
-			const providers = yield* MachineProviders;
-			const provider = yield* providers.getDefault.pipe(
+			const providerId = yield* persistentProviderId().pipe(
 				Effect.mapError(() =>
 					serviceUnavailable("machine_provider_unavailable"),
 				),
@@ -753,9 +793,10 @@ export const routeMachineRequest = (
 			const outcome = yield* store.createMachine({
 				accountId: principal.accountId,
 				offerId: offer.offerId,
+				sameKindOfferIds: offerIdsOfKind(offer.kind),
 				idempotencyKey: body.idempotencyKey,
 				machineId,
-				provider: provider.providerId,
+				provider: providerId,
 				providerLabel: machineProviderLabel(machineId),
 				label: body.label,
 				nowMs,
@@ -798,11 +839,19 @@ export const routeMachineRequest = (
 		if (method === "POST" && path === RelayPaths.billingCheckout) {
 			const principal = yield* requireMachineAlphaPrincipal(request);
 			const body = yield* decodeBody(BillingCheckoutRequest, request);
-			if (findMachineOffer(body.offerId) === undefined) {
+			const machineConfig = yield* MachineControlConfiguration;
+			const isCloudWorkspace = body.offerId === CLOUD_WORKSPACE_OFFER_ID;
+			const offer = findMachineOffer(body.offerId);
+			if (
+				(!isCloudWorkspace && offer === undefined) ||
+				!(machineConfig.liveCheckoutOfferIds?.has(body.offerId) ?? true)
+			) {
 				return yield* Effect.fail(badRequest("invalid_machine_offer"));
 			}
-			const machineConfig = yield* MachineControlConfiguration;
-			if (!machineConfig.liveCheckoutEnabled) {
+			if (
+				!machineConfig.liveCheckoutEnabled ||
+				!(machineConfig.liveCheckoutOfferIds?.has(body.offerId) ?? true)
+			) {
 				return yield* Effect.fail(
 					serviceUnavailable("billing_approval_pending"),
 				);
@@ -825,7 +874,20 @@ export const routeMachineRequest = (
 							entitlement.status === "grace") &&
 						(entitlement.paidThroughMs === undefined ||
 							entitlement.paidThroughMs > nowMs),
-				) || machines.some((machine) => machine.state !== "destroyed");
+				) ||
+				(!isCloudWorkspace &&
+					machines.some(
+						(machine) =>
+							offerIdsOfKind(
+								findMachineOffer(body.offerId)?.kind ?? "persistent",
+							).includes(machine.offerId) &&
+							machine.state !== "destroyed" &&
+							!(
+								machine.state === "suspended" &&
+								machine.recoveryDeadlineMs !== undefined &&
+								machine.recoveryDeadlineMs > nowMs
+							),
+					));
 			if (alreadySubscribed) {
 				return yield* Effect.fail(conflict("machine_subscription_exists"));
 			}

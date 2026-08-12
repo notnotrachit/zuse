@@ -37,7 +37,11 @@ import { useQueueHydrationStore } from "./store/queue-hydration.ts";
 import { getSessionById, useSessionsStore } from "./store/sessions.ts";
 import { useSettingsStore } from "./store/settings.ts";
 import { useTerminalsStore } from "./store/terminals.ts";
-import { DEFAULT_RIGHT_PANE_WIDTH_PERCENT, useUiStore } from "./store/ui.ts";
+import {
+	DEFAULT_RIGHT_PANE_WIDTH_PERCENT,
+	openFileBelongsToProject,
+	useUiStore,
+} from "./store/ui.ts";
 import { useWorkspaceStore } from "./store/workspace.ts";
 import { useWorktreesStore } from "./store/worktrees.ts";
 
@@ -77,6 +81,11 @@ const TopBarRight = lazy(() =>
 const ChatSwitcher = lazy(() =>
 	import("./components/chat-switcher.tsx").then((module) => ({
 		default: module.ChatSwitcher,
+	})),
+);
+const CloudConnectionNotice = lazy(() =>
+	import("./components/cloud-connection-notice.tsx").then((module) => ({
+		default: module.CloudConnectionNotice,
 	})),
 );
 const CliUpgradeBanner = lazy(() =>
@@ -462,7 +471,7 @@ function MainShell() {
 	useEffect(() => {
 		if (openFile === null) return;
 		if (openFile.kind !== "text") return;
-		if (selectedFolderId !== null && openFile.folderId === selectedFolderId) {
+		if (openFileBelongsToProject(openFile, selectedFolderId)) {
 			return;
 		}
 		closeFileTab();
@@ -662,6 +671,9 @@ function MainShell() {
 												ref={setComposerNode}
 												className="pointer-events-auto mx-auto w-full max-w-[var(--chat-reading-column)] pt-1"
 											>
+												<Suspense fallback={null}>
+													<CloudConnectionNotice />
+												</Suspense>
 												<Suspense fallback={null}>
 													<CliUpgradeBanner
 														providerId={selectedSession.providerId}

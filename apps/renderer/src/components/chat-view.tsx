@@ -1,7 +1,7 @@
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Message01Icon } from "@zuse/icons/solid-rounded";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import type { Message, SessionId } from "@zuse/contracts";
+import { Message01Icon } from "@zuse/icons/solid-rounded";
 import {
 	type ReactNode,
 	useCallback,
@@ -26,6 +26,10 @@ import {
 	resolveLatestUserMessageId,
 	rowAnchorMessageId,
 } from "../lib/chat-timeline-rows.ts";
+import {
+	cloudChatShowsWorking,
+	deriveCloudChatActivity,
+} from "../lib/cloud-chat-activity.ts";
 import { markRendererInteraction } from "../lib/performance-marks.ts";
 import { effectiveSessionRuntimeState } from "../lib/session-runtime-state.ts";
 import { timelineReadingPositionStore } from "../lib/session-timeline-cache.ts";
@@ -42,6 +46,11 @@ import {
 	TranscriptScrollCoordinator,
 	type TranscriptScrollSnapshot,
 } from "../lib/transcript-scroll-coordinator.ts";
+import { useCloudExecutionStore } from "../store/cloud-chat-registry.ts";
+import {
+	useCloudChatSummaryForSession,
+	useCloudChatsStore,
+} from "../store/cloud-chats.ts";
 import {
 	acknowledgeTimelineRendered,
 	teardownLiveStreams,
@@ -62,6 +71,7 @@ import { ErrorBubble, MessageRow } from "./message-row.tsx";
 import { NextUnreadButton } from "./next-unread-button.tsx";
 import { SubagentRow } from "./subagent-row.tsx";
 import { TurnSummary } from "./turn-summary.tsx";
+import { ShimmerText } from "./ui/shimmer-text.tsx";
 import { WorktreeSetupCard } from "./worktree-setup-card.tsx";
 
 const EMPTY_MESSAGES: ReadonlyArray<Message> = [];
@@ -115,10 +125,32 @@ export function ChatView({
 	const runtimeState = useSessionRuntimeStore((state) =>
 		effectiveSessionRuntimeState(state.bySession[sessionId]),
 	);
+	const cloudSummary = useCloudChatSummaryForSession(sessionId);
+	const cloudAttachment = useCloudExecutionStore((state) =>
+		cloudSummary === null
+			? "detached"
+			: (state.stateByWorkspace[cloudSummary.workspaceId] ?? "detached"),
+	);
+	const cloudCommand = useCloudChatsStore((state) =>
+		cloudSummary === null
+			? null
+			: (state.commandByWorkspace[cloudSummary.workspaceId]?.state ?? null),
+	);
+	const cloudActivity =
+		cloudSummary === null
+			? null
+			: deriveCloudChatActivity({
+					summary: cloudSummary,
+					attachment: cloudAttachment,
+					runtime: runtimeState,
+					command: cloudCommand,
+				});
 	const inFlight =
-		runtimeState === "starting" ||
-		runtimeState === "running" ||
-		runtimeState === "stopping";
+		cloudActivity === null
+			? runtimeState === "starting" ||
+				runtimeState === "running" ||
+				runtimeState === "stopping"
+			: cloudChatShowsWorking(cloudActivity);
 	const awaitingPermissionPlanApproval = usePermissionsStore((state) => {
 		for (const request of Object.values(state.requestsById)) {
 			if (request.sessionId !== sessionId) continue;
@@ -140,6 +172,11 @@ export function ChatView({
 		void state.sessionsByProject;
 		return getSessionById(sessionId);
 	});
+	const cloudHistoryLoading = useCloudChatsStore((state) =>
+		cloudSummary === null
+			? false
+			: state.historyLoadingByChat[cloudSummary.chatId] === true,
+	);
 
 	const worktreeId = session?.worktreeId ?? null;
 	const setupActive = useWorktreesStore((state) => {
@@ -284,12 +321,14 @@ export function ChatView({
 	}, [endInset]);
 
 	useEffect(() => {
-		void hydrate(sessionId);
-		void hydrateSkills(sessionId);
+		if (cloudSummary === null) {
+			void hydrate(sessionId);
+			void hydrateSkills(sessionId);
+		}
 		return () => {
 			void teardownLiveStreams(sessionId);
 		};
-	}, [hydrate, hydrateSkills, sessionId]);
+	}, [cloudSummary, hydrate, hydrateSkills, sessionId]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -614,7 +653,11 @@ export function ChatView({
 							<div className="px-[var(--chat-row-gutter,0.75rem)]">
 								<WorktreeSetupCard />
 							</div>
-							{setupActive ? null : (
+							{setupActive ? null : cloudHistoryLoading ? (
+								<div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+									<ShimmerText>Loading chat history…</ShimmerText>
+								</div>
+							) : (
 								<div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
 									<HugeiconsIcon
 										icon={Message01Icon}

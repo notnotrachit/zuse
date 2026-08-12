@@ -2,6 +2,25 @@ import {
 	BillingCheckout,
 	type BillingCheckoutRequest,
 	BillingPortal,
+	CloudChatHistory,
+	CloudChatList,
+	CloudChatSummary,
+	CloudCredentialConnection,
+	type CloudCredentialConnectRequest,
+	type CloudCredentialKind,
+	CloudCredentialList,
+	CloudProject,
+	CloudProjectBuild,
+	type CloudProjectConnectRequest,
+	CloudProjectList,
+	type CloudProjectPrepareRequest,
+	CloudProviderList,
+	CloudWorkspace,
+	CloudWorkspaceConnection,
+	type CloudWorkspaceCreateRequest,
+	CloudWorkspaceLaunch,
+	CloudWorkspaceList,
+	type ComposerInput,
 	EntitlementList,
 	type EnvironmentId,
 	type MachineCreateRequest,
@@ -25,6 +44,64 @@ import { MachineRuntimeRole } from "./machine-runtime-role.ts";
 
 export interface MachineControlServiceShape {
 	readonly offers: () => Effect.Effect<MachineOfferList, MachineControlError>;
+	readonly cloudProviders: () => Effect.Effect<
+		CloudProviderList,
+		MachineControlError
+	>;
+	readonly cloudProjects: () => Effect.Effect<
+		CloudProjectList,
+		MachineControlError
+	>;
+	readonly connectCloudProject: (
+		input: CloudProjectConnectRequest,
+	) => Effect.Effect<CloudProject, MachineControlError>;
+	readonly prepareCloudProject: (
+		input: CloudProjectPrepareRequest,
+	) => Effect.Effect<CloudProjectBuild, MachineControlError>;
+	readonly cloudWorkspaces: (
+		projectId?: string,
+	) => Effect.Effect<CloudWorkspaceList, MachineControlError>;
+	readonly cloudWorkspace: (
+		workspaceId: string,
+	) => Effect.Effect<CloudWorkspace, MachineControlError>;
+	readonly createCloudWorkspace: (
+		input: CloudWorkspaceCreateRequest,
+	) => Effect.Effect<CloudWorkspaceLaunch, MachineControlError>;
+	readonly connectCloudWorkspace: (
+		workspaceId: string,
+	) => Effect.Effect<CloudWorkspaceConnection, MachineControlError>;
+	readonly cloudChatHistory: (
+		workspaceId: string,
+		after?: number,
+	) => Effect.Effect<CloudChatHistory, MachineControlError>;
+	readonly cloudChats: (
+		projectId?: string,
+		scope?: "active" | "archived" | "all",
+	) => Effect.Effect<CloudChatList, MachineControlError>;
+	readonly renameCloudChat: (
+		workspaceId: string,
+		title: string,
+	) => Effect.Effect<CloudChatSummary, MachineControlError>;
+	readonly sendCloudChatMessage: (input: {
+		readonly workspaceId: string;
+		readonly input: ComposerInput;
+		readonly clientMessageId: string;
+		readonly asGoal?: boolean;
+	}) => Effect.Effect<{ readonly sequence: number }, MachineControlError>;
+	readonly cloudWorkspaceAction: (
+		workspaceId: string,
+		action: "pause" | "resume" | "archive" | "unarchive" | "delete",
+	) => Effect.Effect<CloudWorkspace, MachineControlError>;
+	readonly cloudCredentials: () => Effect.Effect<
+		CloudCredentialList,
+		MachineControlError
+	>;
+	readonly connectCloudCredential: (
+		input: CloudCredentialConnectRequest,
+	) => Effect.Effect<CloudCredentialConnection, MachineControlError>;
+	readonly disconnectCloudCredential: (
+		kind: CloudCredentialKind,
+	) => Effect.Effect<CloudCredentialConnection, MachineControlError>;
 	readonly list: () => Effect.Effect<MachineList, MachineControlError>;
 	readonly get: (
 		machineId: string,
@@ -83,7 +160,10 @@ export const resolveMachineRelayUrl = (
 		(env.NODE_ENV === "production" ? PRODUCTION_RELAY_URL : STAGING_RELAY_URL)
 	).replace(/\/+$/u, "");
 
-const mapErrorCode = (status: number, code: unknown): MachineControlError => {
+export const mapRelayErrorCode = (
+	status: number,
+	code: unknown,
+): MachineControlError => {
 	if (code === "machine_alpha_not_allowed") {
 		return new MachineControlError("not-allowed");
 	}
@@ -93,6 +173,14 @@ const mapErrorCode = (status: number, code: unknown): MachineControlError => {
 	if (code === "entitlement_required") {
 		return new MachineControlError("entitlement-required");
 	}
+	if (code === "cloud_entitlement_required")
+		return new MachineControlError("entitlement-required");
+	if (code === "cloud_project_not_ready")
+		return new MachineControlError("invalid-state");
+	if (code === "cloud_credential_connection_required")
+		return new MachineControlError("credential-required");
+	if (typeof code === "string" && code.startsWith("cloud_branch_in_use:"))
+		return new MachineControlError("branch-in-use");
 	if (code === "machine_limit_reached") {
 		return new MachineControlError("machine-limit-reached");
 	}
@@ -169,7 +257,7 @@ export const MachineControlServiceLive: Layer.Layer<
 							}>,
 					);
 					return yield* Effect.fail(
-						mapErrorCode(response.status, payload.error),
+						mapRelayErrorCode(response.status, payload.error),
 					);
 				}
 				const payload = yield* Effect.tryPromise({
@@ -184,6 +272,91 @@ export const MachineControlServiceLive: Layer.Layer<
 			});
 
 		return MachineControlService.of({
+			cloudProviders: () =>
+				request(RelayPaths.cloudProviders, CloudProviderList),
+			cloudProjects: () => request(RelayPaths.cloudProjects, CloudProjectList),
+			connectCloudProject: (input) =>
+				request(RelayPaths.cloudProjects, CloudProject, "POST", input),
+			prepareCloudProject: (input) =>
+				request(
+					RelayPaths.cloudProjectPrepare(input.projectId),
+					CloudProjectBuild,
+					"POST",
+					input,
+				),
+			cloudWorkspaces: (projectId) =>
+				request(
+					projectId === undefined
+						? RelayPaths.cloudWorkspaces
+						: `${RelayPaths.cloudWorkspaces}?projectId=${encodeURIComponent(projectId)}`,
+					CloudWorkspaceList,
+				),
+			cloudWorkspace: (workspaceId) =>
+				request(RelayPaths.cloudWorkspace(workspaceId), CloudWorkspace),
+			createCloudWorkspace: (input) =>
+				request(
+					RelayPaths.cloudWorkspaces,
+					CloudWorkspaceLaunch,
+					"POST",
+					input,
+				),
+			connectCloudWorkspace: (workspaceId) =>
+				request(
+					RelayPaths.cloudWorkspaceConnectionGrant(workspaceId),
+					CloudWorkspaceConnection,
+					"POST",
+					{},
+				),
+			cloudChatHistory: (workspaceId, after) =>
+				request(
+					`${RelayPaths.cloudWorkspaceHistory(workspaceId)}${after === undefined ? "" : `?after=${after}`}`,
+					CloudChatHistory,
+				),
+			cloudChats: (projectId, scope) =>
+				request(
+					`${RelayPaths.cloudChats}?${new URLSearchParams({
+						...(projectId === undefined ? {} : { projectId }),
+						...(scope === undefined ? {} : { scope }),
+					}).toString()}`,
+					CloudChatList,
+				),
+			renameCloudChat: (workspaceId, title) =>
+				request(
+					RelayPaths.cloudWorkspaceChatRename(workspaceId),
+					CloudChatSummary,
+					"POST",
+					{ title },
+				),
+			sendCloudChatMessage: (input) =>
+				request(
+					RelayPaths.cloudWorkspaceMessages(input.workspaceId),
+					Schema.Struct({ sequence: Schema.Number }),
+					"POST",
+					input,
+				),
+			cloudWorkspaceAction: (workspaceId, action) =>
+				request(
+					RelayPaths.cloudWorkspaceAction(workspaceId, action),
+					CloudWorkspace,
+					"POST",
+					{},
+				),
+			cloudCredentials: () =>
+				request(RelayPaths.cloudCredentials, CloudCredentialList),
+			connectCloudCredential: (input) =>
+				request(
+					RelayPaths.cloudCredentials,
+					CloudCredentialConnection,
+					"POST",
+					input,
+				),
+			disconnectCloudCredential: (kind) =>
+				request(
+					RelayPaths.cloudCredentialDisconnect(kind),
+					CloudCredentialConnection,
+					"POST",
+					{},
+				),
 			offers: () => request(RelayPaths.machineOffers, MachineOfferList),
 			list: () => request(RelayPaths.machines, MachineList),
 			get: (machineId) => request(RelayPaths.machine(machineId), MachineRecord),
@@ -237,7 +410,7 @@ export const MachineControlServiceLive: Layer.Layer<
 					});
 					if (!tokenResponse.ok) {
 						return yield* Effect.fail(
-							mapErrorCode(tokenResponse.status, undefined),
+							mapRelayErrorCode(tokenResponse.status, undefined),
 						);
 					}
 					const accessPayload = yield* Effect.tryPromise({
@@ -264,7 +437,9 @@ export const MachineControlServiceLive: Layer.Layer<
 						catch: () => new MachineControlError("provider-unavailable"),
 					});
 					if (!response.ok) {
-						return yield* Effect.fail(mapErrorCode(response.status, undefined));
+						return yield* Effect.fail(
+							mapRelayErrorCode(response.status, undefined),
+						);
 					}
 					const payload = yield* Effect.tryPromise({
 						try: (): Promise<unknown> => response.json(),

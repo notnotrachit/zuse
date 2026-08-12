@@ -1,8 +1,8 @@
 import { RelayAuthTokenGrant } from "@zuse/contracts";
+import { SandboxProviders } from "@zuse/sandbox-providers";
 import { Clock, Effect, Redacted, Schema } from "effect";
 
 import { AccountIdentity } from "./account-identity.ts";
-
 import {
 	mintAccessToken,
 	RELAY_SCOPES,
@@ -10,6 +10,11 @@ import {
 	requireEnvironmentCredential,
 	requireWorkos,
 } from "./auth.ts";
+import {
+	type CloudWorkspaceRouteContext,
+	routeCloudWorkspaceRequest,
+} from "./cloud-workspace-routes.ts";
+import { CloudWorkspaceStore } from "./cloud-workspace-store.ts";
 import { RelayConfiguration } from "./config.ts";
 import {
 	parseJwk,
@@ -34,6 +39,7 @@ import {
 import { MachineStore } from "./machine-store.ts";
 import { ManagedTunnelProvider } from "./managed-tunnel.ts";
 import { PushDelivery } from "./push.ts";
+import type { SandboxOfferConfiguration } from "./sandbox-provider-module.ts";
 import {
 	type ActivityKind,
 	type DevicePlatform,
@@ -50,6 +56,8 @@ export type RelayContext =
 	| RelayConfiguration
 	| ManagedTunnelProvider
 	| PushDelivery
+	| SandboxOfferConfiguration
+	| CloudWorkspaceRouteContext
 	| MachineRouteContext;
 
 const json = (body: unknown, status = 200): Response =>
@@ -242,6 +250,22 @@ const publicEndpoint = (environment: EnvironmentRecord) =>
 				wsBaseUrl: environment.wsBaseUrl,
 			};
 
+const hasManagedPublicEndpoint = (environment: EnvironmentRecord): boolean => {
+	if (environment.tunnelHostname !== undefined) return true;
+	try {
+		const endpoint = new URL(environment.httpBaseUrl);
+		const hostname = endpoint.hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+		return (
+			endpoint.protocol === "https:" &&
+			hostname !== "localhost" &&
+			hostname !== "127.0.0.1" &&
+			hostname !== "::1"
+		);
+	} catch {
+		return false;
+	}
+};
+
 const endpointCandidates = (environment: EnvironmentRecord) => [
 	...(environment.privateHttpBaseUrl !== undefined &&
 	environment.privateWsBaseUrl !== undefined
@@ -277,6 +301,8 @@ const route = (
 		const nowMs = yield* Clock.currentTimeMillis;
 		const machineResponse = yield* routeMachineRequest(request);
 		if (machineResponse !== null) return machineResponse;
+		const cloudWorkspaceResponse = yield* routeCloudWorkspaceRequest(request);
+		if (cloudWorkspaceResponse !== null) return cloudWorkspaceResponse;
 
 		if (method === "POST" && path === "/v1/auth/token") {
 			const untrustedBody = yield* readJson<unknown>(request);
@@ -640,6 +666,7 @@ const route = (
 		if (method === "DELETE" && path === "/v1/account") {
 			const principal = yield* requireWorkos(request);
 			const machineStore = yield* MachineStore;
+			const cloudStore = yield* CloudWorkspaceStore;
 			const machines = yield* machineStore.listMachines(principal.accountId);
 			for (const machine of machines) {
 				let destructionBase = machine;
@@ -668,6 +695,26 @@ const route = (
 					);
 				}
 			}
+			const cloudWorkspaces = yield* cloudStore.listWorkspaces(
+				principal.accountId,
+			);
+			for (const workspace of cloudWorkspaces) {
+				if (workspace.state === "deleted") continue;
+				yield* cloudStore.saveWorkspace({
+					...workspace,
+					desiredState: "deleted",
+					statusCode: "delete-queued",
+					nextActionAtMs: nowMs,
+					revision: workspace.revision + 1,
+					updatedAtMs: nowMs,
+				});
+			}
+			if (
+				machines.some((machine) => machine.state !== "destroyed") ||
+				cloudWorkspaces.some((workspace) => workspace.state !== "deleted")
+			) {
+				return json({ ok: true, cleanupPending: true }, 202);
+			}
 			const entitlements = yield* machineStore.listEntitlements(
 				principal.accountId,
 			);
@@ -679,6 +726,28 @@ const route = (
 					updatedAtMs: nowMs,
 				});
 			}
+			const cloudProjects = yield* cloudStore.listProjects(principal.accountId);
+			const sandboxProviders = yield* SandboxProviders;
+			for (const project of cloudProjects) {
+				for (const build of yield* cloudStore.listBuilds(project.projectId)) {
+					if (build.snapshotId === undefined) continue;
+					const provider = yield* sandboxProviders
+						.get(build.provider)
+						.pipe(
+							Effect.mapError(() =>
+								serviceUnavailable("cloud_provider_unavailable"),
+							),
+						);
+					yield* provider
+						.deleteSnapshot(build.snapshotId)
+						.pipe(
+							Effect.mapError(() =>
+								serviceUnavailable("cloud_snapshot_cleanup_failed"),
+							),
+						);
+				}
+			}
+			yield* cloudStore.deleteAccountData(principal.accountId);
 			const environments = yield* store.listEnvironments(principal.accountId);
 			const tunnel = yield* ManagedTunnelProvider;
 			yield* Effect.forEach(
@@ -693,9 +762,6 @@ const route = (
 				{ discard: true },
 			);
 			yield* store.deleteAccountData(principal.accountId);
-			if (machines.some((machine) => machine.state !== "destroyed")) {
-				return json({ ok: true, cleanupPending: true }, 202);
-			}
 			yield* accountIdentity.deleteUser(principal.accountId);
 			return json({ ok: true, cleanupPending: false });
 		}
@@ -806,7 +872,7 @@ const route = (
 			) {
 				return yield* Effect.fail(serviceUnavailable("service_unhealthy"));
 			}
-			if (requireManaged && environment.tunnelHostname === undefined) {
+			if (requireManaged && !hasManagedPublicEndpoint(environment)) {
 				return yield* Effect.fail(serviceUnavailable("tunnel_unavailable"));
 			}
 			const connectToken = yield* signConnectToken({

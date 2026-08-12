@@ -6,6 +6,50 @@ const readWorkspaceFile = (relativePath: string) =>
 	readFile(new URL(`../../../../${relativePath}`, import.meta.url), "utf8");
 
 describe("cloud runtime assets", () => {
+	test("prepares repository snapshots without installing project dependencies", async () => {
+		const builder = await readWorkspaceFile(
+			"infra/cloud-sandboxes/project-builder.sh",
+		);
+		const reconciler = await readWorkspaceFile(
+			"infra/relay/src/cloud-workspace-reconciler.ts",
+		);
+
+		expect(builder).not.toContain("repository-script.ts setup");
+		expect(builder).not.toContain("ZUSE_SETUP_COMMAND");
+		expect(reconciler).not.toContain("ZUSE_SETUP_COMMAND");
+	});
+
+	test("boots workspace-native runtime without an inbound provider endpoint", async () => {
+		const bootstrap = await readWorkspaceFile(
+			"infra/cloud-sandboxes/workspace-bootstrap.sh",
+		);
+		const reconciler = await readWorkspaceFile(
+			"infra/relay/src/cloud-workspace-reconciler.ts",
+		);
+		const runtime = await readWorkspaceFile(
+			"apps/server/src/relay/cloud-workspace-runtime.ts",
+		);
+
+		expect(runtime).toContain("bootTokenFile");
+		expect(bootstrap).toContain("export ZUSE_HOST=127.0.0.1");
+		expect(bootstrap).toContain('touch "$status_dir/repository-ready"');
+		expect(bootstrap).toContain(
+			"runtime_command=(node /opt/zuse/current/bin.mjs serve)",
+		);
+		expect(bootstrap).not.toContain(
+			"runtime_command=(node /opt/zuse/current/bin.mjs serve --foreground)",
+		);
+		expect(reconciler).toContain('exec node "$runtime" serve');
+		expect(reconciler).toContain("replacingFailedSandbox");
+		expect(reconciler).toContain(
+			"yield* provider.kill(workspace.providerSandboxId)",
+		);
+		expect(bootstrap).not.toContain("workspace-ready.ts");
+		expect(runtime).toContain("bootstrap.gatewayUrl");
+		expect(runtime).toContain("client.frame");
+		expect(runtime).not.toContain("setTimeout(resolve");
+	});
+
 	test("keeps enrollment material owner-only and removable without breaking updates", async () => {
 		const cloudInit = await readWorkspaceFile(
 			"infra/cloud-machines/bootstrap/cloud-init.yaml.tmpl",
@@ -286,7 +330,7 @@ describe("cloud runtime assets", () => {
 		);
 		expect(workflow).toContain("publish_staging:");
 		expect(workflow).toContain(
-			"refs/heads/swarajbachu/managed-vps-cloud-provisioning",
+			"refs/heads/swarajbachu/e2b-integration-feasibility",
 		);
 		expect(workflow.match(/id: publication/gu)).toHaveLength(1);
 		expect(

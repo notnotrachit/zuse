@@ -195,6 +195,7 @@
         "@zuse/analytics": "workspace:*",
         "@zuse/client-runtime": "*",
         "@zuse/contracts": "*",
+        "@zuse/domain": "*",
         "@zuse/icons": "workspace:*",
         "@zuse/utils": "*",
         "class-variance-authority": "^0.7.1",
@@ -330,6 +331,7 @@
         "@zuse/billing-providers": "*",
         "@zuse/contracts": "*",
         "@zuse/machine-providers": "*",
+        "@zuse/sandbox-providers": "*",
         "effect": "catalog:",
         "jose": "^6.2.3",
       },
@@ -537,6 +539,20 @@
       "name": "@zuse/provider-registry",
       "version": "0.0.0",
       "dependencies": {
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@repo/typescript-config": "*",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
+    "packages/sandbox-providers": {
+      "name": "@zuse/sandbox-providers",
+      "version": "0.0.0",
+      "dependencies": {
+        "@zuse/provider-registry": "*",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -2227,6 +2243,8 @@
     "@zuse/provider-registry": ["@zuse/provider-registry@workspace:packages/provider-registry"],
 
     "@zuse/relay": ["@zuse/relay@workspace:infra/relay"],
+
+    "@zuse/sandbox-providers": ["@zuse/sandbox-providers@workspace:packages/sandbox-providers"],
 
     "@zuse/sqlite": ["@zuse/sqlite@workspace:packages/sqlite"],
 

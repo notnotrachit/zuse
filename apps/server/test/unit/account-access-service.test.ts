@@ -6,6 +6,7 @@ import {
 	readFile,
 	rm,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -171,6 +172,120 @@ const makeLayer = (
 };
 
 describe("AccountAccessService", () => {
+	it("exports an authenticated local GitHub account for one-click cloud import", async () => {
+		const userData = await mkdtemp(join(tmpdir(), "zuse-account-export-"));
+		temporaryDirectories.push(userData);
+		const credential = await Effect.runPromise(
+			Effect.gen(function* () {
+				const service = yield* AccountAccessService;
+				return yield* service.readLocalCredential("github");
+			}).pipe(
+				Effect.provide(
+					makeLayer(
+						userData,
+						{
+							capture: (command, args) =>
+								command === "gh" && args[0] === "auth" && args[1] === "token"
+									? Effect.succeed({
+											stdout: "github-test-token\n",
+											stderr: "",
+											code: 0,
+										})
+									: Effect.succeed({ stdout: "", stderr: "", code: 1 }),
+						},
+						{ role: "control-plane" },
+					),
+				),
+			),
+		);
+
+		expect(credential).toMatchObject({
+			providerId: "github",
+			credentialType: "repository-token",
+			secret: "github-test-token",
+		});
+	});
+
+	it("reads an owned private native credential store for cloud import", async () => {
+		const userData = await mkdtemp(
+			join(tmpdir(), "zuse-account-native-import-"),
+		);
+		temporaryDirectories.push(userData);
+		const accountHome = join(userData, "home");
+		await mkdir(join(accountHome, ".codex"), { recursive: true, mode: 0o700 });
+		await writeFile(
+			join(accountHome, ".codex", "auth.json"),
+			JSON.stringify({
+				auth_mode: "chatgpt",
+				tokens: { access_token: "test" },
+			}),
+			{ mode: 0o600 },
+		);
+		const previousHome = process.env.ZUSE_ACCOUNT_ACCESS_HOME;
+		process.env.ZUSE_ACCOUNT_ACCESS_HOME = accountHome;
+		try {
+			const credential = await Effect.runPromise(
+				Effect.gen(function* () {
+					const service = yield* AccountAccessService;
+					return yield* service.readLocalCredential("codex");
+				}).pipe(
+					Effect.provide(
+						makeLayer(userData, undefined, { role: "control-plane" }),
+					),
+				),
+			);
+			expect(credential).toMatchObject({
+				providerId: "codex",
+				credentialType: "native-store",
+			});
+		} finally {
+			if (previousHome === undefined)
+				delete process.env.ZUSE_ACCOUNT_ACCESS_HOME;
+			else process.env.ZUSE_ACCOUNT_ACCESS_HOME = previousHome;
+		}
+	});
+
+	it("rejects a symlinked native credential store", async () => {
+		const userData = await mkdtemp(join(tmpdir(), "zuse-account-native-link-"));
+		temporaryDirectories.push(userData);
+		const accountHome = join(userData, "home");
+		const credentialDirectory = join(accountHome, ".codex");
+		await mkdir(credentialDirectory, { recursive: true, mode: 0o700 });
+		const target = join(userData, "auth-target.json");
+		await writeFile(
+			target,
+			JSON.stringify({ tokens: { access_token: "test" } }),
+			{
+				mode: 0o600,
+			},
+		);
+		await symlink(target, join(credentialDirectory, "auth.json"));
+		const previousHome = process.env.ZUSE_ACCOUNT_ACCESS_HOME;
+		process.env.ZUSE_ACCOUNT_ACCESS_HOME = accountHome;
+		try {
+			const result = await Effect.runPromise(
+				Effect.gen(function* () {
+					const service = yield* AccountAccessService;
+					return yield* service
+						.readLocalCredential("codex")
+						.pipe(Effect.result);
+				}).pipe(
+					Effect.provide(
+						makeLayer(userData, undefined, { role: "control-plane" }),
+					),
+				),
+			);
+			expect(result).toMatchObject({
+				_tag: "Failure",
+				failure: { code: "credential-export-failed" },
+			});
+		} finally {
+			if (previousHome === undefined)
+				delete process.env.ZUSE_ACCOUNT_ACCESS_HOME;
+			else process.env.ZUSE_ACCOUNT_ACCESS_HOME = previousHome;
+		}
+	});
+
 	it("returns wire-encodable account status and transfer values", async () => {
 		const userData = await mkdtemp(join(tmpdir(), "zuse-account-wire-"));
 		temporaryDirectories.push(userData);

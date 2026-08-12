@@ -1,11 +1,21 @@
 import { PgClient } from "@effect/sql-pg";
-import { HOSTED_APP_URL } from "@zuse/contracts";
+import {
+	CLOUD_WORKSPACE_OFFER_ID,
+	HOSTED_APP_URL,
+	PERSISTENT_STANDARD_OFFER_ID,
+} from "@zuse/contracts";
 import { Effect, Layer, Redacted } from "effect";
 import { Pool } from "pg";
 import runtimeInstallerSource from "../../../apps/server/scripts/runtime-updater.mjs";
 import cloudInitTemplate from "../../cloud-machines/bootstrap/cloud-init.yaml.tmpl";
 import { AccountIdentityLive } from "./account-identity.ts";
 import { resolveBillingRuntime } from "./billing-config.ts";
+import { CloudChatCipher, CloudChatCipherLive } from "./cloud-chat-cipher.ts";
+import {
+	CloudCredentialVault,
+	CloudCredentialVaultLive,
+} from "./cloud-credential-vault.ts";
+import { CloudWorkspaceStorePg } from "./cloud-workspace-store.ts";
 import * as Config from "./config.ts";
 import { isConfigured } from "./environment.ts";
 import { hyperdrivePoolConfig } from "./hyperdrive.ts";
@@ -18,8 +28,14 @@ import { resolveMachineProviderRuntime } from "./machine-provider-config.ts";
 import { MachineStorePg } from "./machine-store.ts";
 import { ManagedTunnelProviderLive } from "./managed-tunnel.ts";
 import { PushDeliveryLive } from "./push.ts";
+import {
+	resolveSandboxProviderRuntime,
+	SandboxOfferConfiguration,
+} from "./sandbox-provider-config.ts";
 import { RelayStorePg } from "./store.ts";
 import { WorkosVerifierLive } from "./workos.ts";
+
+export { WorkspaceGateway } from "./workspace-gateway.ts";
 
 /**
  * Cloudflare Worker bindings. Secrets (`RELAY_MINT_PRIVATE_JWK`) are set via
@@ -28,12 +44,23 @@ import { WorkosVerifierLive } from "./workos.ts";
  */
 interface Env {
 	readonly HYPERDRIVE: { readonly connectionString: string };
+	readonly WORKSPACE_GATEWAY: {
+		readonly idFromName: (name: string) => unknown;
+		readonly get: (id: unknown) => {
+			readonly fetch: (request: Request) => Promise<Response>;
+		};
+	};
 	readonly RELAY_ISSUER: string;
 	readonly WORKOS_JWKS_URL: string;
 	readonly WORKOS_ISSUER: string;
 	readonly WORKOS_API_KEY?: string;
 	readonly RELAY_MINT_PRIVATE_JWK: string;
 	readonly RELAY_MINT_PUBLIC_JWK: string;
+	readonly CLOUD_CREDENTIAL_VAULT_KEY?: string;
+	readonly CLOUD_CHAT_ENCRYPTION_KEYS?: string;
+	readonly CLOUD_CHAT_ENCRYPTION_ACTIVE_KEY_ID?: string;
+	readonly CLOUD_WORKSPACE_IDLE_TIMEOUT_MS?: string;
+	readonly CLOUD_REPOSITORY_CACHE_MAX_BYTES?: string;
 	readonly MAX_ENVIRONMENTS_PER_ACCOUNT?: string;
 	readonly ALLOWED_BROWSER_ORIGINS?: string;
 	// Managed Cloudflare tunnel (optional — absent disables provisioning).
@@ -47,7 +74,10 @@ interface Env {
 	readonly MACHINE_LIVE_CHECKOUT_ENABLED?: string;
 	readonly POLAR_ACCESS_TOKEN?: string;
 	readonly POLAR_ENVIRONMENT?: string;
+	readonly POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1?: string;
 	readonly POLAR_PRODUCT_PERSISTENT_STANDARD_V1?: string;
+	/** @deprecated Use POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1. */
+	readonly POLAR_PRODUCT_SANDBOX_STANDARD_V1?: string;
 	readonly POLAR_VPS_SALES_APPROVED?: string;
 	readonly POLAR_WEBHOOK_SECRET?: string;
 	readonly MACHINE_PROVIDER?: string;
@@ -60,6 +90,14 @@ interface Env {
 	readonly HETZNER_SERVER_TYPE_PERSISTENT_STANDARD_V1?: string;
 	readonly MACHINE_RUNTIME_MANIFEST_URL?: string;
 	readonly MACHINE_RUNTIME_SIGNING_PUBLIC_JWK?: string;
+	readonly CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL?: string;
+	readonly CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK?: string;
+	readonly E2B_ADAPTER_ENABLED?: string;
+	readonly E2B_API_KEY?: string;
+	readonly E2B_API_BASE_URL?: string;
+	readonly E2B_SANDBOX_DOMAIN?: string;
+	readonly E2B_TEMPLATE_ID?: string;
+	readonly E2B_TEMPLATE_VERSION?: string;
 }
 
 const managedTunnelConfig = (
@@ -84,13 +122,71 @@ const managedTunnelConfig = (
 };
 
 const build = (env: Env): ReturnType<typeof makeRelay> => {
+	const cloudChatEncryptionKeys = (() => {
+		if (!isConfigured(env.CLOUD_CHAT_ENCRYPTION_KEYS)) return undefined;
+		try {
+			const parsed = JSON.parse(env.CLOUD_CHAT_ENCRYPTION_KEYS) as unknown;
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				Array.isArray(parsed)
+			)
+				return undefined;
+			return Object.fromEntries(
+				Object.entries(parsed).flatMap(([keyId, value]) =>
+					typeof value === "string" && keyId.length > 0
+						? [[keyId, Redacted.make(value)] as const]
+						: [],
+				),
+			);
+		} catch {
+			return undefined;
+		}
+	})();
 	const billing = resolveBillingRuntime(env);
 	const machineProvider = resolveMachineProviderRuntime(env, {
 		cloudInitTemplate,
 		relayIssuer: env.RELAY_ISSUER,
 		runtimeInstallerSource,
 	});
+	const sandboxProvider = resolveSandboxProviderRuntime(env);
+	const sandboxOffer = {
+		...sandboxProvider.offer,
+		...(isConfigured(env.CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL) &&
+		isConfigured(env.CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK)
+			? {
+					runtimeManifestUrl: env.CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL,
+					runtimeSigningPublicJwk:
+						env.CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK,
+				}
+			: {}),
+	};
+	const availableSandboxProviderIds = new Set(
+		sandboxProvider.configuredProviders
+			.filter(
+				(provider) =>
+					env.POLAR_ENVIRONMENT === "sandbox" || provider.productionReady,
+			)
+			.map((provider) => provider.providerId),
+	);
+	const persistentCheckoutReady =
+		billing.liveCheckoutEnabled &&
+		(env.POLAR_ENVIRONMENT === "sandbox" || machineProvider.productionReady);
+	const sandboxOperational =
+		availableSandboxProviderIds.size > 0 &&
+		isConfigured(
+			env.POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1 ??
+				env.POLAR_PRODUCT_SANDBOX_STANDARD_V1,
+		);
+	const sandboxCheckoutReady =
+		billing.liveCheckoutEnabled && sandboxOperational;
 	const configuredLimit = Number(env.MAX_ENVIRONMENTS_PER_ACCOUNT ?? "5");
+	const configuredIdleTimeout = Number(
+		env.CLOUD_WORKSPACE_IDLE_TIMEOUT_MS ?? 10 * 60 * 1_000,
+	);
+	const configuredCacheMaxBytes = Number(
+		env.CLOUD_REPOSITORY_CACHE_MAX_BYTES ?? 8 * 1024 * 1024 * 1024,
+	);
 	const configLayer = Config.layer({
 		relayIssuer: env.RELAY_ISSUER,
 		workosJwksUrl: env.WORKOS_JWKS_URL,
@@ -100,6 +196,25 @@ const build = (env: Env): ReturnType<typeof makeRelay> => {
 			: undefined,
 		mintPrivateKey: Redacted.make(env.RELAY_MINT_PRIVATE_JWK),
 		mintPublicKey: env.RELAY_MINT_PUBLIC_JWK,
+		cloudCredentialVaultKey: isConfigured(env.CLOUD_CREDENTIAL_VAULT_KEY)
+			? Redacted.make(env.CLOUD_CREDENTIAL_VAULT_KEY)
+			: undefined,
+		cloudChatEncryptionKeys,
+		cloudChatEncryptionActiveKeyId: isConfigured(
+			env.CLOUD_CHAT_ENCRYPTION_ACTIVE_KEY_ID,
+		)
+			? env.CLOUD_CHAT_ENCRYPTION_ACTIVE_KEY_ID
+			: undefined,
+		cloudWorkspaceIdleTimeoutMs:
+			Number.isSafeInteger(configuredIdleTimeout) &&
+			configuredIdleTimeout >= 60_000
+				? configuredIdleTimeout
+				: 10 * 60 * 1_000,
+		cloudRepositoryCacheMaxBytes:
+			Number.isSafeInteger(configuredCacheMaxBytes) &&
+			configuredCacheMaxBytes >= 256 * 1024 * 1024
+				? configuredCacheMaxBytes
+				: 8 * 1024 * 1024 * 1024,
 		maxEnvironmentsPerAccount:
 			Number.isInteger(configuredLimit) && configuredLimit > 0
 				? configuredLimit
@@ -128,9 +243,13 @@ const build = (env: Env): ReturnType<typeof makeRelay> => {
 				.filter((accountId) => accountId.length > 0),
 		),
 		manualEntitlementsEnabled: env.MACHINE_MANUAL_ENTITLEMENTS === "true",
-		liveCheckoutEnabled:
-			billing.liveCheckoutEnabled &&
-			(env.POLAR_ENVIRONMENT === "sandbox" || machineProvider.productionReady),
+		liveCheckoutEnabled: persistentCheckoutReady || sandboxCheckoutReady,
+		availableOfferIds: new Set([PERSISTENT_STANDARD_OFFER_ID]),
+		liveCheckoutOfferIds: new Set([
+			...(persistentCheckoutReady ? [PERSISTENT_STANDARD_OFFER_ID] : []),
+			...(sandboxCheckoutReady ? [CLOUD_WORKSPACE_OFFER_ID] : []),
+		]),
+		availableSandboxProviderIds,
 		enrollmentTtlMs: 30 * 60 * 1_000,
 		recoveryWindowMs: 7 * 24 * 60 * 60 * 1_000,
 		finalSnapshotRetentionMs: 14 * 24 * 60 * 60 * 1_000,
@@ -142,7 +261,16 @@ const build = (env: Env): ReturnType<typeof makeRelay> => {
 		AccountIdentityLive.pipe(Layer.provide(configLayer)),
 		RelayStorePg.pipe(Layer.provide(dbLayer)),
 		MachineStorePg.pipe(Layer.provide(dbLayer)),
+		CloudWorkspaceStorePg.pipe(Layer.provide(dbLayer)),
+		Layer.effect(CloudCredentialVault, CloudCredentialVaultLive).pipe(
+			Layer.provide(configLayer),
+		),
+		Layer.effect(CloudChatCipher, CloudChatCipherLive).pipe(
+			Layer.provide(configLayer),
+		),
 		machineProvider.layer,
+		sandboxProvider.layer,
+		Layer.succeed(SandboxOfferConfiguration, sandboxOffer),
 		billing.layer,
 		Layer.succeed(MachineControlConfiguration, machineConfig),
 		ManagedTunnelProviderLive.pipe(Layer.provide(configLayer)),
@@ -167,16 +295,95 @@ export default {
 			await relay.dispose();
 			throw error;
 		}
+		const gatewayWorkspaceId = response.headers.get("x-zuse-gateway-workspace");
+		const gatewayRole = response.headers.get("x-zuse-gateway-role");
+		if (
+			gatewayWorkspaceId !== null &&
+			(gatewayRole === "runtime" || gatewayRole === "client") &&
+			request.headers.get("upgrade")?.toLowerCase() === "websocket"
+		) {
+			const connectionId = response.headers.get("x-zuse-gateway-connection");
+			const headers = new Headers(request.headers);
+			headers.delete("authorization");
+			headers.set("x-zuse-gateway-workspace", gatewayWorkspaceId);
+			headers.set("x-zuse-gateway-role", gatewayRole);
+			if (connectionId !== null)
+				headers.set("x-zuse-gateway-connection", connectionId);
+			await relay.dispose();
+			const id = env.WORKSPACE_GATEWAY.idFromName(gatewayWorkspaceId);
+			return env.WORKSPACE_GATEWAY.get(id).fetch(
+				new Request(request, { headers }),
+			);
+		}
+		const eventSequence = response.headers.get("x-zuse-gateway-event-sequence");
+		const commandAvailable = response.headers.get("x-zuse-gateway-command");
+		const commandSequence = response.headers.get(
+			"x-zuse-gateway-command-sequence",
+		);
+		if (gatewayWorkspaceId !== null && commandAvailable === "available") {
+			response.headers.delete("x-zuse-gateway-workspace");
+			response.headers.delete("x-zuse-gateway-command");
+			response.headers.delete("x-zuse-gateway-command-sequence");
+			const id = env.WORKSPACE_GATEWAY.idFromName(gatewayWorkspaceId);
+			context.waitUntil(
+				env.WORKSPACE_GATEWAY.get(id).fetch(
+					new Request("https://workspace-gateway.internal/notify", {
+						method: "POST",
+						body: JSON.stringify({
+							type: "command.available",
+							throughSequence: Number(commandSequence ?? "0"),
+						}),
+					}),
+				),
+			);
+		}
+		if (gatewayWorkspaceId !== null && eventSequence !== null) {
+			response.headers.delete("x-zuse-gateway-workspace");
+			response.headers.delete("x-zuse-gateway-event-sequence");
+			const id = env.WORKSPACE_GATEWAY.idFromName(gatewayWorkspaceId);
+			context.waitUntil(
+				env.WORKSPACE_GATEWAY.get(id).fetch(
+					new Request("https://workspace-gateway.internal/notify", {
+						method: "POST",
+						body: JSON.stringify({
+							type: "event.available",
+							throughSequence: Number(eventSequence),
+						}),
+					}),
+				),
+			);
+		}
 		const machineId = response.headers.get("x-zuse-reconcile-machine");
+		const cloudBuildId = response.headers.get("x-zuse-reconcile-cloud-build");
+		const cloudBuildIds =
+			cloudBuildId
+				?.split(",")
+				.map((value) => value.trim())
+				.filter(Boolean) ?? [];
+		const cloudWorkspaceId = response.headers.get(
+			"x-zuse-reconcile-cloud-workspace",
+		);
 		response.headers.delete("x-zuse-reconcile-machine");
-		if (machineId === null) {
+		response.headers.delete("x-zuse-reconcile-cloud-build");
+		response.headers.delete("x-zuse-reconcile-cloud-workspace");
+		if (
+			machineId === null &&
+			cloudBuildId === null &&
+			cloudWorkspaceId === null
+		) {
 			await relay.dispose();
 			return response;
 		}
 		context.waitUntil(
-			relay
-				.reconcileMachine(machineId, `webhook-${crypto.randomUUID()}`)
-				.finally(() => relay.dispose()),
+			Promise.all([
+				machineId === null
+					? Promise.resolve()
+					: relay.reconcileMachine(machineId, `webhook-${crypto.randomUUID()}`),
+				...cloudBuildIds.map((buildId) => relay.reconcileCloudBuild(buildId)),
+				cloudWorkspaceId === null
+					? Promise.resolve()
+					: relay.reconcileCloudWorkspace(cloudWorkspaceId),
+			]).finally(() => relay.dispose()),
 		);
 		return response;
 	},
@@ -187,9 +394,11 @@ export default {
 	): Promise<void> {
 		const relay = build(env);
 		context.waitUntil(
-			relay
-				.reconcile(`cron-${controller.scheduledTime}`)
-				.finally(() => relay.dispose()),
+			Promise.all([
+				relay.reconcile(`cron-${controller.scheduledTime}`),
+				relay.reconcileCloud(),
+				relay.backfillCloudChatEncryption(),
+			]).finally(() => relay.dispose()),
 		);
 	},
 };

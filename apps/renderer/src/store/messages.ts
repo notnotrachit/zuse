@@ -27,6 +27,7 @@ import {
 import { sessionTimelineCache } from "../lib/session-timeline-cache.ts";
 import { readStorageWithLegacy } from "../lib/storage-keys.ts";
 import { createAtomStore as create } from "../state/atom-store.ts";
+import { cloudSummaryForSession } from "./cloud-chat-registry.ts";
 import {
 	markQueueHydrated,
 	subscribeSessionAcknowledged,
@@ -106,13 +107,13 @@ const readSessionModelOptions = (
 	// Backwards compat — the previous schema stored reasoning under a
 	// bare `memoize.reasoning.<sessionId>` key. Read it if the new key
 	// wasn't set so existing sessions don't lose their picker selection.
-	if (out["reasoning"] === undefined) {
+	if (out.reasoning === undefined) {
 		const legacy = readStorageWithLegacy(
 			window.sessionStorage,
 			`zuse.reasoning.${sessionId}`,
 			[`memoize.reasoning.${sessionId}`],
 		);
-		if (legacy !== null && legacy.length > 0) out["reasoning"] = legacy;
+		if (legacy !== null && legacy.length > 0) out.reasoning = legacy;
 	}
 	return Object.keys(out).length === 0 ? null : out;
 };
@@ -174,7 +175,10 @@ type MessagesState = {
 	readonly queueBySession: Record<string, ReadonlyArray<QueuedMessage>>;
 	readonly queuePausedBySession: Record<string, boolean>;
 	readonly goalBySession: Record<string, ThreadGoal | null>;
-	readonly hydrate: (sessionId: SessionId) => Promise<void>;
+	readonly hydrate: (
+		sessionId: SessionId,
+		options?: { readonly live?: boolean; readonly environmentId?: string },
+	) => Promise<void>;
 	/**
 	 * Send a user turn. Accepts either a raw string (legacy / simple-text
 	 * callers) or a fully-typed `ComposerInput`. The underlying RPC accepts
@@ -185,7 +189,7 @@ type MessagesState = {
 		sessionId: SessionId,
 		input: string | ComposerInput,
 		opts?: { readonly asGoal?: boolean },
-	) => Promise<void>;
+	) => Promise<boolean>;
 	readonly setGoal: (
 		sessionId: SessionId,
 		goal: ThreadGoalSetInput,
@@ -284,51 +288,92 @@ const timelineLagObservations = new Map<
 >();
 const timelineProbeFailures = new Map<SessionId, number>();
 const goalFibers = new Map<SessionId, Fiber.Fiber<unknown, unknown>>();
-let liveConnectionGeneration: number | null = null;
-let unsubscribeLiveConnection: (() => void) | null = null;
+const environmentBySession = new Map<SessionId, string>();
+const DEFAULT_CONNECTION_SCOPE = "renderer-default";
+const liveConnectionGenerationByScope = new Map<string, number>();
+const unsubscribeLiveConnectionByScope = new Map<string, () => void>();
 // Message ids we minted optimistically in `send()`. When the server echoes the
 // same row back over the live stream (same id, because the renderer passes the
 // id as `clientMessageId`), we replace the optimistic row in place with the
 // canonical server message instead of skipping it, so server-side fixups
 // (stripped `pending-` attachments, server `createdAt`) win.
 const optimisticIds = new Set<MessageId>();
+export const isOptimisticMessage = (messageId: string): boolean =>
+	optimisticIds.has(MessageId.make(messageId));
 const stopLiveConnectionSubscription = (): void => {
-	unsubscribeLiveConnection?.();
-	unsubscribeLiveConnection = null;
-	liveConnectionGeneration = null;
+	for (const unsubscribe of unsubscribeLiveConnectionByScope.values()) {
+		unsubscribe();
+	}
+	unsubscribeLiveConnectionByScope.clear();
+	liveConnectionGenerationByScope.clear();
 };
 
-const ensureLiveConnectionSubscription = (): void => {
-	if (unsubscribeLiveConnection !== null) return;
-	unsubscribeLiveConnection = subscribeRendererRpcConnection((snapshot) => {
+const connectionScope = (environmentId?: string): string =>
+	environmentId ?? DEFAULT_CONNECTION_SCOPE;
+
+const environmentForSession = (sessionId: SessionId): string | undefined =>
+	environmentBySession.get(sessionId);
+
+const connectionGenerationForSession = (sessionId: SessionId): number | null =>
+	liveConnectionGenerationByScope.get(
+		connectionScope(environmentForSession(sessionId)),
+	) ?? null;
+
+const ensureLiveConnectionSubscription = (environmentId?: string): void => {
+	const scope = connectionScope(environmentId);
+	if (unsubscribeLiveConnectionByScope.has(scope)) return;
+	const unsubscribe = subscribeRendererRpcConnection((snapshot) => {
 		if (snapshot.status !== "connected") return;
-		if (liveConnectionGeneration === null) {
-			liveConnectionGeneration = snapshot.generation;
+		const generation = liveConnectionGenerationByScope.get(scope);
+		if (generation === undefined) {
+			liveConnectionGenerationByScope.set(scope, snapshot.generation);
 			for (const sessionId of retainedTimelineSessions) {
-				if (!timelineFibers.has(sessionId) && !timelineStarts.has(sessionId)) {
-					void useMessagesStore.getState().hydrate(sessionId);
+				if (
+					environmentForSession(sessionId) === environmentId &&
+					!timelineFibers.has(sessionId) &&
+					!timelineStarts.has(sessionId)
+				) {
+					void useMessagesStore.getState().hydrate(sessionId, {
+						environmentId,
+					});
 				}
 			}
 			return;
 		}
-		if (liveConnectionGeneration === snapshot.generation) return;
-		liveConnectionGeneration = snapshot.generation;
-		const sessions = [...retainedTimelineSessions];
+		if (generation === snapshot.generation) return;
+		liveConnectionGenerationByScope.set(scope, snapshot.generation);
+		const sessions = [...retainedTimelineSessions].filter(
+			(sessionId) => environmentForSession(sessionId) === environmentId,
+		);
 		for (const [sessionId, fiber] of timelineFibers) {
+			if (environmentForSession(sessionId) !== environmentId) continue;
 			clearTimelineReconnect(sessionId);
 			timelineFibers.delete(sessionId);
 			timelineTokens.delete(sessionId);
 			void Effect.runPromise(Fiber.interrupt(fiber));
 		}
 		for (const sessionId of sessions)
-			void useMessagesStore.getState().hydrate(sessionId);
-	});
+			void useMessagesStore.getState().hydrate(sessionId, {
+				environmentId,
+			});
+	}, environmentId);
+	unsubscribeLiveConnectionByScope.set(
+		scope,
+		typeof unsubscribe === "function" ? unsubscribe : () => {},
+	);
 };
 
-const reportActiveStreamFailure = (cause: unknown): void => {
-	const generation = liveConnectionGeneration;
+const reportActiveStreamFailure = (
+	sessionId: SessionId,
+	cause: unknown,
+): void => {
+	const generation = connectionGenerationForSession(sessionId);
 	if (generation === null) return;
-	reportRendererRpcStreamFailure(generation, cause);
+	reportRendererRpcStreamFailure(
+		generation,
+		cause,
+		environmentForSession(sessionId),
+	);
 };
 
 const clearTimelineReconnect = (sessionId: SessionId): void => {
@@ -357,7 +402,9 @@ const scheduleTimelineReconnect = (sessionId: SessionId): void => {
 				retainedTimelineSessions.has(sessionId) &&
 				!timelineFibers.has(sessionId)
 			) {
-				void useMessagesStore.getState().hydrate(sessionId);
+				void useMessagesStore.getState().hydrate(sessionId, {
+					environmentId: environmentForSession(sessionId),
+				});
 			}
 		}, delayMs),
 	);
@@ -383,7 +430,9 @@ const restartTimeline = async (sessionId: SessionId): Promise<void> => {
 		retainedTimelineSessions.has(sessionId) ||
 		timelineRegistry.state(sessionId).projection?.currentTurn != null
 	) {
-		await useMessagesStore.getState().hydrate(sessionId);
+		await useMessagesStore.getState().hydrate(sessionId, {
+			environmentId: environmentForSession(sessionId),
+		});
 		if (!wasRetained) retainedTimelineSessions.delete(sessionId);
 	}
 };
@@ -402,7 +451,7 @@ export const checkTimelineLiveness = async (
 	sessionId: SessionId,
 ): Promise<boolean> => {
 	const token = timelineTokens.get(sessionId);
-	const generation = liveConnectionGeneration;
+	const generation = connectionGenerationForSession(sessionId);
 	if (
 		token === undefined ||
 		(!retainedTimelineSessions.has(sessionId) &&
@@ -411,13 +460,13 @@ export const checkTimelineLiveness = async (
 		return false;
 	}
 	try {
-		const client = await getMessagesRpcClient();
+		const client = await getMessagesRpcClient(environmentForSession(sessionId));
 		const { throughVersion } = await Effect.runPromise(
 			client["session.events.head"]({ sessionId }).pipe(Effect.timeout(3_000)),
 		);
 		if (
 			timelineTokens.get(sessionId) !== token ||
-			liveConnectionGeneration !== generation
+			connectionGenerationForSession(sessionId) !== generation
 		) {
 			return false;
 		}
@@ -458,7 +507,7 @@ export const checkTimelineLiveness = async (
 				appliedVersion,
 				renderedVersion,
 				throughVersion,
-				connectionGeneration: liveConnectionGeneration,
+				connectionGeneration: connectionGenerationForSession(sessionId),
 			}),
 		});
 		if (throughVersion <= appliedVersion) {
@@ -475,7 +524,7 @@ export const checkTimelineLiveness = async (
 	} catch {
 		if (
 			timelineTokens.get(sessionId) !== token ||
-			liveConnectionGeneration !== generation
+			connectionGenerationForSession(sessionId) !== generation
 		) {
 			return false;
 		}
@@ -645,13 +694,19 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 	queueBySession: {},
 	queuePausedBySession: {},
 	goalBySession: {},
-	hydrate: async (sessionId) => {
+	hydrate: async (sessionId, options) => {
+		if (cloudSummaryForSession(sessionId) !== null && options?.live !== true) {
+			markQueueHydrated(sessionId);
+			return;
+		}
 		retainedTimelineSessions.add(sessionId);
+		if (options?.environmentId !== undefined)
+			environmentBySession.set(sessionId, options.environmentId);
 		const eviction = timelineEvictionTimers.get(sessionId);
 		if (eviction !== undefined) clearTimeout(eviction);
 		timelineEvictionTimers.delete(sessionId);
 		if (pendingTimelineSessionCreations.has(sessionId)) return;
-		ensureLiveConnectionSubscription();
+		ensureLiveConnectionSubscription(options?.environmentId);
 		if (timelineFibers.has(sessionId)) {
 			scheduleTimelineWatchdog(sessionId);
 			return;
@@ -726,7 +781,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 					markQueueHydrated(sessionId);
 				}
 			}
-			const client = await getMessagesRpcClient();
+			const client = await getMessagesRpcClient(options?.environmentId);
 			if (
 				!retainedTimelineSessions.has(sessionId) ||
 				timelineFibers.has(sessionId)
@@ -819,23 +874,28 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 				Effect.andThen(
 					Effect.sync(() => {
 						reportActiveStreamFailure(
+							sessionId,
 							new Error("active transcript stream completed unexpectedly"),
 						);
 					}),
 				),
 				Effect.catch((err) =>
 					Effect.sync(() => {
-						reportActiveStreamFailure(err);
+						reportActiveStreamFailure(sessionId, err);
 						console.error("[messages] message stream errored", err);
-						set((s) => ({
-							errorBySession: {
-								...s.errorBySession,
-								[sessionId]: classifyError(
-									err,
-									lookupSessionProvider(sessionId),
-								),
-							},
-						}));
+						// Cloud transcripts stay readable from their durable projection while
+						// the connection supervisor reconnects. A transport drop is not an
+						// agent/provider error and must not become a transcript error row.
+						if (cloudSummaryForSession(sessionId) === null)
+							set((s) => ({
+								errorBySession: {
+									...s.errorBySession,
+									[sessionId]: classifyError(
+										err,
+										lookupSessionProvider(sessionId),
+									),
+								},
+							}));
 					}),
 				),
 				Effect.ensuring(
@@ -889,12 +949,13 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 			}
 		} catch (err) {
 			timelineStarts.delete(sessionId);
-			set((s) => ({
-				errorBySession: {
-					...s.errorBySession,
-					[sessionId]: classifyError(err, lookupSessionProvider(sessionId)),
-				},
-			}));
+			if (cloudSummaryForSession(sessionId) === null)
+				set((s) => ({
+					errorBySession: {
+						...s.errorBySession,
+						[sessionId]: classifyError(err, lookupSessionProvider(sessionId)),
+					},
+				}));
 			scheduleTimelineReconnect(sessionId);
 		}
 	},
@@ -906,6 +967,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 		// status via native goal notifications), so we skip the optimistic flip
 		// there. Grok runs goal mode by forwarding `/goal` as a real prompt turn,
 		// so it should show the running indicator like any normal send.
+		const cloudSummary = cloudSummaryForSession(sessionId);
 		const skipOptimisticRunning =
 			opts?.asGoal === true && lookupSessionProvider(sessionId) === "codex";
 		// Optimistic message insert — show the user's turn instantly instead of
@@ -945,7 +1007,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 			createdAt: new Date(),
 		});
 		optimisticIds.add(messageId);
-		if (!skipOptimisticRunning) {
+		if (!skipOptimisticRunning && cloudSummary === null) {
 			useSessionRuntimeStore.getState().beginOptimisticTurn(sessionId);
 		}
 		set((s) => ({
@@ -980,12 +1042,64 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 							clientMessageId: messageId,
 							...(modelOptions !== null ? { modelOptions } : {}),
 						};
+			if (cloudSummary !== null) {
+				const cloudChats = await import("./cloud-chats.ts");
+				const commandCreatedAt = cloudChats.nextCloudCommandSubmissionAt();
+				cloudChats.noteCloudCommand(cloudSummary.workspaceId, {
+					clientMessageId: messageId,
+					state: "queued",
+					createdAt: commandCreatedAt,
+				});
+				const control = await import("../lib/rpc-client.ts").then((module) =>
+					module.getControlPlaneRpcClient(),
+				);
+				const richInput: ComposerInput =
+					typeof input === "string"
+						? new ComposerInput({
+								text: input,
+								attachments: [],
+								fileRefs: [],
+								skillRefs: [],
+								annotations: [],
+							})
+						: input;
+				const accepted = await Effect.runPromise(
+					control["cloud.chats.send"]({
+						workspaceId: cloudSummary.workspaceId,
+						input: richInput,
+						clientMessageId: messageId,
+						asGoal: opts?.asGoal,
+					}),
+				);
+				cloudChats.noteCloudCommand(cloudSummary.workspaceId, {
+					clientMessageId: messageId,
+					state: "queued",
+					createdAt: commandCreatedAt,
+					sequence: accepted.sequence,
+				});
+				// The message is durable once the control plane accepts it. Resume and
+				// attach in the background so viewing history alone never wakes compute,
+				// while an explicit send does.
+				void cloudChats
+					.ensureCloudWorkspaceAttached(cloudSummary)
+					.catch(() => undefined);
+				return true;
+			}
 			await dispatchRetryableRpcCommand(messageId, async () => {
 				const client = await getMessagesRpcClient();
 				return Effect.runPromise(client["messages.send"](payload));
 			});
 			void useSessionsStore.getState().refreshOne(sessionId);
+			return true;
 		} catch (err) {
+			if (cloudSummary !== null) {
+				const cloudChats = await import("./cloud-chats.ts");
+				cloudChats.noteCloudCommand(cloudSummary.workspaceId, {
+					clientMessageId: messageId,
+					state: "failed",
+					createdAt: optimisticMessage.createdAt.getTime(),
+				});
+			}
 			// Reset the optimistic running flag — otherwise a failed send leaves
 			// the composer stuck on Interrupt with no path back to Send (the
 			// status stream won't emit "idle" if the server never saw the turn).
@@ -1006,6 +1120,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 					),
 				},
 			}));
+			return false;
 		}
 	},
 	setGoal: async (sessionId, goal) => {
@@ -1052,7 +1167,14 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 	interrupt: async (sessionId) => {
 		useSessionRuntimeStore.getState().beginOptimisticStop(sessionId);
 		try {
-			const client = await getMessagesRpcClient();
+			const cloudSummary = cloudSummaryForSession(sessionId);
+			if (cloudSummary !== null) {
+				const cloudChats = await import("./cloud-chats.ts");
+				await cloudChats.ensureCloudWorkspaceAttached(cloudSummary);
+			}
+			const client = await getMessagesRpcClient(
+				cloudSummary?.workspaceId ?? environmentForSession(sessionId),
+			);
 			await Effect.runPromise(client["messages.interrupt"]({ sessionId }));
 			// The RPC only resolves after the server has durably settled the turn.
 			// Reconcile immediately instead of waiting for a second stream delivery:
@@ -1107,6 +1229,9 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 		return queueId;
 	},
 	persistQueued: async (sessionId, queueId, input, options) => {
+		// Cloud turns are queued durably by the control plane when they are sent.
+		// Never persist their temporary composer chips through a computer RPC.
+		if (cloudSummaryForSession(sessionId) !== null) return;
 		try {
 			const item = await trackRendererRpc("messages.queue.add", () =>
 				dispatchMessagesRpcCommand(
@@ -1163,6 +1288,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 				),
 			},
 		}));
+		if (cloudSummaryForSession(sessionId) !== null) return;
 		try {
 			const client = await getMessagesRpcClient();
 			const item = await Effect.runPromise(
@@ -1219,6 +1345,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 				queueBySession: { ...s.queueBySession, [sessionId]: ordered },
 			};
 		});
+		if (cloudSummaryForSession(sessionId) !== null) return;
 		void (async () => {
 			try {
 				const client = await getMessagesRpcClient();
@@ -1236,6 +1363,14 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 		})();
 	},
 	flushQueue: (sessionId) => {
+		if (cloudSummaryForSession(sessionId) !== null) {
+			const next = (get().queueBySession[sessionId] ?? []).find(
+				(item) => item.ready,
+			);
+			if (next !== undefined)
+				void get().runQueuedMessageNext(sessionId, next.id);
+			return;
+		}
 		const previous = queueFlushTails.get(sessionId) ?? Promise.resolve();
 		const commandId = `queue-flush:${sessionId}:${crypto.randomUUID()}`;
 		const current = previous
@@ -1272,6 +1407,10 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 					[sessionId]: false,
 				},
 			}));
+			if (cloudSummaryForSession(sessionId) !== null) {
+				get().flushQueue(sessionId);
+				return;
+			}
 			const client = await getMessagesRpcClient();
 			await Effect.runPromise(client["messages.queue.resume"]({ sessionId }));
 		} catch (err) {
@@ -1292,6 +1431,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 				),
 			},
 		}));
+		if (cloudSummaryForSession(sessionId) !== null) return;
 		void (async () => {
 			try {
 				const client = await getMessagesRpcClient();
@@ -1321,6 +1461,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 				),
 			},
 		}));
+		if (cloudSummaryForSession(sessionId) !== null) return item;
 		try {
 			const client = await getMessagesRpcClient();
 			await Effect.runPromise(
@@ -1355,6 +1496,21 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 		const queue = get().queueBySession[sessionId] ?? [];
 		const item = queue.find((q) => q.id === queueId);
 		if (!item) return;
+		if (cloudSummaryForSession(sessionId) !== null) {
+			const sent = await get().send(sessionId, item.input, {
+				asGoal: item.input.asGoal,
+			});
+			if (!sent) return;
+			set((state) => ({
+				queueBySession: {
+					...state.queueBySession,
+					[sessionId]: (state.queueBySession[sessionId] ?? []).filter(
+						(queued) => queued.id !== queueId,
+					),
+				},
+			}));
+			return;
+		}
 		// Optimistic — drop the chip from the queue before issuing the RPCs so
 		// a re-click can't fire twice.
 		set((s) => ({
@@ -1400,7 +1556,8 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 	retry: async (sessionId) => {
 		const msgs = get().messagesBySession[sessionId] ?? [];
 		for (let i = msgs.length - 1; i >= 0; i--) {
-			const m = msgs[i]!;
+			const m = msgs[i];
+			if (m === undefined) continue;
 			const c = m.content;
 			if (c._tag === "user_rich") {
 				await get().send(

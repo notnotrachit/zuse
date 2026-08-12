@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Rpc } from "effect/unstable/rpc";
 
 import { EnvironmentEndpoint } from "./connect.ts";
@@ -13,8 +13,14 @@ export const PERSISTENT_STANDARD_OFFER_ID = "persistent-standard-v1" as const;
 export const MachineArchitecture = Schema.Literals(["x86_64"]);
 export type MachineArchitecture = typeof MachineArchitecture.Type;
 
+export const MachineOfferKind = Schema.Literals(["persistent", "sandbox"]);
+export type MachineOfferKind = typeof MachineOfferKind.Type;
+
 export class MachineOffer extends Schema.Class<MachineOffer>("MachineOffer")({
 	offerId: Schema.String,
+	kind: MachineOfferKind.pipe(
+		Schema.withDecodingDefaultKey(Effect.succeed("persistent" as const)),
+	),
 	displayName: Schema.String,
 	architecture: MachineArchitecture,
 	vcpuCount: Schema.Number,
@@ -147,6 +153,20 @@ export class MachineEnrollRequest extends Schema.Class<MachineEnrollRequest>(
 	label: Schema.optional(Schema.String),
 }) {}
 
+export class CloudRuntimeCredential extends Schema.Class<CloudRuntimeCredential>(
+	"CloudRuntimeCredential",
+)({
+	kind: Schema.Literals(["github", "claude", "codex"]),
+	credentialType: Schema.Literals([
+		"api-key",
+		"oauth-token",
+		"repository-token",
+		"native-store",
+	]),
+	secret: Schema.String,
+	version: Schema.Number,
+}) {}
+
 export class MachineEnrollResponse extends Schema.Class<MachineEnrollResponse>(
 	"MachineEnrollResponse",
 )({
@@ -157,6 +177,7 @@ export class MachineEnrollResponse extends Schema.Class<MachineEnrollResponse>(
 	mintPublicKey: Schema.String,
 	tunnelHostname: Schema.optional(Schema.String),
 	connectorToken: Schema.optional(Schema.String),
+	cloudCredentials: Schema.optional(Schema.Array(CloudRuntimeCredential)),
 }) {}
 
 export class MachineBootStatusRequest extends Schema.Class<MachineBootStatusRequest>(
@@ -170,6 +191,7 @@ export class MachineBootStatusRequest extends Schema.Class<MachineBootStatusRequ
 
 export const EntitlementKind = Schema.Literals([
 	"persistent-machine",
+	"cloud-workspace",
 	"usage-credits",
 ]);
 export type EntitlementKind = typeof EntitlementKind.Type;
@@ -231,6 +253,8 @@ export const MachineErrorCode = Schema.Literals([
 	"provider-unavailable",
 	"enrollment-expired",
 	"enrollment-rejected",
+	"credential-required",
+	"branch-in-use",
 	"conflict",
 	"invalid-request",
 ]);
@@ -580,6 +604,7 @@ export const AccountAccessErrorCode = Schema.Literals([
 	"transfer-rejected",
 	"credential-store-failed",
 	"cleanup-failed",
+	"credential-export-failed",
 ]);
 export type AccountAccessErrorCode = typeof AccountAccessErrorCode.Type;
 

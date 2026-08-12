@@ -1,4 +1,6 @@
-import { unlink } from "node:fs/promises";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import {
 	DEFAULT_LOCAL_DESKTOP_PORT,
@@ -9,6 +11,7 @@ import {
 import { Clock, Effect, Layer, Redacted, Schema } from "effect";
 
 import { LanAuthService } from "../lan-auth/services/lan-auth-service.ts";
+import { CredentialsService } from "../provider/services/credentials-service.ts";
 import { signEnvironmentLinkProof } from "./link-proof.ts";
 import { ManagedTunnelRuntime } from "./managed-tunnel-runtime.ts";
 
@@ -24,10 +27,11 @@ export interface CloudEnrollmentConfig {
 
 export class CloudEnrollmentError extends Schema.TaggedErrorClass<CloudEnrollmentError>()(
 	"CloudEnrollmentError",
-	{ reason: Schema.String },
+	{ reason: Schema.String, message: Schema.String },
 ) {}
 
-const fail = (reason: string) => new CloudEnrollmentError({ reason });
+const fail = (reason: string) =>
+	new CloudEnrollmentError({ reason, message: reason });
 
 const RelayErrorBody = Schema.Struct({
 	error: Schema.optional(Schema.String),
@@ -90,6 +94,75 @@ const removeEnrollmentToken = (
 				},
 			});
 
+export const installCloudCredentials = Effect.fn("installCloudCredentials")(
+	function* (credentials: MachineEnrollResponse["cloudCredentials"]) {
+		if (credentials === undefined) return;
+		const credentialStore = yield* CredentialsService;
+		for (const credential of credentials) {
+			if (credential.kind === "github") {
+				const accountHome =
+					process.env.ZUSE_ACCOUNT_ACCESS_HOME?.trim() || homedir();
+				const hostsFile = join(accountHome, ".config", "gh", "hosts.yml");
+				const gitConfigFile = join(accountHome, ".gitconfig");
+				yield* Effect.tryPromise({
+					try: async () => {
+						await mkdir(dirname(hostsFile), { recursive: true, mode: 0o700 });
+						await chmod(dirname(hostsFile), 0o700);
+						await writeFile(
+							hostsFile,
+							`github.com:\n    oauth_token: ${JSON.stringify(credential.secret)}\n    git_protocol: https\n`,
+							{ encoding: "utf8", mode: 0o600 },
+						);
+						await chmod(hostsFile, 0o600);
+						await writeFile(
+							gitConfigFile,
+							'[credential "https://github.com"]\n\thelper = !gh auth git-credential\n',
+							{ encoding: "utf8", mode: 0o600 },
+						);
+						await chmod(gitConfigFile, 0o600);
+					},
+					catch: () => fail("credential_install_failed"),
+				});
+				continue;
+			}
+			if (credential.credentialType === "native-store") {
+				const accountHome =
+					process.env.ZUSE_ACCOUNT_ACCESS_HOME?.trim() || homedir();
+				const credentialFile =
+					credential.kind === "claude"
+						? join(accountHome, ".claude", ".credentials.json")
+						: join(accountHome, ".codex", "auth.json");
+				yield* Effect.tryPromise({
+					try: async () => {
+						JSON.parse(credential.secret);
+						await mkdir(dirname(credentialFile), {
+							recursive: true,
+							mode: 0o700,
+						});
+						await chmod(dirname(credentialFile), 0o700);
+						await writeFile(credentialFile, credential.secret, {
+							encoding: "utf8",
+							mode: 0o600,
+						});
+						await chmod(credentialFile, 0o600);
+					},
+					catch: () => fail("credential_install_failed"),
+				});
+				continue;
+			}
+			yield* credentialStore
+				.setProviderCredential(credential.kind, {
+					kind:
+						credential.credentialType === "oauth-token"
+							? "oauth-token"
+							: "api-key",
+					secret: credential.secret,
+				})
+				.pipe(Effect.mapError(() => fail("credential_install_failed")));
+		}
+	},
+);
+
 /**
  * One-shot cloud enrollment. The layer is initialized before the normal relay
  * link service, so that service immediately resumes the connector and
@@ -100,7 +173,7 @@ export const makeCloudEnrollmentLayer = (
 ): Layer.Layer<
 	never,
 	CloudEnrollmentError,
-	LanAuthService | ManagedTunnelRuntime
+	LanAuthService | ManagedTunnelRuntime | CredentialsService
 > =>
 	config === undefined
 		? Layer.empty
@@ -172,6 +245,7 @@ export const makeCloudEnrollmentLayer = (
 							mintPublicKey: enrolled.mintPublicKey,
 						})
 						.pipe(Effect.mapError((error) => fail(error.reason)));
+					yield* installCloudCredentials(enrolled.cloudCredentials);
 					yield* removeEnrollmentToken(config.tokenFile);
 				}),
 			);

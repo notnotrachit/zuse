@@ -1,8 +1,23 @@
 import type { ChatId } from "@zuse/contracts";
-import { type ReactNode, useEffect, useRef } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import * as terminalRegistry from "../lib/terminal-registry.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
 import { useChatsStore } from "../store/chats.ts";
+import {
+	cloudSummaryForChat,
+	localProjectForCloudChat,
+	useCloudExecutionStore,
+} from "../store/cloud-chat-registry.ts";
+import {
+	ensureCloudWorkspaceAttached,
+	useCloudChatsStore,
+} from "../store/cloud-chats.ts";
 import {
 	EMPTY_TERMINALS,
 	type TerminalInstance,
@@ -52,6 +67,29 @@ export function TerminalSlotPane({ slot }: { slot: number }) {
 			</TerminalPlaceholder>
 		);
 	}
+	if (ctx.status === "cloud-unavailable") {
+		if (chatId !== null && cloudSummaryForChat(chatId) !== null)
+			return (
+				<PlainTerminalSlot
+					chatId={chatId}
+					rootPath="/home/zuse/workspace"
+					slot={slot}
+				/>
+			);
+		return (
+			<TerminalPlaceholder>
+				{ctx.attachmentState === "failed" ? (
+					"Cloud connection failed."
+				) : (
+					<ShimmerText>
+						{ctx.attachmentState === "attaching"
+							? "Reconnecting cloud terminal…"
+							: "Open Terminal to resume this cloud workspace"}
+					</ShimmerText>
+				)}
+			</TerminalPlaceholder>
+		);
+	}
 	if (ctx.worktreePending) {
 		return (
 			<TerminalPlaceholder>
@@ -75,12 +113,111 @@ function PlainTerminalSlot({
 	slot: number;
 }) {
 	const key = terminalsKey(chatId);
+	const registeredCloudSummary = cloudSummaryForChat(chatId);
+	const cloudSummary = useCloudChatsStore(
+		(state) =>
+			state.summaries.find((summary) => summary.chatId === chatId) ??
+			registeredCloudSummary,
+	);
+	const cloudProjectId = localProjectForCloudChat(chatId);
+	const cloudAttachment = useCloudExecutionStore((state) =>
+		cloudSummary === null
+			? "ready"
+			: (state.stateByWorkspace[cloudSummary.workspaceId] ?? "detached"),
+	);
+	const [pendingTerminalInput, setPendingTerminalInput] = useState("");
 	const list = useTerminalsStore((s) => s.byKey[key] ?? EMPTY_TERMINALS);
 	const ensureSlot = useTerminalsStore((s) => s.ensureSlot);
+	const resolvedRootPath =
+		cloudSummary === null ? rootPath : "/home/zuse/workspace";
+
+	const connectCloudTerminal = useCallback(() => {
+		if (
+			cloudSummary === null ||
+			cloudProjectId === null ||
+			cloudAttachment === "attaching"
+		)
+			return;
+		void ensureCloudWorkspaceAttached(cloudSummary).catch(() => undefined);
+	}, [cloudAttachment, cloudProjectId, cloudSummary]);
 
 	useEffect(() => {
-		if (list.length <= slot) ensureSlot(key, slot, rootPath);
-	}, [key, list.length, slot, ensureSlot, rootPath]);
+		if (cloudAttachment !== "ready") return;
+		const instance = list[slot];
+		if (
+			instance === undefined ||
+			(cloudSummary !== null &&
+				instance.environmentId !== cloudSummary.workspaceId)
+		)
+			ensureSlot(key, slot, resolvedRootPath);
+	}, [
+		cloudAttachment,
+		cloudSummary,
+		ensureSlot,
+		key,
+		list,
+		resolvedRootPath,
+		slot,
+	]);
+
+	if (cloudAttachment === "attaching")
+		return (
+			<TerminalPlaceholder>
+				<ShimmerText>Reconnecting cloud terminal…</ShimmerText>
+			</TerminalPlaceholder>
+		);
+	if (cloudSummary !== null && cloudAttachment !== "ready")
+		if (
+			cloudSummary.state === "resuming" ||
+			cloudSummary.state === "provisioning" ||
+			cloudSummary.state === "setup"
+		)
+			return (
+				<TerminalPlaceholder>
+					<ShimmerText>Resuming cloud workspace…</ShimmerText>
+				</TerminalPlaceholder>
+			);
+	if (cloudSummary !== null && cloudAttachment !== "ready")
+		return (
+			<TerminalPlaceholder>
+				<textarea
+					value=""
+					onChange={() => undefined}
+					aria-label="Cloud terminal. Type to resume the workspace."
+					placeholder={
+						cloudAttachment === "failed"
+							? "Cloud terminal could not connect. Type here to try again."
+							: cloudSummary.state === "paused"
+								? "Workspace paused — type here to resume the terminal."
+								: "Cloud terminal is unavailable."
+					}
+					className="h-full min-h-11 w-full resize-none cursor-text content-center border-0 bg-transparent px-6 text-center text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+					onKeyDown={(event) => {
+						const input =
+							event.key.length === 1
+								? event.key
+								: event.key === "Enter"
+									? "\r"
+									: event.key === "Tab"
+										? "\t"
+										: event.key === "Backspace"
+											? "\u007f"
+											: "";
+						if (input.length === 0 || event.metaKey || event.ctrlKey) return;
+						event.preventDefault();
+						setPendingTerminalInput(input);
+						connectCloudTerminal();
+					}}
+					onPaste={(event) => {
+						const input = event.clipboardData.getData("text");
+						if (input.length === 0) return;
+						event.preventDefault();
+						setPendingTerminalInput(input);
+						connectCloudTerminal();
+					}}
+				/>
+			</TerminalPlaceholder>
+		);
 
 	const inst = list[slot];
 	if (inst === undefined) return null;
@@ -90,6 +227,8 @@ function PlainTerminalSlot({
 			environmentId={inst.environmentId}
 			instanceId={inst.id}
 			command={inst.command}
+			initialInput={pendingTerminalInput}
+			onInitialInputWritten={() => setPendingTerminalInput("")}
 		/>
 	);
 }
@@ -107,11 +246,15 @@ export function PtyTerminal({
 	environmentId,
 	instanceId,
 	command,
+	initialInput,
+	onInitialInputWritten,
 }: {
 	cwd: string;
 	environmentId: string;
 	instanceId: string;
 	command?: TerminalInstance["command"];
+	initialInput?: string;
+	onInitialInputWritten?: () => void;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -121,6 +264,8 @@ export function PtyTerminal({
 		terminalRegistry.attach(environmentId, instanceId, container, {
 			cwd,
 			command,
+			initialInput,
+			onInitialInputWritten,
 		});
 		return () => terminalRegistry.detach(environmentId, instanceId);
 		// `cwd`/`command` only matter on first open; reconnects reuse the live

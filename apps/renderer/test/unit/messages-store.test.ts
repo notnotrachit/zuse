@@ -1,6 +1,9 @@
 import type { ConnectionSnapshot } from "@zuse/client-runtime/supervisor";
 import {
+	AgentSessionId,
 	AgentTurnId,
+	ChatId,
+	CloudChatSummary,
 	ComposerInput,
 	Message,
 	MessageId,
@@ -19,12 +22,16 @@ const { reportRendererRpcStreamFailure, subscribeRendererRpcConnection } =
 		reportRendererRpcStreamFailure: vi.fn(),
 		subscribeRendererRpcConnection: vi.fn(),
 	}));
+const { getControlPlaneRpcClient } = vi.hoisted(() => ({
+	getControlPlaneRpcClient: vi.fn(),
+}));
 
 vi.mock("../../src/lib/rpc-client.ts", async (importOriginal) => {
 	const original =
 		await importOriginal<typeof import("../../src/lib/rpc-client.ts")>();
 	return {
 		...original,
+		getControlPlaneRpcClient,
 		reportRendererRpcStreamFailure,
 		subscribeRendererRpcConnection,
 	};
@@ -43,6 +50,10 @@ const {
 const { resetSessionRuntimeForTest, useSessionRuntimeStore } = await import(
 	"../../src/store/session-runtime.ts"
 );
+const { registerCloudChat } = await import(
+	"../../src/store/cloud-chat-registry.ts"
+);
+const { useCloudChatsStore } = await import("../../src/store/cloud-chats.ts");
 
 const sessionId = "session-queue" as SessionId;
 const runtimeStateForTest = () =>
@@ -187,6 +198,7 @@ describe("messages store queue actions", () => {
 		dispatchedCommandIds = [];
 		reportRendererRpcStreamFailure.mockReset();
 		subscribeRendererRpcConnection.mockReset();
+		getControlPlaneRpcClient.mockReset();
 		rpcClientFactory = makeQueueClient;
 		useMessagesStore.setState({
 			messagesBySession: {},
@@ -200,6 +212,52 @@ describe("messages store queue actions", () => {
 		resetSessionRuntimeForTest();
 	});
 
+	it("keeps cloud delivery queued without pretending the agent started", async () => {
+		const cloudSessionId = AgentSessionId.make("session-cloud-feedback");
+		registerCloudChat(
+			CloudChatSummary.make({
+				workspaceId: "workspace-cloud-feedback",
+				projectId: "project-cloud-feedback",
+				repositoryIdentity: "github.com/example/cloud-feedback",
+				repositoryDisplayName: "cloud-feedback",
+				chatId: ChatId.make("chat-cloud-feedback"),
+				initialSessionId: cloudSessionId,
+				title: "Cloud feedback",
+				branch: "zuse/cloud-feedback",
+				providerId: "e2b",
+				agent: "codex",
+				model: "gpt-5.6-sol",
+				state: "ready",
+				runtimeState: "online",
+				statusCode: "ready",
+				startupPhase: "running",
+				desiredState: "ready",
+				revision: 1,
+				unread: false,
+				lastMessageAt: Date.now(),
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		getControlPlaneRpcClient.mockResolvedValue({
+			"cloud.chats.send": () => Effect.succeed({ sequence: 1 }),
+			"cloud.workspaces.get": () => Effect.fail(new Error("not attached")),
+		});
+
+		await useMessagesStore.getState().send(cloudSessionId, "keep working");
+
+		expect(
+			effectiveSessionRuntimeState(
+				useSessionRuntimeStore.getState().bySession[cloudSessionId],
+			),
+		).toBe("idle");
+		expect(
+			useCloudChatsStore.getState().commandByWorkspace[
+				"workspace-cloud-feedback"
+			]?.state,
+		).toBe("queued");
+	});
+
 	it("delegates an idle queued item to the server-owned run-next command", async () => {
 		await useMessagesStore
 			.getState()
@@ -207,6 +265,41 @@ describe("messages store queue actions", () => {
 
 		expect(interruptCalls).toBe(0);
 		expect(runNextCalls).toEqual([{ sessionId, queueId: queued.id }]);
+	});
+
+	it("never persists a cloud queue chip through a computer RPC", async () => {
+		const cloudSessionId = AgentSessionId.make("session-cloud-queue");
+		registerCloudChat(
+			CloudChatSummary.make({
+				workspaceId: "workspace-cloud-queue",
+				projectId: "project-cloud-queue",
+				repositoryIdentity: "github.com/example/cloud-queue",
+				repositoryDisplayName: "cloud-queue",
+				chatId: ChatId.make("chat-cloud-queue"),
+				initialSessionId: cloudSessionId,
+				title: "Cloud queue",
+				branch: "zuse/cloud-queue",
+				providerId: "e2b",
+				agent: "codex",
+				model: "gpt-5.6-sol",
+				state: "ready",
+				runtimeState: "online",
+				statusCode: "ready",
+				startupPhase: "running",
+				desiredState: "ready",
+				revision: 1,
+				unread: false,
+				lastMessageAt: Date.now(),
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+
+		await useMessagesStore
+			.getState()
+			.persistQueued(cloudSessionId, "q_cloud", input);
+
+		expect(addCalls).toEqual([]);
 	});
 
 	it("delegates a running session before its active turn reaches the timeline", async () => {
@@ -615,6 +708,116 @@ describe("messages store queue actions", () => {
 					id: "message-after-reconnect",
 				}),
 			]);
+	});
+
+	it("observes cloud and local transcript connections independently", async () => {
+		const cloudSessionId = AgentSessionId.make("session-cloud-stream");
+		const workspaceId = "workspace-cloud-stream";
+		registerCloudChat(
+			CloudChatSummary.make({
+				workspaceId,
+				projectId: "project-cloud-stream",
+				repositoryIdentity: "github.com/example/cloud-stream",
+				repositoryDisplayName: "cloud-stream",
+				chatId: ChatId.make("chat-cloud-stream"),
+				initialSessionId: cloudSessionId,
+				title: "Cloud stream",
+				branch: "zuse/cloud-stream",
+				providerId: "e2b",
+				agent: "codex",
+				model: "gpt-5.6-sol",
+				state: "ready",
+				runtimeState: "online",
+				statusCode: "ready",
+				startupPhase: "running",
+				desiredState: "ready",
+				revision: 1,
+				unread: false,
+				lastMessageAt: Date.now(),
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		subscribeRendererRpcConnection.mockImplementation(() => vi.fn());
+		rpcClientFactory = () =>
+			({
+				"session.events": () => Stream.never,
+			}) as unknown as Awaited<
+				ReturnType<typeof import("../../src/lib/rpc-client.ts").getRpcClient>
+			>;
+
+		await useMessagesStore.getState().hydrate(sessionId);
+		await useMessagesStore.getState().hydrate(cloudSessionId, {
+			live: true,
+			environmentId: workspaceId,
+		});
+
+		expect(subscribeRendererRpcConnection).toHaveBeenCalledWith(
+			expect.any(Function),
+			undefined,
+		);
+		expect(subscribeRendererRpcConnection).toHaveBeenCalledWith(
+			expect.any(Function),
+			workspaceId,
+		);
+	});
+
+	it("keeps a durable cloud transcript free of provider errors during reconnect", async () => {
+		const cloudSessionId = AgentSessionId.make("session-cloud-reconnect-error");
+		const workspaceId = "workspace-cloud-reconnect-error";
+		registerCloudChat(
+			CloudChatSummary.make({
+				workspaceId,
+				projectId: "project-cloud-reconnect-error",
+				repositoryIdentity: "github.com/example/cloud-reconnect-error",
+				repositoryDisplayName: "cloud-reconnect-error",
+				chatId: ChatId.make("chat-cloud-reconnect-error"),
+				initialSessionId: cloudSessionId,
+				title: "Cloud reconnect",
+				branch: "task/cloud-reconnect",
+				providerId: "provider-cloud",
+				agent: "codex",
+				model: "gpt-5.6",
+				state: "ready",
+				desiredState: "ready",
+				runtimeState: "online",
+				statusCode: "ready",
+				startupPhase: "running",
+				revision: 1,
+				unread: false,
+				lastMessageAt: Date.now(),
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		subscribeRendererRpcConnection.mockImplementation((listener) => {
+			listener({
+				key: `workspace:${workspaceId}`,
+				status: "connected",
+				generation: 1,
+				attempt: 0,
+				error: null,
+			});
+			return vi.fn();
+		});
+		rpcClientFactory = () =>
+			({
+				"session.events": () =>
+					Stream.fail(new Error("WebSocket closed during laptop sleep")),
+			}) as unknown as Awaited<
+				ReturnType<typeof import("../../src/lib/rpc-client.ts").getRpcClient>
+			>;
+
+		await useMessagesStore.getState().hydrate(cloudSessionId, {
+			live: true,
+			environmentId: workspaceId,
+		});
+		await expect
+			.poll(() => reportRendererRpcStreamFailure.mock.calls.length)
+			.toBeGreaterThan(0);
+		expect(
+			useMessagesStore.getState().errorBySession[cloudSessionId],
+		).toBeFalsy();
 	});
 
 	it("releases an optimistic overlay when its timeline stream terminates", async () => {

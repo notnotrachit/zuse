@@ -9,9 +9,9 @@ import {
 	FakeMachineProviderControlService,
 	MachineProvidersFake,
 } from "@zuse/machine-providers/testing";
-import { Effect, Layer, Ref } from "effect";
+import { Effect, Layer, Redacted, Ref } from "effect";
 import { describe, expect, test } from "vitest";
-
+import * as Config from "../../src/config.ts";
 import {
 	AccountIdentity,
 	MachineControlConfiguration,
@@ -32,6 +32,13 @@ const noTunnel: ManagedTunnelProviderApi = {
 
 const makeTestLayer = (billing?: BillingProviderAdapter) =>
 	Layer.mergeAll(
+		Config.layer({
+			relayIssuer: "https://relay.test",
+			workosJwksUrl: "https://unused.test/jwks",
+			workosIssuer: "https://unused.test",
+			mintPrivateKey: Redacted.make("{}"),
+			mintPublicKey: '{"kty":"OKP"}',
+		}),
 		MachineStoreMemory,
 		MachineProvidersFake,
 		billing === undefined
@@ -77,6 +84,7 @@ const seedMachine = Effect.fn("seedMachine")(function* (nowMs: number) {
 	const outcome = yield* store.createMachine({
 		accountId: "user_a",
 		offerId: "persistent-standard-v1",
+		sameKindOfferIds: ["persistent-standard-v1"],
 		idempotencyKey: "create_1",
 		machineId: "machine_1",
 		provider: provider.providerId,

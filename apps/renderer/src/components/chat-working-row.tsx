@@ -8,6 +8,7 @@ import {
 	useProviderStartupDelay,
 } from "../lib/provider-startup-delay.ts";
 import { effectiveSessionRuntimeState } from "../lib/session-runtime-state.ts";
+import { cloudSummaryForSession } from "../store/cloud-chat-registry.ts";
 import { useSessionRuntimeStore } from "../store/session-runtime.ts";
 import { getSessionById, useSessionsStore } from "../store/sessions.ts";
 import { AgentActivityOrb } from "./ui/agent-activity-orb.tsx";
@@ -39,8 +40,14 @@ export function ChatWorkingRow({
 		session === null || session === undefined
 			? "Agent"
 			: (PROVIDER_LABEL[session.providerId] ?? session.providerId);
+	const cloudSummary = cloudSummaryForSession(sessionId);
+	const initialCloudAgentStart =
+		cloudSummary !== null && cloudSummary.startupPhase === "starting-agent";
+	const showStartup =
+		runtimeState === "starting" &&
+		(cloudSummary === null || initialCloudAgentStart);
 	const delayed = useProviderStartupDelay(
-		runtimeState === "starting",
+		showStartup,
 		`${sessionId}:${session?.providerId ?? "unknown"}:${session?.model ?? "unknown"}`,
 	);
 	const anchorMs = useMemo(() => {
@@ -67,21 +74,28 @@ export function ChatWorkingRow({
 	const activityState = deriveAgentActivityState(messages);
 
 	return (
-		<div className="flex min-h-9 items-center gap-2 px-4 py-2 text-[11px] text-muted-foreground">
+		<div
+			className="flex min-h-9 items-center gap-2 px-4 py-2 text-[11px] text-muted-foreground"
+			role="status"
+			aria-live="polite"
+		>
 			<AgentActivityOrb state={activityState} />
-			{runtimeState === "starting" ? (
-				<span className={delayed ? "text-warning" : "text-muted-foreground"}>
-					{providerStartupLabel({
-						providerLabel,
-						failed: false,
-						delayed,
-					})}
-				</span>
-			) : (
-				<ShimmerText tone="lime" className="tabular-nums">
-					{formatElapsed(elapsed)}
-				</ShimmerText>
-			)}
+			<span
+				className={
+					showStartup && delayed ? "text-warning" : "text-muted-foreground"
+				}
+			>
+				{showStartup
+					? providerStartupLabel({
+							providerLabel,
+							failed: false,
+							delayed,
+						})
+					: `${providerLabel} is working`}
+			</span>
+			<ShimmerText tone="lime" className="ml-auto tabular-nums">
+				{formatElapsed(elapsed)}
+			</ShimmerText>
 		</div>
 	);
 }

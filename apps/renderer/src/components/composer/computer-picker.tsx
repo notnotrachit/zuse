@@ -1,10 +1,7 @@
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CloudIcon, ComputerIcon, Tick01Icon } from "@zuse/icons/solid-rounded";
 import { ChevronDown } from "lucide-react";
-import {
-	ComputerIcon,
-	Tick01Icon,
-} from "@zuse/icons/solid-rounded";
-
+import { Badge } from "~/components/ui/badge";
 import {
 	Menu,
 	MenuItem,
@@ -37,6 +34,13 @@ const statusText = (item: ComputerPickerItem): string =>
 						? "Offline"
 						: "Connected";
 
+export type CloudComputerPickerItem = {
+	readonly providerId: string;
+	readonly providerLabel: string;
+	readonly disabled: boolean;
+	readonly statusText: string | null;
+};
+
 /**
  * "Run on" control for the Chat Lander: picks which computer a new chat runs
  * on within the selected logical project. A pure controlled selector —
@@ -52,19 +56,25 @@ export function ComputerPicker({
 	target,
 	entries,
 	onPickTarget,
+	cloudItems = [],
+	selectedCloudProviderId = null,
+	onPickCloud,
 	onRetryEnvironment,
 }: {
 	group: LogicalProjectGroup | null;
 	target: NewChatTarget | null;
 	entries: ReadonlyArray<EnvironmentCatalogEntry>;
 	onPickTarget: (target: NewChatTarget) => void;
+	cloudItems?: ReadonlyArray<CloudComputerPickerItem>;
+	selectedCloudProviderId?: string | null;
+	onPickCloud?: (providerId: string) => void;
 	onRetryEnvironment: (environmentId: string) => void;
 }) {
 	if (group === null) return null;
 	const model = computerPickerItems(group, target, entries);
-	if (model.kind === "hidden") return null;
+	if (model.kind === "hidden" && cloudItems.length === 0) return null;
 
-	if (model.kind === "static") {
+	if (model.kind === "static" && cloudItems.length === 0) {
 		return (
 			<span className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
 				<HugeiconsIcon icon={ComputerIcon} className="size-3.5" />
@@ -73,8 +83,10 @@ export function ComputerPicker({
 		);
 	}
 
+	const computerItems = model.kind === "menu" ? model.items : [model.item];
 	const current =
-		model.items.find((item) => item.selected) ?? model.items[0] ?? null;
+		computerItems.find((item) => item.selected) ?? computerItems[0] ?? null;
+	const cloudSelected = selectedCloudProviderId !== null;
 	const pick = (item: ComputerPickerItem): void => {
 		if (item.retryable) {
 			onRetryEnvironment(item.environmentId);
@@ -93,12 +105,22 @@ export function ComputerPicker({
 				className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-foreground transition-colors hover:bg-accent data-[popup-open]:bg-accent"
 				aria-label="Run on computer"
 			>
-				<HugeiconsIcon icon={ComputerIcon} className="size-3.5" />
-				<span className="truncate">{current?.label ?? "Run on"}</span>
+				<HugeiconsIcon
+					icon={cloudSelected ? CloudIcon : ComputerIcon}
+					className="size-3.5"
+				/>
+				<span className="truncate">
+					{cloudSelected ? "Cloud Sandbox" : (current?.label ?? "Run on")}
+				</span>
+				{cloudSelected ? (
+					<Badge size="sm" variant="outline">
+						Beta
+					</Badge>
+				) : null}
 				<ChevronDown className="size-3 opacity-60" />
 			</MenuTrigger>
 			<MenuPopup side="bottom" align="start" className="w-64 p-1">
-				{model.items.map((item) => (
+				{computerItems.map((item) => (
 					<MenuItem
 						key={`${item.environmentId}:${item.folderId ?? "unavailable"}`}
 						disabled={item.disabled}
@@ -111,7 +133,7 @@ export function ComputerPicker({
 						)}
 					>
 						<span className="col-start-1 row-start-1 flex items-center justify-center">
-							{item.selected && (
+							{item.selected && !cloudSelected && (
 								<HugeiconsIcon
 									icon={Tick01Icon}
 									className="size-3.5 opacity-90"
@@ -133,6 +155,46 @@ export function ComputerPicker({
 						) : null}
 					</MenuItem>
 				))}
+				{cloudItems.length > 0 ? (
+					<>
+						<MenuSeparator />
+						{cloudItems.map((item) => {
+							const selected = item.providerId === selectedCloudProviderId;
+							return (
+								<MenuItem
+									key={`cloud:${item.providerId}`}
+									disabled={item.disabled}
+									onClick={() => onPickCloud?.(item.providerId)}
+									className={cn(
+										"grid grid-cols-[1rem_auto_1fr_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-sm",
+										selected
+											? "bg-accent/40 text-accent-foreground data-highlighted:bg-accent/60"
+											: undefined,
+									)}
+								>
+									<span className="col-start-1 flex items-center justify-center">
+										{selected ? (
+											<HugeiconsIcon icon={Tick01Icon} className="size-3.5" />
+										) : null}
+									</span>
+									<HugeiconsIcon
+										icon={CloudIcon}
+										className="col-start-2 size-3.5 opacity-80"
+									/>
+									<span className="col-start-3 flex min-w-0 items-center gap-1.5">
+										<span className="truncate">Cloud Sandbox</span>
+										<Badge size="sm" variant="outline">
+											Beta
+										</Badge>
+									</span>
+									<span className="col-start-4 text-[10px] text-muted-foreground">
+										{item.statusText ?? item.providerLabel}
+									</span>
+								</MenuItem>
+							);
+						})}
+					</>
+				) : null}
 				<MenuSeparator />
 				<MenuItem
 					onClick={() => openAddComputerDialog()}

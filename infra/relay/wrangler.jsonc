@@ -44,15 +44,37 @@
 		"HETZNER_SERVER_TYPE_PERSISTENT_STANDARD_V1": "cx33",
 		"MACHINE_RUNTIME_MANIFEST_URL": "https://github.com/swarajbachu/zuse/releases/download/cloud-runtime-staging/stable-manifest.json",
 		"MACHINE_RUNTIME_SIGNING_PUBLIC_JWK": "{\"crv\":\"Ed25519\",\"x\":\"ODy1bBgW390GBMxIqn8wy2eO3C05kXdoPYk5JV09OZI\",\"kty\":\"OKP\"}",
+		"CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL": "https://github.com/swarajbachu/zuse/releases/download/cloud-runtime-staging/stable-manifest.json",
+		"CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK": "{\"crv\":\"Ed25519\",\"x\":\"ODy1bBgW390GBMxIqn8wy2eO3C05kXdoPYk5JV09OZI\",\"kty\":\"OKP\"}",
+		"E2B_ADAPTER_ENABLED": "true",
+		"E2B_TEMPLATE_ID": "zuse-cloud-sandbox",
+		"E2B_TEMPLATE_VERSION": "8314e49a-5f80-4899-895c-7688ac80bd23",
+		"CLOUD_WORKSPACE_IDLE_TIMEOUT_MS": "600000",
+		"CLOUD_REPOSITORY_CACHE_MAX_BYTES": "8589934592",
 
 		"POLAR_ENVIRONMENT": "sandbox",
 		"POLAR_PRODUCT_PERSISTENT_STANDARD_V1": "810223ea-94f2-47e7-9c09-af9a0fd86174",
+		"POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1": "31616352-13b0-48dd-a9cd-11724f358199",
 		"POLAR_VPS_SALES_APPROVED": "false"
 	},
 	"hyperdrive": [
 		{
 			"binding": "HYPERDRIVE",
 			"id": "dfc67e0586ff4c288cb645ed63c65d9a"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "WORKSPACE_GATEWAY",
+				"class_name": "WorkspaceGateway"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1-workspace-gateway",
+			"new_sqlite_classes": ["WorkspaceGateway"]
 		}
 	]
 }

@@ -1,11 +1,18 @@
 import { HugeiconsIcon } from "@hugeicons/react";
+import type { CloudChatSummary } from "@zuse/contracts";
 import {
 	Alert01Icon,
+	CloudIcon,
 	GitBranchIcon,
 	Tick01Icon,
 } from "@zuse/icons/solid-rounded";
+import { Effect } from "effect";
+import { useState } from "react";
+import { getControlPlaneRpcClient } from "../lib/rpc-client.ts";
 import { shouldShowSetupCard } from "../lib/setup-card-visibility.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
+import { useChatsStore } from "../store/chats.ts";
+import { useCloudChatsStore } from "../store/cloud-chats.ts";
 import { useSessionsStore } from "../store/sessions.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
 import { EMPTY_WORKTREES, useWorktreesStore } from "../store/worktrees.ts";
@@ -13,6 +20,7 @@ import { AgentActivityOrb } from "./ui/agent-activity-orb.tsx";
 import { Button } from "./ui/button.tsx";
 import { ShimmerText } from "./ui/shimmer-text.tsx";
 import { Spinner } from "./ui/spinner";
+import { toastManager } from "./ui/toast.tsx";
 
 type StepState = "pending" | "active" | "done" | "failed";
 
@@ -55,6 +63,11 @@ export type SetupCardData = {
  */
 export function WorktreeSetupCard() {
 	const ctx = useActiveContext();
+	const selectedChatId = useChatsStore((state) => state.selectedChatId);
+	const cloudSummary = useCloudChatsStore(
+		(state) =>
+			state.summaries.find((row) => row.chatId === selectedChatId) ?? null,
+	);
 	const session = useSessionsStore((s) => {
 		if (s.selectedSessionId === null) return null;
 		for (const list of Object.values(s.sessionsByProject)) {
@@ -98,6 +111,14 @@ export function WorktreeSetupCard() {
 		hasWorktree,
 		setupDone,
 	});
+	if (
+		cloudSummary !== null &&
+		cloudSummary.startupPhase !== "running" &&
+		cloudSummary.state !== "paused" &&
+		cloudSummary.state !== "resuming" &&
+		!cloudSummary.statusCode.includes("resume")
+	)
+		return <CloudWorkspaceSetupCard summary={cloudSummary} />;
 	if (!visible) return null;
 
 	return (
@@ -117,6 +138,144 @@ export function WorktreeSetupCard() {
 						: null,
 			}}
 		/>
+	);
+}
+
+const cloudPhaseRank: Record<CloudChatSummary["startupPhase"], number> = {
+	allocating: 0,
+	booting: 1,
+	"authenticating-runtime": 1,
+	"syncing-repository": 2,
+	"starting-agent": 3,
+	running: 4,
+	failed: -1,
+};
+
+const cloudFailureRank = (statusCode: string): number => {
+	if (/agent/u.test(statusCode)) return 3;
+	if (/git|repository|branch/u.test(statusCode)) return 2;
+	if (/runtime|enroll|credential|auth/u.test(statusCode)) return 1;
+	return 0;
+};
+
+export const cloudFailureMessage = (statusCode: string): string => {
+	switch (statusCode) {
+		case "runtime-connection-timeout":
+			return "The sandbox started, but its secure runtime did not connect in time.";
+		case "provider-sandbox-missing":
+			return "The saved sandbox no longer exists. Retry will restore this workspace in a new sandbox.";
+		case "provider-unavailable":
+			return "The cloud provider is temporarily unavailable.";
+		case "workspace-credential-install-failed":
+		case "credential-install-failed":
+			return "The workspace could not install your connected account credentials.";
+		default:
+			return `Startup stopped during ${statusCode}.`;
+	}
+};
+
+export function CloudWorkspaceSetupCard({
+	summary,
+}: {
+	readonly summary: CloudChatSummary;
+}) {
+	const [busy, setBusy] = useState<"retry" | "delete" | null>(null);
+	const runAction = async (action: "resume" | "delete") => {
+		setBusy(action === "resume" ? "retry" : "delete");
+		try {
+			const control = await getControlPlaneRpcClient();
+			if (action === "resume")
+				await Effect.runPromise(
+					control["cloud.workspaces.resume"]({
+						workspaceId: summary.workspaceId,
+					}),
+				);
+			else
+				await Effect.runPromise(
+					control["cloud.workspaces.delete"]({
+						workspaceId: summary.workspaceId,
+					}),
+				);
+			await useCloudChatsStore.getState().hydrate();
+		} catch {
+			toastManager.add({
+				type: "error",
+				title: "Cloud action failed",
+				description: "The workspace was kept. Try again.",
+			});
+		} finally {
+			setBusy(null);
+		}
+	};
+	const failed = summary.startupPhase === "failed";
+	const rank = failed
+		? cloudFailureRank(summary.statusCode)
+		: cloudPhaseRank[summary.startupPhase];
+	const step = (index: number): StepState =>
+		failed && index === rank
+			? "failed"
+			: rank > index
+				? "done"
+				: rank === index
+					? "active"
+					: "pending";
+	return (
+		<div className="mx-auto w-full max-w-3xl px-4 pt-4" role="status">
+			<div className="overflow-hidden rounded-xl border border-border/60 bg-muted/15">
+				<header className="flex items-center gap-2 border-b border-border/40 px-3.5 py-2.5">
+					<HugeiconsIcon
+						icon={CloudIcon}
+						className="size-4 shrink-0 text-muted-foreground"
+					/>
+					<span className="flex-1 text-[13px] font-medium text-foreground/90">
+						{failed ? (
+							"Cloud workspace needs attention"
+						) : (
+							<ShimmerText tone="lime">Cloud starting</ShimmerText>
+						)}
+					</span>
+					{failed ? (
+						<HugeiconsIcon
+							icon={Alert01Icon}
+							className="size-4 text-[var(--accent-red)]"
+						/>
+					) : (
+						<AgentActivityOrb state="shaping" label="Cloud starting" />
+					)}
+				</header>
+				<div className="flex flex-col gap-1.5 px-3.5 py-2.5 text-[12px]">
+					<StepRow state={step(0)} label="Starting cloud workspace" />
+					<StepRow state={step(1)} label="Starting secure cloud runtime" />
+					<StepRow state={step(2)} label="Fetching the latest Git changes" />
+					<StepRow
+						state={step(3)}
+						label="Checking out branch and starting agent"
+					/>
+				</div>
+				{failed ? (
+					<div className="flex items-center gap-2 border-t border-border/40 px-3.5 py-2">
+						<p className="min-w-0 flex-1 text-[11px] text-[var(--accent-red)]">
+							{cloudFailureMessage(summary.statusCode)}
+						</p>
+						<Button
+							size="xs"
+							loading={busy === "retry"}
+							onClick={() => void runAction("resume")}
+						>
+							Retry
+						</Button>
+						<Button
+							size="xs"
+							variant="ghost"
+							loading={busy === "delete"}
+							onClick={() => void runAction("delete")}
+						>
+							Delete workspace
+						</Button>
+					</div>
+				) : null}
+			</div>
+		</div>
 	);
 }
 

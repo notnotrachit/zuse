@@ -10,6 +10,7 @@ import {
 import { Effect } from "effect";
 import { ExternalLink, KeyRound, LoaderCircle, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "../../hooks/use-auth.ts";
 import {
 	clearCloudMachineCheckoutSession,
 	readCloudMachineCheckoutSession,
@@ -66,6 +67,7 @@ import {
 import { Spinner } from "../ui/spinner.tsx";
 import { CloudAccountAccess } from "./cloud-account-access.tsx";
 import { CloudSettingsGroup, CloudSettingsRow } from "./cloud-settings-ui.tsx";
+import { CloudWorkspacePool } from "./cloud-workspace-pool.tsx";
 
 const formatDate = (value: number | undefined, fallback: string): string =>
 	value === undefined
@@ -118,6 +120,7 @@ export const runtimeVersionDescription = (
 };
 
 export function CloudMachinesPane() {
+	const { isLoading: authLoading, isSignedIn } = useAuth();
 	const [offer, setOffer] = useState<MachineOffer | null>(null);
 	const [machine, setMachine] = useState<MachineRecord | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -169,9 +172,14 @@ export function CloudMachinesPane() {
 				Effect.runPromise(client["machines.offers"]()),
 				Effect.runPromise(client["machines.list"]()),
 			]);
-			const nextOffer = offers.offers[0] ?? null;
+			const nextOffer =
+				offers.offers.find((candidate) => candidate.kind === "persistent") ??
+				null;
 			setOffer(nextOffer);
-			const activeMachine = selectActiveCloudMachine(machines.machines);
+			const activeMachine = selectActiveCloudMachine(
+				machines.machines,
+				"persistent",
+			);
 			setMachine(activeMachine);
 			if (
 				activeMachine?.state === "ready" &&
@@ -186,7 +194,10 @@ export function CloudMachinesPane() {
 			}
 			if (activeMachine !== null) {
 				setCheckoutUrl(null);
-				clearCloudMachineCheckoutSession(window.sessionStorage);
+				clearCloudMachineCheckoutSession(
+					window.sessionStorage,
+					activeMachine.offer.offerId,
+				);
 			} else if (nextOffer !== null) {
 				setCheckoutUrl(
 					readCloudMachineCheckoutSession(window.sessionStorage, {
@@ -207,6 +218,12 @@ export function CloudMachinesPane() {
 	}, [syncAccountEnvironments]);
 
 	useEffect(() => {
+		if (authLoading) return;
+		if (!isSignedIn) {
+			setLoading(false);
+			setLoadError(null);
+			return;
+		}
 		void load();
 		const timer = window.setInterval(() => void load(), 5_000);
 		const handleFocus = () => void load();
@@ -215,7 +232,7 @@ export function CloudMachinesPane() {
 			window.clearInterval(timer);
 			window.removeEventListener("focus", handleFocus);
 		};
-	}, [load]);
+	}, [authLoading, isSignedIn, load]);
 
 	const beginPurchase = async () => {
 		if (offer === null || submitting) return;
@@ -506,6 +523,7 @@ export function CloudMachinesPane() {
 
 	const error = visibleCloudMachineError(loadError, actionError);
 	const progress = machine === null ? null : cloudMachineProgress(machine);
+	const progressSteps = machine === null ? [] : cloudMachineProgressSteps();
 	const activeProgressStep = progress?.activeStep ?? null;
 	const connection = cloudConnectionPresentation(
 		machineEnvironment?.status,
@@ -515,6 +533,7 @@ export function CloudMachinesPane() {
 
 	return (
 		<section className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3 text-xs">
+			<CloudWorkspacePool />
 			{error === null ? null : (
 				<div
 					role="alert"
@@ -611,13 +630,13 @@ export function CloudMachinesPane() {
 							{activeProgressStep === null ? null : (
 								<div
 									className="grid grid-cols-7 gap-1"
-									aria-label={`Provisioning step ${activeProgressStep + 1} of ${cloudMachineProgressSteps.length}: ${cloudMachineProgressSteps[activeProgressStep]}`}
-									aria-valuemax={cloudMachineProgressSteps.length}
+									aria-label={`Provisioning step ${activeProgressStep + 1} of ${progressSteps.length}: ${progressSteps[activeProgressStep]}`}
+									aria-valuemax={progressSteps.length}
 									aria-valuemin={1}
 									aria-valuenow={activeProgressStep + 1}
 									role="progressbar"
 								>
-									{cloudMachineProgressSteps.map((step, index) => (
+									{progressSteps.map((step, index) => (
 										<span
 											key={step}
 											title={step}

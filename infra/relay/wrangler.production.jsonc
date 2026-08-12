@@ -41,15 +41,33 @@
 		"HETZNER_SERVER_TYPE_PERSISTENT_STANDARD_V1": "",
 		"MACHINE_RUNTIME_MANIFEST_URL": "",
 		"MACHINE_RUNTIME_SIGNING_PUBLIC_JWK": "",
+		"E2B_ADAPTER_ENABLED": "false",
+		"E2B_TEMPLATE_ID": "",
+		"E2B_TEMPLATE_VERSION": "",
 
 		"POLAR_ENVIRONMENT": "sandbox",
 		"POLAR_PRODUCT_PERSISTENT_STANDARD_V1": "",
+		"POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1": "",
 		"POLAR_VPS_SALES_APPROVED": "false"
 	},
 	"hyperdrive": [
 		{
 			"binding": "HYPERDRIVE",
 			"id": "c49c02e939494a958fb5fe6805e7b0f2"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "WORKSPACE_GATEWAY",
+				"class_name": "WorkspaceGateway"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1-workspace-gateway",
+			"new_sqlite_classes": ["WorkspaceGateway"]
 		}
 	]
 }

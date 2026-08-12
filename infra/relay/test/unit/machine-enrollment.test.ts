@@ -1,5 +1,6 @@
 import { BillingProvidersManual } from "@zuse/billing-providers";
 import { MachineProvidersFake } from "@zuse/machine-providers/testing";
+import { SandboxProvidersFake } from "@zuse/sandbox-providers/testing";
 import { Effect, Layer, Redacted, Ref } from "effect";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { describe, expect, test } from "vitest";
@@ -38,15 +39,22 @@ const configLayer = Config.layer({
 	mintPublicKey: '{"kty":"OKP"}',
 });
 
-const testLayer = Layer.mergeAll(
-	configLayer,
-	WorkosVerifierTest,
-	MachineStoreMemory,
-	MachineProvidersFake,
-	BillingProvidersManual,
-	RelayStoreMemory,
-	Layer.succeed(ManagedTunnelProvider, testTunnel),
-);
+const makeTestLayer = (
+	machineStore: Layer.Layer<MachineStore>,
+	tunnel: ManagedTunnelProviderApi,
+) =>
+	Layer.mergeAll(
+		configLayer,
+		WorkosVerifierTest,
+		machineStore,
+		MachineProvidersFake,
+		SandboxProvidersFake,
+		BillingProvidersManual,
+		RelayStoreMemory,
+		Layer.succeed(ManagedTunnelProvider, tunnel),
+	);
+
+const testLayer = makeTestLayer(MachineStoreMemory, testTunnel);
 
 const failFirstCompareAndSet = Layer.effect(
 	MachineStore,
@@ -67,14 +75,9 @@ const failFirstCompareAndSet = Layer.effect(
 	}),
 ).pipe(Layer.provide(MachineStoreMemory));
 
-const compareAndSetRaceLayer = Layer.mergeAll(
-	configLayer,
-	WorkosVerifierTest,
+const compareAndSetRaceLayer = makeTestLayer(
 	failFirstCompareAndSet,
-	MachineProvidersFake,
-	BillingProvidersManual,
-	RelayStoreMemory,
-	Layer.succeed(ManagedTunnelProvider, testTunnel),
+	testTunnel,
 );
 
 const proofFor = async (
@@ -134,13 +137,22 @@ const safeRoute = (request: Request) =>
 		),
 	);
 
-const seedEnrollment = Effect.fn("seedEnrollment")(function* (nowMs: number) {
+const seedEnrollment = Effect.fn("seedEnrollment")(function* (
+	nowMs: number,
+	options: {
+		readonly offerId?: string;
+		readonly providerServerId?: string;
+		readonly providerEndpointHttpBaseUrl?: string;
+		readonly providerEndpointWsBaseUrl?: string;
+	} = {},
+) {
 	const store = yield* MachineStore;
+	const offerId = options.offerId ?? "persistent-standard-v1";
 	yield* store.upsertEntitlement({
 		entitlementId: "ent_1",
 		accountId: "user_a",
 		kind: "persistent-machine",
-		offerId: "persistent-standard-v1",
+		offerId,
 		provider: "manual",
 		status: "active",
 		paidThroughMs: nowMs + 30 * 24 * 60 * 60 * 1_000,
@@ -149,7 +161,8 @@ const seedEnrollment = Effect.fn("seedEnrollment")(function* (nowMs: number) {
 	});
 	const created = yield* store.createMachine({
 		accountId: "user_a",
-		offerId: "persistent-standard-v1",
+		offerId,
+		sameKindOfferIds: [offerId],
 		idempotencyKey: "create_1",
 		machineId: "machine_1",
 		provider: "fake",
@@ -159,6 +172,9 @@ const seedEnrollment = Effect.fn("seedEnrollment")(function* (nowMs: number) {
 	if (created.kind !== "created") return yield* Effect.die(created.kind);
 	const machine = {
 		...created.machine,
+		providerServerId: options.providerServerId,
+		providerEndpointHttpBaseUrl: options.providerEndpointHttpBaseUrl,
+		providerEndpointWsBaseUrl: options.providerEndpointWsBaseUrl,
 		state: "enrolling" as const,
 		statusCode: "enrollment-pending" as const,
 		enrollmentTokenHash: yield* sha256Hex(TOKEN),

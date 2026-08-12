@@ -1,15 +1,14 @@
 import { HugeiconsIcon } from "@hugeicons/react";
+import type { Folder, FolderId, Message, WorktreeId } from "@zuse/contracts";
 import {
 	CheckListIcon,
 	ComputerTerminal01Icon,
 	Folder01Icon,
-	GitBranchIcon,
 	GitCompareIcon,
 	GitPullRequestIcon,
 	GlobeIcon,
 	MagicWand01Icon,
 } from "@zuse/icons/solid-rounded";
-import type { FolderId, Message, WorktreeId } from "@zuse/contracts";
 import { latestProposedPlanMarkdown } from "@zuse/utils/proposed-plan";
 import { Plus, X } from "lucide-react";
 import { lazy, Suspense, useMemo, useRef, useSyncExternalStore } from "react";
@@ -24,6 +23,8 @@ import * as terminalRegistry from "../lib/terminal-registry.ts";
 import { useAutoAnimate } from "../lib/use-auto-animate.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
 import { useChatsStore } from "../store/chats.ts";
+import { cloudSummaryForChat } from "../store/cloud-chat-registry.ts";
+import { ensureCloudWorkspaceAttached } from "../store/cloud-chats.ts";
 import { gitStatusKey, useGitStatusStore } from "../store/git-status.ts";
 import { useMessagesStore } from "../store/messages.ts";
 import { useRegisterPane } from "../store/pane-focus.ts";
@@ -44,7 +45,6 @@ import {
 	useUiStore,
 } from "../store/ui.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
-import { EMPTY_WORKTREES, useWorktreesStore } from "../store/worktrees.ts";
 import { DiffPane } from "./diff-pane.tsx";
 import { FileTree } from "./file-tree.tsx";
 import { MarkdownBody } from "./markdown-body.tsx";
@@ -65,6 +65,19 @@ const BrowserPaneHost = lazy(() =>
 		default: module.BrowserPaneHost,
 	})),
 );
+
+/**
+ * The right pane has two folder identities for a cloud chat: the logical
+ * desktop project used to render project UI, and the sandbox checkout used by
+ * live RPCs. Resolve project presence exclusively from the logical selection.
+ */
+export const logicalRightPaneProject = (
+	folders: ReadonlyArray<Folder>,
+	selectedFolderId: FolderId | null,
+): Folder | null =>
+	selectedFolderId === null
+		? null
+		: (folders.find((folder) => folder.id === selectedFolderId) ?? null);
 
 /**
  * Metadata for each addable panel kind: launcher/tab label, icon, and the
@@ -90,6 +103,14 @@ const PANEL_META: Record<
 	browser: { label: "Browser", icon: GlobeIcon },
 	subagents: { label: "Subagents", icon: MagicWand01Icon },
 };
+
+const LIVE_PANEL_KINDS = new Set<PanelKind>([
+	"files",
+	"terminal",
+	"changes",
+	"pr",
+	"browser",
+]);
 
 /** Primary surfaces shown in the empty launcher and standard add menu. */
 const PRIMARY_PANEL_ORDER: ReadonlyArray<PanelKind> = [
@@ -146,31 +167,31 @@ export function RightPane({
 	useRegisterPane("rightPane", paneRef);
 	const ctx = useActiveContext();
 	const folders = useWorkspaceStore((s) => s.folders);
-	const selectedFolderId = ctx.status === "ready" ? ctx.folderId : null;
+	const logicalSelectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
+	const executionFolderId = ctx.status === "ready" ? ctx.folderId : null;
 	const worktreeId = ctx.status === "ready" ? ctx.worktreeId : null;
-	const selected = selectedFolderId
-		? (folders.find((f) => f.id === selectedFolderId) ?? null)
-		: null;
+	const selected = logicalRightPaneProject(folders, logicalSelectedFolderId);
 	const status = useGitStatusStore((s) =>
-		selectedFolderId
-			? (s.byKey[gitStatusKey(selectedFolderId, worktreeId)] ?? null)
+		executionFolderId
+			? (s.byKey[gitStatusKey(executionFolderId, worktreeId)] ?? null)
 			: null,
 	);
 	const pr = usePrStateStore((s) =>
-		selectedFolderId
+		executionFolderId
 			? (s.byKey[
-					prStateKey(getActiveEnvironment(), selectedFolderId, worktreeId)
+					prStateKey(getActiveEnvironment(), executionFolderId, worktreeId)
 				] ?? null)
 			: null,
 	);
 	const details = usePrDetailsStore((s) =>
-		selectedFolderId
-			? (s.byKey[prDetailsKey(selectedFolderId, worktreeId)] ?? null)
+		executionFolderId
+			? (s.byKey[prDetailsKey(executionFolderId, worktreeId)] ?? null)
 			: null,
 	);
 	// Dock layout + terminals are scoped to the selected sidebar chat, so each
 	// chat keeps its own open tabs and running shells.
 	const chatId = useChatsStore((s) => s.selectedChatId);
+	const cloudSummary = chatId === null ? null : cloudSummaryForChat(chatId);
 	const sessionId = useSessionsStore((s) => s.selectedSessionId);
 	const session = useSessionsStore((s) => {
 		if (sessionId === null) return null;
@@ -225,6 +246,14 @@ export function RightPane({
 	const closePanel = useUiStore((s) => s.closePanel);
 	const setActive = useUiStore((s) => s.setActiveRightPanel);
 	const openChanges = useUiStore((s) => s.openChanges);
+	const requestCloudAttachment = () => {
+		if (cloudSummary !== null)
+			void ensureCloudWorkspaceAttached(cloudSummary).catch(() => {});
+	};
+	const handleAddPanel = (kind: PanelKind) => {
+		addPanel(kind);
+		if (LIVE_PANEL_KINDS.has(kind)) requestCloudAttachment();
+	};
 	const addablePanels = addableKinds(panels).filter(
 		(kind) =>
 			!directoryUnavailable ||
@@ -324,7 +353,7 @@ export function RightPane({
 	const browserActive = activePanel?.kind === "browser";
 	const browserAvailable = rendererPlatformCapabilities().integratedBrowser;
 	const addPanelMenu = (
-		<AddPanelMenu addable={addablePanels} onAdd={addPanel} />
+		<AddPanelMenu addable={addablePanels} onAdd={handleAddPanel} />
 	);
 
 	return (
@@ -348,6 +377,7 @@ export function RightPane({
 							badge={tabBadge(panel)}
 							onSelect={() => {
 								setActive(panel.id);
+								if (LIVE_PANEL_KINDS.has(panel.kind)) requestCloudAttachment();
 								if (panel.kind === "changes") openChanges();
 							}}
 							onClose={() => handleClose(panel)}
@@ -361,7 +391,7 @@ export function RightPane({
 					<PanelLauncher
 						actions={addPanelMenu}
 						addable={addablePanels}
-						onAdd={addPanel}
+						onAdd={handleAddPanel}
 					/>
 				) : null}
 				{/* Non-browser panels: mount on add, kept mounted while open. */}
@@ -375,7 +405,10 @@ export function RightPane({
 						>
 							<PanelBody
 								panel={panel}
-								folderId={selected.id}
+								folderId={executionFolderId ?? selected.id}
+								projectId={selected.id}
+								environmentId={cloudSummary?.workspaceId}
+								cloudUnavailable={ctx.status === "cloud-unavailable"}
 								worktreeId={worktreeId}
 								sessionId={sessionId}
 								planMarkdown={planMarkdown}
@@ -386,7 +419,7 @@ export function RightPane({
 				{/* One host owns the command stream and keeps a webview mounted for
             every chat with a Browser panel. Only the selected chat is visible;
             background chats retain history and receive only their commands. */}
-				{browserAvailable ? (
+				{browserAvailable && ctx.status !== "cloud-unavailable" ? (
 					<Suspense
 						fallback={<div className="min-h-0 flex-1" aria-busy="true" />}
 					>
@@ -421,18 +454,34 @@ export function RightPane({
 function PanelBody({
 	panel,
 	folderId,
+	projectId,
+	environmentId,
 	worktreeId,
 	sessionId,
 	planMarkdown,
 	directoryUnavailable,
+	cloudUnavailable,
 }: {
 	panel: PanelInstance;
 	folderId: FolderId;
+	projectId: FolderId;
+	environmentId?: string;
 	worktreeId: WorktreeId | null;
 	sessionId: import("@zuse/contracts").SessionId | null;
 	planMarkdown: string | null;
 	directoryUnavailable: boolean;
+	cloudUnavailable: boolean;
 }) {
+	if (cloudUnavailable && LIVE_PANEL_KINDS.has(panel.kind)) {
+		return (
+			<div
+				role="status"
+				className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground"
+			>
+				This cloud workspace is disconnected. Select this tab to reconnect.
+			</div>
+		);
+	}
 	if (
 		directoryUnavailable &&
 		(panel.kind === "files" ||
@@ -452,7 +501,12 @@ function PanelBody({
 		case "files":
 			return (
 				<div className="min-h-0 flex-1 overflow-hidden">
-					<FileTree key={folderId} folderId={folderId} />
+					<FileTree
+						key={folderId}
+						folderId={folderId}
+						projectId={projectId}
+						environmentId={environmentId}
+					/>
 				</div>
 			);
 		case "terminal":
@@ -627,40 +681,6 @@ function PanelTab({
 			>
 				<X className="size-3" strokeWidth={1.8} />
 			</button>
-		</div>
-	);
-}
-
-/**
- * Strip above the file tree showing whether the current selection is rooted
- * in the project's main checkout or in a worktree. Read-only label — pick a
- * worktree from the chat composer's workspace picker; this chip just makes
- * the active root visible so users don't get confused by what they're
- * looking at. Reads the canonical active context so it can never disagree
- * with the terminal, top-bar branch, or composer chip.
- */
-function ActiveWorkspaceChip() {
-	const ctx = useActiveContext();
-	const worktree = useWorktreesStore((s) => {
-		if (ctx.status !== "ready" || ctx.worktreeId === null) return null;
-		const list = s.byProject[ctx.folderId] ?? EMPTY_WORKTREES;
-		return list.find((w) => w.id === ctx.worktreeId) ?? null;
-	});
-	if (ctx.status !== "ready") return null;
-	const onWorktree = ctx.rootKind === "worktree";
-	const icon = onWorktree ? GitBranchIcon : Folder01Icon;
-	const label = onWorktree ? (worktree?.name ?? "Worktree") : "Main checkout";
-	const sub = onWorktree ? (worktree?.branch ?? null) : null;
-	return (
-		<div className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground">
-			<HugeiconsIcon icon={icon} className="size-3.5 shrink-0 opacity-70" />
-			<span className="truncate font-medium text-foreground/80">{label}</span>
-			{sub !== null ? (
-				<span className="truncate font-mono opacity-70">· {sub}</span>
-			) : null}
-			{ctx.worktreePending ? (
-				<span className="shrink-0 text-amber-300">syncing…</span>
-			) : null}
 		</div>
 	);
 }
