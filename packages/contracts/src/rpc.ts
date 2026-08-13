@@ -32,10 +32,7 @@ import {
 	BrowserSetCredentialRpc,
 } from "./browser.ts";
 import {
-	CloudChatsHistoryRpc,
 	CloudChatsListRpc,
-	CloudChatsRenameRpc,
-	CloudChatsSendRpc,
 	CloudCredentialsDisconnectRpc,
 	CloudCredentialsImportLocalRpc,
 	CloudCredentialsListRpc,
@@ -52,6 +49,7 @@ import {
 	CloudWorkspacesPauseRpc,
 	CloudWorkspacesResumeRpc,
 	CloudWorkspacesUnarchiveRpc,
+	CloudWorkspacesWatchRpc,
 } from "./cloud-workspaces.ts";
 import {
 	ConnectDescribeRpc,
@@ -94,9 +92,7 @@ import {
 	GitCommitRpc,
 	GitCreateReviewCommentRpc,
 	GitDiffRpc,
-	GitDiffStatRpc,
 	GitFixFailingChecksRpc,
-	GitHeadChangedRpc,
 	GitInitRpc,
 	GitIssueMarkdownRpc,
 	GitListIssuesRpc,
@@ -119,6 +115,7 @@ import {
 	GitStatusRpc,
 	GitSwitchBranchRpc,
 	GitUserNameRpc,
+	GitWorkspaceChangesRpc,
 } from "./git.ts";
 import { ConnectHandshakeRpc } from "./handshake.ts";
 import {
@@ -249,6 +246,7 @@ import {
 	SessionLatestPlanRpc,
 	SessionListRpc,
 	SessionMcpUpdateRpc,
+	SessionMessagesPageRpc,
 	SessionPlanRespondRpc,
 	SessionRenameRpc,
 	SessionResumeRpc,
@@ -338,12 +336,10 @@ export const MemoizeRpcs = RpcGroup.make(
 	CloudProjectsPrepareRpc,
 	CloudWorkspacesListRpc,
 	CloudWorkspacesGetRpc,
+	CloudWorkspacesWatchRpc,
 	CloudWorkspacesCreateRpc,
 	CloudWorkspacesConnectRpc,
-	CloudChatsHistoryRpc,
 	CloudChatsListRpc,
-	CloudChatsRenameRpc,
-	CloudChatsSendRpc,
 	CloudWorkspacesPauseRpc,
 	CloudWorkspacesResumeRpc,
 	CloudWorkspacesArchiveRpc,
@@ -408,7 +404,7 @@ export const MemoizeRpcs = RpcGroup.make(
 	GitBranchesRpc,
 	GitSwitchBranchRpc,
 	GitUserNameRpc,
-	GitHeadChangedRpc,
+	GitWorkspaceChangesRpc,
 	GitOriginRpc,
 	GitPrStateRpc,
 	GitPrDetailsRpc,
@@ -432,7 +428,6 @@ export const MemoizeRpcs = RpcGroup.make(
 	GitRevertFileRpc,
 	GitRestoreFileToBaseRpc,
 	GitRevertAllRpc,
-	GitDiffStatRpc,
 	FsTreeRpc,
 	FsWatchTreeRpc,
 	FsListPathsRpc,
@@ -494,6 +489,7 @@ export const MemoizeRpcs = RpcGroup.make(
 	SessionDeleteRpc,
 	SessionEventsHeadRpc,
 	SessionEventsRpc,
+	SessionMessagesPageRpc,
 	SessionForkRpc,
 	SessionExportTranscriptRpc,
 	SessionLatestPlanRpc,

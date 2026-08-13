@@ -1,9 +1,8 @@
 import type { NearbyPairingRequest } from "@zuse/contracts";
-import { Effect } from "effect";
 import { Smartphone } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { recordDiagnosticEvent } from "../lib/diagnostics-recorder.ts";
-import { getRpcClient } from "../lib/rpc-client.ts";
+import { dispatchLocalDeviceCommand } from "../lib/local-device-client-bus.ts";
 import {
 	AlertDialog,
 	AlertDialogDescription,
@@ -40,10 +39,10 @@ export function NearbyPairingApproval() {
 	const lastOpenedRequestId = useRef<string | null>(null);
 
 	const refresh = useCallback(async () => {
-		const client = await getRpcClient();
-		const requests = await Effect.runPromise(
-			client["pairing.listNearbyRequests"]({}),
-		);
+		const requests = await dispatchLocalDeviceCommand<
+			Record<string, never>,
+			ReadonlyArray<NearbyPairingRequest>
+		>("pairing.listNearbyRequests", {});
 		const next = requests[0];
 		if (
 			next !== undefined &&
@@ -106,13 +105,16 @@ export function NearbyPairingApproval() {
 			if (request === null || busy) return;
 			setBusy(true);
 			try {
-				const client = await getRpcClient();
-				await Effect.runPromise(
-					client["pairing.resolveNearbyRequest"]({
-						requestId: request.requestId,
-						decision,
-					}),
-				);
+				await dispatchLocalDeviceCommand<
+					{
+						readonly requestId: string;
+						readonly decision: "allow" | "deny" | "block";
+					},
+					"approved" | "denied"
+				>("pairing.resolveNearbyRequest", {
+					requestId: request.requestId,
+					decision,
+				});
 				setRequest(null);
 			} catch (cause) {
 				toastManager.add({

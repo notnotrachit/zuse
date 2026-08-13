@@ -121,9 +121,18 @@ export const GitUserNameRpc = Rpc.make("git.userName", {
 	error: GitErrors,
 });
 
-export const GitHeadChangedRpc = Rpc.make("git.headChanged", {
-	payload: Schema.Struct({ folderId: FolderId }),
-	success: Schema.Struct({ sha: Schema.String }),
+/**
+ * Coalesced invalidation for one explicit repository checkout. The first
+ * frame is emitted immediately, then filesystem/index/HEAD changes advance a
+ * monotonic revision. Clients re-read their materialized Git resource after
+ * each revision; no transcript or patch payload is duplicated in this stream.
+ */
+export const GitWorkspaceChangesRpc = Rpc.make("git.workspaceChanges", {
+	payload: Schema.Struct({
+		folderId: FolderId,
+		worktreeId: Schema.optional(Schema.NullOr(WorktreeId)),
+	}),
+	success: Schema.Struct({ revision: Schema.Number }),
 	error: GitErrors,
 	stream: true,
 });
@@ -744,26 +753,5 @@ export const GitRevertAllRpc = Rpc.make("git.revertAll", {
 		worktreeId: Schema.optional(Schema.NullOr(WorktreeId)),
 	}),
 	success: Schema.Struct({ reverted: Schema.Boolean }),
-	error: GitErrors,
-});
-
-/**
- * Total additions/deletions of a worktree's branch — including uncommitted
- * working-tree edits — relative to its base branch. Computed as
- * `git diff --numstat <merge-base(base, HEAD)>`, where `base` is the repo's
- * default branch (`origin/HEAD`, falling back to origin/main, main, …). Drives
- * the projects sidebar's per-chat `+N −N` stats so a branch shows its diff
- * even before a PR is opened. Returns zeros rather than failing when there's
- * no base, no commits, or no diff.
- */
-export const GitDiffStatRpc = Rpc.make("git.diffStat", {
-	payload: Schema.Struct({
-		folderId: FolderId,
-		worktreeId: Schema.optional(Schema.NullOr(WorktreeId)),
-	}),
-	success: Schema.Struct({
-		additions: Schema.Number,
-		deletions: Schema.Number,
-	}),
 	error: GitErrors,
 });

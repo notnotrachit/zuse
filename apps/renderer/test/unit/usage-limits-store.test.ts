@@ -3,25 +3,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const rpc = vi.fn();
 const historyRpc = vi.fn();
+const environmentIds: string[] = [];
 
-const { setUsageLimitsRpcClientForTest, useUsageLimitsStore } = await import(
+const { setUsageCommandForTest, useUsageLimitsStore } = await import(
 	"../../src/store/usage-limits.ts"
 );
 
-setUsageLimitsRpcClientForTest(
-	async () =>
-		({
-			"usage.limits": rpc,
-			"usage.limits.history": historyRpc,
-		}) as unknown as Awaited<
-			ReturnType<typeof import("../../src/lib/rpc-client.ts").getRpcClient>
-		>,
-);
+setUsageCommandForTest(async (environmentId, kind, payload) => {
+	environmentIds.push(environmentId);
+	const effect = kind === "usage.limits" ? rpc(payload) : historyRpc(payload);
+	return Effect.runPromise(effect);
+});
 
 describe("usage limits store", () => {
 	beforeEach(() => {
 		rpc.mockReset();
 		historyRpc.mockReset();
+		environmentIds.length = 0;
 		useUsageLimitsStore.setState({
 			providers: [],
 			history: [],
@@ -43,6 +41,7 @@ describe("usage limits store", () => {
 			forceRefresh: false,
 			providerId: undefined,
 		});
+		expect(environmentIds).toEqual(["local"]);
 	});
 
 	it("loads persisted limit history for dashboard sparklines", async () => {

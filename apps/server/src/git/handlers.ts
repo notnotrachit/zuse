@@ -36,11 +36,13 @@ const UserName = MemoizeRpcs.toLayerHandler("git.userName", ({ folderId }) =>
 	),
 );
 
-const HeadChanged = MemoizeRpcs.toLayerHandler(
-	"git.headChanged",
-	({ folderId }) =>
+const WorkspaceChanges = MemoizeRpcs.toLayerHandler(
+	"git.workspaceChanges",
+	({ folderId, worktreeId }) =>
 		Stream.unwrap(
-			Effect.map(GitService, (svc) => svc.subscribeHeadChanges(folderId)),
+			Effect.map(GitService, (svc) =>
+				svc.workspaceChanges(folderId, worktreeId ?? null),
+			),
 		),
 );
 
@@ -217,14 +219,6 @@ const RestoreFileToBase = MemoizeRpcs.toLayerHandler(
 		),
 );
 
-const DiffStat = MemoizeRpcs.toLayerHandler(
-	"git.diffStat",
-	({ folderId, worktreeId }) =>
-		Effect.flatMap(GitService, (svc) =>
-			svc.diffStat(folderId, worktreeId ?? null),
-		),
-);
-
 const Init = MemoizeRpcs.toLayerHandler("git.init", ({ folderId }) =>
 	Effect.flatMap(GitService, (svc) => svc.init(folderId)),
 );
@@ -243,7 +237,7 @@ export const GitHandlersLayer = Layer.mergeAll(
 	Branches,
 	SwitchBranch,
 	UserName,
-	HeadChanged,
+	WorkspaceChanges,
 	Origin,
 	PrState,
 	PrDetails,
@@ -266,6 +260,5 @@ export const GitHandlersLayer = Layer.mergeAll(
 	RevertFile,
 	RestoreFileToBase,
 	RevertAll,
-	DiffStat,
 	FixFailingChecks,
 );

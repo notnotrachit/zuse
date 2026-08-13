@@ -1,16 +1,42 @@
 import type {
+	EnvironmentId,
 	ProviderUsageLimits,
 	UsageLimitHistoryPoint,
 } from "@zuse/contracts";
-import { Effect } from "effect";
-import { getRpcClient } from "../lib/rpc-client.ts";
+import {
+	CommandId,
+	EnvironmentId as EnvironmentIdSchema,
+} from "@zuse/contracts";
+import { dispatchEnvironmentShellCommand } from "../lib/environment-shell-client-bus.ts";
+import { getLocalEnvironmentId } from "../lib/rpc-client.ts";
 import { createAtomStore as create } from "../state/atom-store.ts";
 
-let rpcClient = getRpcClient;
 let pendingLoad: Promise<void> | null = null;
 const STALE_AFTER_MS = 60_000;
-export const setUsageLimitsRpcClientForTest = (value: typeof getRpcClient) => {
-	rpcClient = value;
+type UsageCommand = <Result>(
+	environmentId: EnvironmentId,
+	kind: string,
+	payload: Readonly<Record<string, unknown>>,
+) => Promise<Result>;
+let runUsageCommand: UsageCommand = async <Result>(
+	environmentId: EnvironmentId,
+	kind: string,
+	payload: Readonly<Record<string, unknown>>,
+) => {
+	return (
+		await dispatchEnvironmentShellCommand<
+			Readonly<Record<string, unknown>>,
+			Result
+		>({
+			environmentId,
+			kind,
+			commandId: CommandId.make(`usage:${crypto.randomUUID()}`),
+			payload,
+		})
+	).result;
+};
+export const setUsageCommandForTest = (command: UsageCommand): void => {
+	runUsageCommand = command;
 };
 
 type State = {
@@ -63,9 +89,12 @@ export const useUsageLimitsStore = create<State>((set, get) => ({
 	},
 	loadHistory: async () => {
 		try {
-			const client = await rpcClient();
-			const response = await Effect.runPromise(
-				client["usage.limits.history"]({}),
+			const response = await runUsageCommand<{
+				readonly points: ReadonlyArray<UsageLimitHistoryPoint>;
+			}>(
+				EnvironmentIdSchema.make(getLocalEnvironmentId()),
+				"usage.limits.history",
+				{},
 			);
 			set({ history: response.points });
 		} catch {
@@ -75,10 +104,14 @@ export const useUsageLimitsStore = create<State>((set, get) => ({
 	refresh: async (force = false, providerId) => {
 		set({ loading: true, error: null });
 		try {
-			const client = await rpcClient();
-			const response = await Effect.runPromise(
-				client["usage.limits"]({ forceRefresh: force, providerId }),
-			);
+			// Provider allowances come from credentials on this physical desktop,
+			// not from whichever local/SSH/cloud environment is currently selected.
+			const response = await runUsageCommand<{
+				readonly providers: ReadonlyArray<ProviderUsageLimits>;
+			}>(EnvironmentIdSchema.make(getLocalEnvironmentId()), "usage.limits", {
+				forceRefresh: force,
+				providerId,
+			});
 			set({
 				providers: providerId
 					? [

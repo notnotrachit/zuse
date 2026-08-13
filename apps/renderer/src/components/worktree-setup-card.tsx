@@ -1,18 +1,16 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { CloudChatSummary } from "@zuse/contracts";
-import {
-	Alert01Icon,
-	CloudIcon,
-	GitBranchIcon,
-	Tick01Icon,
-} from "@zuse/icons/solid-rounded";
-import { Effect } from "effect";
+import { Alert01Icon, CloudIcon, Tick01Icon } from "@zuse/icons/solid-rounded";
 import { useState } from "react";
-import { getControlPlaneRpcClient } from "../lib/rpc-client.ts";
+import {
+	refreshCloudChatCatalog,
+	useCloudChatCatalogStore,
+} from "../lib/cloud-workspace-catalog.ts";
+import { runControlPlane } from "../lib/control-plane-client.ts";
+import { useActiveEnvironmentEntities } from "../lib/environment-entity-hooks.ts";
 import { shouldShowSetupCard } from "../lib/setup-card-visibility.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
 import { useChatsStore } from "../store/chats.ts";
-import { useCloudChatsStore } from "../store/cloud-chats.ts";
 import { useSessionsStore } from "../store/sessions.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
 import { EMPTY_WORKTREES, useWorktreesStore } from "../store/worktrees.ts";
@@ -50,6 +48,8 @@ export type SetupCardData = {
 		| "skipped"
 		| null;
 	readonly setupOutput: string;
+	/** Workspace is ready, but the initial provider turn has not started yet. */
+	readonly agentStarting?: boolean;
 	/** Rerun handler, present only when setup has failed and a row exists. */
 	readonly onRerun: (() => void) | null;
 };
@@ -61,43 +61,56 @@ export type SetupCardData = {
  * at the bottom. Replaces the old full-screen `ChatCreatingPanel` stepper.
  * Renders nothing once there's no setup work left and the provider is ready.
  */
-export function WorktreeSetupCard() {
+export function WorktreeSetupCard({
+	agentStarting,
+}: {
+	readonly agentStarting?: boolean;
+} = {}) {
 	const ctx = useActiveContext();
 	const selectedChatId = useChatsStore((state) => state.selectedChatId);
-	const cloudSummary = useCloudChatsStore(
+	const cloudSummary = useCloudChatCatalogStore(
 		(state) =>
 			state.summaries.find((row) => row.chatId === selectedChatId) ?? null,
 	);
-	const session = useSessionsStore((s) => {
-		if (s.selectedSessionId === null) return null;
-		for (const list of Object.values(s.sessionsByProject)) {
-			const match = list.find((sess) => sess.id === s.selectedSessionId);
-			if (match !== undefined) return match;
-		}
-		return null;
-	});
-	const initialSession = useSessionsStore((s) => {
+	const selectedSessionId = useSessionsStore((s) => s.selectedSessionId);
+	const { sessionsByProject } = useActiveEnvironmentEntities();
+	const session =
+		selectedSessionId === null
+			? null
+			: (Object.values(sessionsByProject)
+					.flat()
+					.find((candidate) => candidate.id === selectedSessionId) ?? null);
+	const initialSession = (() => {
 		if (session === null) return false;
-		const chatSessions = s.sessionsByProject[session.projectId] ?? [];
+		const chatSessions = sessionsByProject[session.projectId] ?? [];
 		const oldest = chatSessions
 			.filter((candidate) => candidate.chatId === session.chatId)
 			.toSorted(
 				(left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
 			)[0];
 		return oldest?.id === session.id;
-	});
+	})();
 	const repoName = useWorkspaceStore((s) => {
-		if (ctx.status !== "ready") return null;
+		if (ctx.status !== "ready" && ctx.status !== "worktree-pending")
+			return null;
 		return s.folders.find((f) => f.id === ctx.folderId)?.name ?? null;
 	});
 	const worktree = useWorktreesStore((s) => {
-		if (ctx.status !== "ready" || ctx.worktreeId === null) return null;
+		if (
+			(ctx.status !== "ready" && ctx.status !== "worktree-pending") ||
+			ctx.worktreeId === null
+		)
+			return null;
 		const list = s.byProject[ctx.folderId] ?? EMPTY_WORKTREES;
 		return list.find((w) => w.id === ctx.worktreeId) ?? null;
 	});
 	const rerunSetup = useWorktreesStore((s) => s.rerunSetup);
-	const hasWorktree = ctx.status === "ready" && ctx.worktreeId !== null;
-	const worktreePending = ctx.status === "ready" && ctx.worktreePending;
+	const hasWorktree =
+		ctx.status === "worktree-pending" ||
+		(ctx.status === "ready" && ctx.worktreeId !== null);
+	const worktreePending =
+		ctx.status === "worktree-pending" ||
+		(ctx.status === "ready" && ctx.worktreePending);
 	const setupStatus = worktree?.setupStatus ?? null;
 	const setupDone = setupStatus === "succeeded" || setupStatus === "skipped";
 	const externalResume = session !== null && session.resumeStrategy !== "none";
@@ -105,12 +118,16 @@ export function WorktreeSetupCard() {
 	// This card belongs to chat/worktree creation. A provider still boots for
 	// every additional session, but that must not replay chat setup UI after the
 	// shared worktree is ready.
-	const visible = shouldShowSetupCard({
-		externalResume,
-		initialSession,
-		hasWorktree,
-		setupDone,
-	});
+	const visible =
+		initialSession &&
+		(ctx.status === "worktree-pending" ||
+			agentStarting !== undefined ||
+			shouldShowSetupCard({
+				externalResume,
+				initialSession,
+				hasWorktree,
+				setupDone,
+			}));
 	if (
 		cloudSummary !== null &&
 		cloudSummary.startupPhase !== "running" &&
@@ -132,6 +149,7 @@ export function WorktreeSetupCard() {
 				baseBranch: worktree?.baseBranch ?? null,
 				setupStatus,
 				setupOutput: worktree?.setupOutput ?? "",
+				agentStarting,
 				onRerun:
 					worktree !== null && setupStatus === "failed"
 						? () => void rerunSetup(worktree.projectId, worktree.id)
@@ -183,20 +201,19 @@ export function CloudWorkspaceSetupCard({
 	const runAction = async (action: "resume" | "delete") => {
 		setBusy(action === "resume" ? "retry" : "delete");
 		try {
-			const control = await getControlPlaneRpcClient();
 			if (action === "resume")
-				await Effect.runPromise(
+				await runControlPlane((control) =>
 					control["cloud.workspaces.resume"]({
 						workspaceId: summary.workspaceId,
 					}),
 				);
 			else
-				await Effect.runPromise(
+				await runControlPlane((control) =>
 					control["cloud.workspaces.delete"]({
 						workspaceId: summary.workspaceId,
 					}),
 				);
-			await useCloudChatsStore.getState().hydrate();
+			await refreshCloudChatCatalog();
 		} catch {
 			toastManager.add({
 				type: "error",
@@ -294,66 +311,35 @@ export function SetupCardView({ data }: { data: SetupCardData }) {
 		setupStatus,
 		setupOutput,
 		onRerun,
+		agentStarting,
 	} = data;
 
-	const failed = setupStatus === "failed";
+	// The worktree request is already canonical before its id/list row arrives.
+	// Treat that pending phase as a real worktree so the card body is populated
+	// from its first frame instead of briefly rendering an empty shell.
+	const showsWorktreeSteps = hasWorktree || worktreePending;
 	// Worktree dir + branch + copy all land together when the row hydrates, so
 	// collapse them into the single `worktreePending` signal.
-	const wtReady = hasWorktree && !worktreePending;
+	const wtReady = showsWorktreeSteps && !worktreePending;
 	const setupStarted = setupStatus !== null && setupStatus !== "pending";
-	const busy =
-		worktreePending || setupStatus === "running" || setupStatus === "pending";
-	const activityState =
-		worktreePending || setupStatus === "running" || setupStatus === "pending"
-			? "shaping"
-			: "working";
-
 	const name = worktreeName ?? "your workspace";
 
 	return (
 		<div className="mx-auto w-full max-w-3xl px-4 pt-4">
 			<div className="overflow-hidden rounded-xl border border-border/60 bg-muted/15">
-				<header className="flex items-center gap-2 border-b border-border/40 px-3.5 py-2.5">
-					<HugeiconsIcon
-						icon={GitBranchIcon}
-						className="size-4 shrink-0 text-muted-foreground"
-					/>
-					<span className="flex-1 text-[13px] font-medium text-foreground/90">
-						{busy ? (
-							<ShimmerText tone="lime">
-								Creating a worktree and running setup
-							</ShimmerText>
-						) : (
-							"Creating a worktree and running setup"
-						)}
-					</span>
-					<span className="inline-grid size-5 shrink-0 place-items-center">
-						{busy ? (
-							<AgentActivityOrb
-								state={activityState}
-								label={
-									activityState === "shaping"
-										? "Preparing workspace"
-										: "Preparing workspace"
-								}
-							/>
-						) : failed ? (
-							<HugeiconsIcon
-								icon={Alert01Icon}
-								className="size-4 text-[var(--accent-red)]"
-							/>
-						) : null}
-					</span>
-				</header>
 				<div className="flex flex-col gap-1.5 px-3.5 py-2.5 text-[12px]">
-					{hasWorktree ? (
+					{showsWorktreeSteps ? (
 						<>
 							<StepRow
 								state={wtReady ? "done" : "active"}
-								label={`You're in a new copy of ${repoName} called ${name}`}
+								label={
+									worktreeName === null
+										? `Creating a new copy of ${repoName}…`
+										: `Created a new copy of ${repoName} called ${name}`
+								}
 							/>
 							<StepRow
-								state={wtReady ? "done" : "active"}
+								state={branch !== null ? "done" : "pending"}
 								label={
 									branch !== null
 										? `Branched ${branch} from ${baseBranch ?? "origin/main"}`
@@ -386,6 +372,12 @@ export function SetupCardView({ data }: { data: SetupCardData }) {
 							/>
 						</>
 					) : null}
+					{agentStarting === undefined ? null : (
+						<StepRow
+							state={agentStarting ? "active" : "done"}
+							label={agentStarting ? "Starting agent…" : "Agent ready"}
+						/>
+					)}
 				</div>
 				{setupOutput.trim().length > 0 ? (
 					<pre className="max-h-48 overflow-auto border-t border-border/40 bg-background/40 px-3.5 py-2.5 font-mono text-[11px] leading-5 whitespace-pre-wrap text-foreground/80">
