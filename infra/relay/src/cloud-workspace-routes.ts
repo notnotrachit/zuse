@@ -324,7 +324,10 @@ export const failedWorkspaceResumeTarget = (
 	workspace: Pick<CloudWorkspaceRecord, "providerSandboxId" | "statusCode">,
 ) =>
 	workspace.providerSandboxId === undefined ||
-	workspace.statusCode === "provider-sandbox-missing"
+	workspace.statusCode === "provider-sandbox-missing" ||
+	/^(?:initializing|updating-runtime|starting-runtime|syncing-repository|setup)-failed$/u.test(
+		workspace.statusCode,
+	)
 		? ({ state: "queued", providerSandboxId: undefined } as const)
 		: ({
 				state: "resuming",
@@ -671,6 +674,25 @@ export const routeCloudWorkspaceRequest = (
 				return updated;
 			},
 		);
+		const repairAcknowledgedLaunch = Effect.fn("repairAcknowledgedLaunch")(
+			function* (workspace: CloudWorkspaceRecord, sessionHeadVersion = 0) {
+				if (workspace.statusCode !== "agent-starting") return workspace;
+				const launchIntent = yield* store.getLaunchIntent(
+					workspace.workspaceId,
+					nowMs,
+				);
+				if (launchIntent !== null) return workspace;
+				const completion = yield* store.completeLaunchIntent({
+					workspaceId: workspace.workspaceId,
+					commandId: `launch:${workspace.workspaceId}`,
+					sessionHeadVersion,
+					nowMs,
+					nextActionAtMs: nowMs + idlePauseMs,
+				});
+				if (completion.kind === "completed") return completion.workspace;
+				return (yield* store.getWorkspace(workspace.workspaceId)) ?? workspace;
+			},
+		);
 		const bootstrapMatch =
 			/^\/v1\/cloud\/workspaces\/([^/]+)\/runtime\/bootstrap$/u.exec(path);
 		if (method === "POST" && bootstrapMatch !== null) {
@@ -741,7 +763,8 @@ export const routeCloudWorkspaceRequest = (
 				nowMs,
 			);
 			const alreadyLaunched =
-				typeof enrolled.workspace.requestConfig.sessionHeadVersion === "number";
+				typeof enrolled.workspace.requestConfig.sessionHeadVersion ===
+					"number" || enrolled.workspace.statusCode === "agent-starting";
 			if (launchIntentRecord === null && !alreadyLaunched)
 				return yield* Effect.fail(conflict("cloud_workspace_launch_failed"));
 			const launchIntent =
@@ -906,6 +929,18 @@ export const routeCloudWorkspaceRequest = (
 			if (outcome.kind === "workspace-missing")
 				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
 			if (outcome.kind === "applied") {
+				if (
+					workspace.statusCode === "agent-starting" &&
+					outcome.summary.sessionHeadVersion > 0
+				) {
+					yield* store.completeLaunchIntent({
+						workspaceId,
+						commandId: `launch:${workspaceId}`,
+						sessionHeadVersion: outcome.summary.sessionHeadVersion,
+						nowMs,
+						nextActionAtMs: nowMs + idlePauseMs,
+					});
+				}
 				const active = yield* recordWorkspaceActivity(workspace);
 				if (
 					active !== null &&
@@ -977,14 +1012,21 @@ export const routeCloudWorkspaceRequest = (
 			if (agentStarted) {
 				if (
 					body.launchCommandId === undefined ||
+					typeof body.sessionHeadVersion !== "number" ||
 					!Number.isSafeInteger(body.sessionHeadVersion) ||
-					(body.sessionHeadVersion ?? -1) < 0 ||
-					!(yield* store.acknowledgeLaunchIntent(
-						workspaceId,
-						body.launchCommandId,
-					))
+					body.sessionHeadVersion < 0
 				)
 					return yield* Effect.fail(conflict("launch_intent_receipt_rejected"));
+				const completion = yield* store.completeLaunchIntent({
+					workspaceId,
+					commandId: body.launchCommandId,
+					sessionHeadVersion: body.sessionHeadVersion,
+					nowMs,
+					nextActionAtMs: nowMs + idlePauseMs,
+				});
+				if (completion.kind !== "completed")
+					return yield* Effect.fail(conflict("launch_intent_receipt_rejected"));
+				return json(publicWorkspace(completion.workspace));
 			}
 			const updated: CloudWorkspaceRecord = {
 				...workspace,
@@ -1163,13 +1205,17 @@ export const routeCloudWorkspaceRequest = (
 							store.getProject(workspace.projectId),
 							store.getRuntimeSummary(workspace.workspaceId),
 						]);
+						const repaired = yield* repairAcknowledgedLaunch(
+							workspace,
+							runtimeSummary?.sessionHeadVersion ?? 0,
+						);
 						return project === null
 							? null
 							: publicCloudWorkspaceSummary(
-									workspace,
+									repaired,
 									project,
 									false,
-									workspace.lastActivityAtMs,
+									repaired.lastActivityAtMs,
 									runtimeSummary,
 								);
 					}),
@@ -1319,11 +1365,14 @@ export const routeCloudWorkspaceRequest = (
 		}
 
 		if (method === "GET" && path === RelayPaths.cloudWorkspaces) {
+			const workspaces = yield* store.listWorkspaces(
+				principal.accountId,
+				url.searchParams.get("projectId") ?? undefined,
+			);
 			return json({
-				workspaces: (yield* store.listWorkspaces(
-					principal.accountId,
-					url.searchParams.get("projectId") ?? undefined,
-				)).map(publicWorkspace),
+				workspaces: yield* Effect.forEach(workspaces, (workspace) =>
+					repairAcknowledgedLaunch(workspace).pipe(Effect.map(publicWorkspace)),
+				),
 			});
 		}
 
@@ -1334,7 +1383,7 @@ export const routeCloudWorkspaceRequest = (
 			);
 			if (workspace === null || workspace.accountId !== principal.accountId)
 				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
-			return json(publicWorkspace(workspace));
+			return json(publicWorkspace(yield* repairAcknowledgedLaunch(workspace)));
 		}
 
 		const connectionTicketMatch =
