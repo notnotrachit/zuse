@@ -2,6 +2,7 @@ import {
 	ClientBus,
 	type ResourceDriver,
 	type ResourceLease,
+	type ResourceSynchronization,
 } from "@zuse/client-runtime/client-bus";
 import type {
 	ClientCommand,
@@ -51,6 +52,53 @@ export const sessionTimelineResourceKey = (
 	ref: SessionRef,
 ): SessionTimelineResourceKey =>
 	makeResourceKey<SessionTimelineProjection>("session-timeline", ref);
+
+type TimelineCheckpointSynchronizer = (
+	ref: SessionRef,
+	current: ResourceView<SessionTimelineProjection>,
+) => Promise<ResourceSynchronization<SessionTimelineProjection> | null>;
+
+type TimelineOlderPageSynchronizer = (
+	ref: SessionRef,
+	cursor: NonNullable<ResourceView<SessionTimelineProjection>["cursor"]>,
+	beforeSequence: number,
+) => Promise<{
+	readonly messages: readonly Message[];
+	readonly olderMessageSequence: number | null;
+} | null>;
+
+const checkpointSynchronizers = new Map<
+	EnvironmentId,
+	TimelineCheckpointSynchronizer
+>();
+const olderPageSynchronizers = new Map<
+	EnvironmentId,
+	TimelineOlderPageSynchronizer
+>();
+
+export const registerSessionTimelineCheckpointSynchronizer = (
+	environmentId: EnvironmentId,
+	synchronize: TimelineCheckpointSynchronizer,
+): (() => void) => {
+	checkpointSynchronizers.set(environmentId, synchronize);
+	return () => {
+		if (checkpointSynchronizers.get(environmentId) === synchronize) {
+			checkpointSynchronizers.delete(environmentId);
+		}
+	};
+};
+
+export const registerSessionTimelineOlderPageSynchronizer = (
+	environmentId: EnvironmentId,
+	synchronize: TimelineOlderPageSynchronizer,
+): (() => void) => {
+	olderPageSynchronizers.set(environmentId, synchronize);
+	return () => {
+		if (olderPageSynchronizers.get(environmentId) === synchronize) {
+			olderPageSynchronizers.delete(environmentId);
+		}
+	};
+};
 
 const sessionRef = (key: ResourceKey<unknown>): SessionRef | null =>
 	key.kind === "session-timeline" && "sessionId" in key.ref ? key.ref : null;
@@ -937,11 +985,11 @@ const executeSessionCommand: ClientCommandExecutor<MemoizeClient> = {
 
 let commandOutbox = createClientCommandOutbox();
 
-type EnvironmentWake = Readonly<{
-	wake: () => Promise<void>;
+type EnvironmentActivation = Readonly<{
+	prepare: (activation: "connect" | "wake") => Promise<void>;
 	prepareClient?: (client: MemoizeClient) => Promise<void>;
 }>;
-const wakeByEnvironment = new Map<EnvironmentId, EnvironmentWake>();
+const activationByEnvironment = new Map<EnvironmentId, EnvironmentActivation>();
 const environmentOf = (environmentId: EnvironmentId): EnvironmentId =>
 	environmentId;
 type ResolveRendererSession = (
@@ -959,22 +1007,29 @@ let reportPassiveSessionFault: (
 	expectedGeneration: number,
 ) => boolean = () => false;
 
-export const registerEnvironmentWake = (
+export const registerEnvironmentActivation = (
 	environmentId: EnvironmentId,
-	wake: EnvironmentWake["wake"],
-	prepareClient?: EnvironmentWake["prepareClient"],
+	prepare: EnvironmentActivation["prepare"],
+	prepareClient?: EnvironmentActivation["prepareClient"],
 ): (() => void) => {
-	const registration = { wake, prepareClient };
-	wakeByEnvironment.set(environmentId, registration);
+	const registration = { prepare, prepareClient };
+	activationByEnvironment.set(environmentId, registration);
 	return () => {
-		if (wakeByEnvironment.get(environmentId) === registration) {
-			wakeByEnvironment.delete(environmentId);
+		if (activationByEnvironment.get(environmentId) === registration) {
+			activationByEnvironment.delete(environmentId);
 		}
 	};
 };
 
 const faultFor = (cause: unknown): EnvironmentFault => {
-	const message = cause instanceof Error ? cause.message : String(cause);
+	const code =
+		typeof cause === "object" && cause !== null && "code" in cause
+			? String(cause.code)
+			: "";
+	const message =
+		cause instanceof Error && cause.message !== ""
+			? cause.message
+			: code || String(cause);
 	const lower = message.toLowerCase();
 	const phase: EnvironmentFault["phase"] =
 		globalThis.navigator?.onLine === false
@@ -983,7 +1038,9 @@ const faultFor = (cause: unknown): EnvironmentFault => {
 				? "update-required"
 				: lower.includes("revoked")
 					? "revoked"
-					: lower.includes("unauthorized") || lower.includes("authentication")
+					: code === "not-allowed" ||
+							lower.includes("unauthorized") ||
+							lower.includes("authentication")
 						? "blocked-auth"
 						: "failed";
 	return { phase, message };
@@ -993,10 +1050,11 @@ const environmentResolver: EnvironmentResolver<MemoizeClient> = {
 	resolve: (environmentId, activation) =>
 		Effect.tryPromise({
 			try: async () => {
-				const wake = wakeByEnvironment.get(environmentId);
-				if (activation === "wake") {
-					await wake?.wake();
-				}
+				const registered = activationByEnvironment.get(environmentId);
+				// Cloud gateway discovery/ticket issuance must finish before socket
+				// acquisition. Keeping this inside the EnvironmentRuntime resolver
+				// prevents chat navigation and ClientBus from racing two attach paths.
+				await registered?.prepare(activation);
 				let generation: number | null = null;
 				let pendingFault: Error | null = null;
 				const session = await resolveRendererSession(environmentId, (cause) => {
@@ -1007,7 +1065,7 @@ const environmentResolver: EnvironmentResolver<MemoizeClient> = {
 					reportPassiveSessionFault(environmentId, faultFor(cause), generation);
 				});
 				try {
-					await wake?.prepareClient?.(session.client);
+					await registered?.prepareClient?.(session.client);
 				} catch (cause) {
 					await session.dispose();
 					throw cause;
@@ -1081,9 +1139,25 @@ const createBus = (): ClientBus<MemoizeClient> => {
 		runtime: {
 			isOnline: () => globalThis.navigator?.onLine !== false,
 		},
+		synchronizer: {
+			synchronize: async <Data>(
+				key: ResourceKey<Data>,
+				current: ResourceView<Data>,
+			) => {
+				const ref = sessionRef(key);
+				if (ref === null) return null;
+				const synchronize = checkpointSynchronizers.get(ref.environmentId);
+				if (synchronize === undefined) return null;
+				return (await synchronize(
+					ref,
+					current as ResourceView<SessionTimelineProjection>,
+				)) as ResourceSynchronization<Data> | null;
+			},
+		},
 		driverFor: (key) => {
 			if (key.kind === "session-timeline") {
 				return makeTimelineDriver((environmentId, generation, cause) => {
+					if (!isRpcClientTransportError(cause)) return;
 					bus.reportConnectionFault(
 						environmentId,
 						{ phase: "failed", message: faultFor(cause).message },
@@ -1136,11 +1210,7 @@ export const loadOlderSessionMessages = (
 	const bus = rendererClientBus;
 	const initial = bus.snapshot(key);
 	const beforeSequence = initial.data?.olderMessageSequence ?? null;
-	if (
-		initial.data === null ||
-		beforeSequence === null ||
-		initial.connection !== "connected"
-	) {
+	if (initial.data === null || beforeSequence === null) {
 		return Promise.resolve({
 			applied: false,
 			loaded: 0,
@@ -1152,16 +1222,25 @@ export const loadOlderSessionMessages = (
 
 	const request = (async (): Promise<OlderSessionMessagesResult> => {
 		const client = bus.client(ref.environmentId);
-		if (client === null) {
+		const page =
+			client === null
+				? expectedCursor === null
+					? null
+					: await olderPageSynchronizers.get(ref.environmentId)?.(
+							ref,
+							expectedCursor,
+							beforeSequence,
+						)
+				: await Effect.runPromise(
+						client["session.messages.page"]({
+							sessionId: ref.sessionId,
+							beforeSequence,
+							limit: 100,
+						}),
+					);
+		if (page === null || page === undefined) {
 			return { applied: false, loaded: 0, hasMore: true };
 		}
-		const page = await Effect.runPromise(
-			client["session.messages.page"]({
-				sessionId: ref.sessionId,
-				beforeSequence,
-				limit: 100,
-			}),
-		);
 		if (bus !== rendererClientBus) {
 			return { applied: false, loaded: 0, hasMore: true };
 		}
@@ -1311,7 +1390,10 @@ export const useSessionTimelineResource = (
 	activation: ResourceActivation = "connect",
 ): ResourceView<SessionTimelineProjection> => {
 	const key = useMemo(
-		() => (ref === null ? null : sessionTimelineResourceKey(ref)),
+		() =>
+			ref === null || ref.sessionId === "draft-session"
+				? null
+				: sessionTimelineResourceKey(ref),
 		[ref?.environmentId, ref?.sessionId],
 	);
 	const bus = getRendererClientBus();
@@ -1349,13 +1431,22 @@ export const setSessionTimelineRpcSessionForTest = (
 	resolveRendererSession = resolve;
 };
 
-export const registerEnvironmentWakeForTest = registerEnvironmentWake;
+export const registerEnvironmentActivationForTest =
+	registerEnvironmentActivation;
+
+export const retryRendererEnvironmentConnection = (
+	environmentId: EnvironmentId,
+): void => {
+	getRendererClientBus().retryConnection(environmentId);
+};
 
 export const resetSessionTimelineClientBus = async (): Promise<void> => {
 	await rendererClientBus.dispose();
 	rendererClientBus = createBus();
 	olderSessionMessageLoads.clear();
-	wakeByEnvironment.clear();
+	checkpointSynchronizers.clear();
+	olderPageSynchronizers.clear();
+	activationByEnvironment.clear();
 };
 
 export const resetSessionTimelineClientBusForTest = (): void => {
@@ -1364,6 +1455,6 @@ export const resetSessionTimelineClientBusForTest = (): void => {
 	commandOutbox = createClientCommandOutbox();
 	rendererClientBus = createBus();
 	olderSessionMessageLoads.clear();
-	wakeByEnvironment.clear();
+	activationByEnvironment.clear();
 	resolveRendererSession = defaultResolveRendererSession;
 };

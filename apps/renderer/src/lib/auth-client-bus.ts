@@ -10,8 +10,8 @@ import {
 import { type AuthState, EnvironmentId } from "@zuse/contracts";
 import { Cause, Effect, Fiber, Stream } from "effect";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { useEnvironmentCatalogStore } from "../store/environment-catalog.ts";
 import type { MemoizeClient } from "./rpc-client.ts";
+import { LOCAL_ENVIRONMENT_KEY } from "./rpc-client.ts";
 import {
 	getRendererClientBus,
 	registerRendererResourceDriver,
@@ -89,9 +89,7 @@ registerRendererResourceDriver("environment-auth", (key) =>
 const EMPTY = emptyResourceView<EnvironmentAuthData>();
 
 export const useEnvironmentAuth = (): ResourceView<EnvironmentAuthData> => {
-	const environmentId = EnvironmentId.make(
-		useEnvironmentCatalogStore((state) => state.activeEnvironmentId),
-	);
+	const environmentId = EnvironmentId.make(LOCAL_ENVIRONMENT_KEY);
 	const key = useMemo(
 		() => environmentAuthResourceKey(environmentId),
 		[environmentId],

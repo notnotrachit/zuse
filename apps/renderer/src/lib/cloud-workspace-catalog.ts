@@ -1,16 +1,82 @@
-import type {
+import {
 	CloudChatSummary,
-	EnvironmentId,
-	FolderId,
-	SessionId,
+	type EnvironmentId,
+	type FolderId,
+	type SessionId,
 } from "@zuse/contracts";
+import { Schema } from "effect";
 
 import { createAtomStore as create } from "../state/atom-store.ts";
+import { cloudChatCatalogPersistence } from "./session-timeline-cache.ts";
 
 type CloudChatCatalogState = Readonly<{
 	summaries: ReadonlyArray<CloudChatSummary>;
 	localProjectByEnvironment: Readonly<Record<string, FolderId>>;
+	archiveIntents: Readonly<
+		Record<string, { readonly commandId: string; readonly requestedAt: number }>
+	>;
 }>;
+
+const EMPTY_CATALOG: CloudChatCatalogState = {
+	summaries: [],
+	localProjectByEnvironment: {},
+	archiveIntents: {},
+};
+const LEGACY_CLOUD_CATALOG_STORAGE_KEY = "zuse:cloud-chat-catalog:v1";
+
+const decodePersistedCatalog = (value: unknown): CloudChatCatalogState => {
+	try {
+		if (typeof value !== "object" || value === null) return EMPTY_CATALOG;
+		const parsed = value as Readonly<Record<string, unknown>>;
+		const summaries = Array.isArray(parsed.summaries)
+			? parsed.summaries.flatMap((value) => {
+					try {
+						return [Schema.decodeUnknownSync(CloudChatSummary)(value)];
+					} catch {
+						return [];
+					}
+				})
+			: [];
+		const projects =
+			typeof parsed.localProjectByEnvironment === "object" &&
+			parsed.localProjectByEnvironment !== null
+				? Object.fromEntries(
+						Object.entries(parsed.localProjectByEnvironment).filter(
+							(entry): entry is [string, FolderId] =>
+								typeof entry[1] === "string",
+						),
+					)
+				: {};
+		const archiveIntents =
+			typeof parsed.archiveIntents === "object" &&
+			parsed.archiveIntents !== null
+				? Object.fromEntries(
+						Object.entries(parsed.archiveIntents).flatMap(
+							([workspaceId, entry]) =>
+								typeof entry === "object" &&
+								entry !== null &&
+								"commandId" in entry &&
+								typeof entry.commandId === "string" &&
+								"requestedAt" in entry &&
+								typeof entry.requestedAt === "number"
+									? [
+											[
+												workspaceId,
+												{
+													commandId: entry.commandId,
+													requestedAt: entry.requestedAt,
+												},
+											],
+										]
+									: [],
+						),
+					)
+				: {};
+		return { summaries, localProjectByEnvironment: projects, archiveIntents };
+	} catch {
+		return EMPTY_CATALOG;
+	}
+};
 
 const sortSummaries = (
 	summaries: ReadonlyArray<CloudChatSummary>,
@@ -70,10 +136,107 @@ export const mergeCloudChatSummaries = (
 	return sortSummaries([...byEnvironment.values()]);
 };
 
-export const useCloudChatCatalogStore = create<CloudChatCatalogState>(() => ({
-	summaries: [],
-	localProjectByEnvironment: {},
-}));
+export const useCloudChatCatalogStore = create<CloudChatCatalogState>(
+	() => EMPTY_CATALOG,
+);
+
+let catalogPersistenceReady = false;
+let catalogHydration: Promise<void> | null = null;
+export const hydrateCloudChatCatalogPersistence = async (): Promise<void> => {
+	if (catalogPersistenceReady || cloudChatCatalogPersistence === null) return;
+	catalogHydration ??= (async () => {
+		let stored = await cloudChatCatalogPersistence.load().catch(() => null);
+		if (stored === null && typeof window !== "undefined") {
+			try {
+				const legacy = window.localStorage.getItem(
+					LEGACY_CLOUD_CATALOG_STORAGE_KEY,
+				);
+				stored = legacy === null ? null : JSON.parse(legacy);
+				window.localStorage.removeItem(LEGACY_CLOUD_CATALOG_STORAGE_KEY);
+			} catch {
+				// A malformed or unavailable prototype catalog is safe to ignore.
+			}
+		}
+		const persisted = decodePersistedCatalog(stored);
+		useCloudChatCatalogStore.setState((current) => ({
+			summaries: mergeCloudChatSummaries(
+				persisted.summaries,
+				current.summaries,
+			),
+			localProjectByEnvironment: {
+				...persisted.localProjectByEnvironment,
+				...current.localProjectByEnvironment,
+			},
+			archiveIntents: {
+				...persisted.archiveIntents,
+				...current.archiveIntents,
+			},
+		}));
+		catalogPersistenceReady = true;
+		await cloudChatCatalogPersistence
+			.save(useCloudChatCatalogStore.getState())
+			.catch(() => undefined);
+	})();
+	await catalogHydration;
+};
+
+void hydrateCloudChatCatalogPersistence();
+let catalogWriteTail = Promise.resolve();
+useCloudChatCatalogStore.subscribe((state) => {
+	if (!catalogPersistenceReady) return;
+	catalogWriteTail = catalogWriteTail
+		.then(() => cloudChatCatalogPersistence?.save(state))
+		.then(() => undefined)
+		.catch(() => undefined);
+});
+
+export const optimisticallyArchiveCloudChat = (
+	summary: CloudChatSummary,
+	archivedAt: number,
+	commandId: string,
+): CloudChatSummary => {
+	const optimistic = {
+		...summary,
+		desiredState: "archived" as const,
+		archivedAt,
+	};
+	useCloudChatCatalogStore.setState((state) => ({
+		...state,
+		archiveIntents: {
+			...state.archiveIntents,
+			[summary.workspaceId]: { commandId, requestedAt: archivedAt },
+		},
+		summaries: state.summaries.map((candidate) =>
+			candidate.workspaceId === summary.workspaceId ? optimistic : candidate,
+		),
+	}));
+	return optimistic;
+};
+
+export const optimisticallyUnarchiveCloudChat = (
+	summary: CloudChatSummary,
+): CloudChatSummary => {
+	const optimistic = {
+		...summary,
+		state: "paused" as const,
+		desiredState: "paused" as const,
+		runtimeState: "offline" as const,
+		statusCode: "unarchive-queued",
+		archivedAt: undefined,
+	};
+	useCloudChatCatalogStore.setState((state) => {
+		const archiveIntents = { ...state.archiveIntents };
+		delete archiveIntents[summary.workspaceId];
+		return {
+			...state,
+			archiveIntents,
+			summaries: state.summaries.map((candidate) =>
+				candidate.workspaceId === summary.workspaceId ? optimistic : candidate,
+			),
+		};
+	});
+	return optimistic;
+};
 
 export const registerCloudChat = (
 	summary: CloudChatSummary,
@@ -88,6 +251,24 @@ export const registerCloudChat = (
 						...state.localProjectByEnvironment,
 						[summary.workspaceId]: projectId,
 					},
+	}));
+};
+
+export const forgetCloudChat = (workspaceId: string): void => {
+	useCloudChatCatalogStore.setState((state) => ({
+		summaries: state.summaries.filter(
+			(summary) => summary.workspaceId !== workspaceId,
+		),
+		localProjectByEnvironment: Object.fromEntries(
+			Object.entries(state.localProjectByEnvironment).filter(
+				([environmentId]) => environmentId !== workspaceId,
+			),
+		),
+		archiveIntents: Object.fromEntries(
+			Object.entries(state.archiveIntents).filter(
+				([environmentId]) => environmentId !== workspaceId,
+			),
+		),
 	}));
 };
 
@@ -106,11 +287,20 @@ export const reconcileCloudChatCatalog = (
 		(summary) => !incomingIds.has(summary.workspaceId),
 	);
 	const summaries = incoming.flatMap((summary) => {
+		const intent = previous.archiveIntents[summary.workspaceId];
+		const protectedSummary =
+			intent === undefined || summary.state === "archived"
+				? summary
+				: {
+						...summary,
+						desiredState: "archived" as const,
+						archivedAt: intent.requestedAt,
+					};
 		const current = previous.summaries.find(
 			(candidate) => candidate.workspaceId === summary.workspaceId,
 		);
 		return mergeCloudChatSummaries(current === undefined ? [] : [current], [
-			summary,
+			protectedSummary,
 		]);
 	});
 	useCloudChatCatalogStore.setState({
@@ -119,6 +309,22 @@ export const reconcileCloudChatCatalog = (
 			Object.entries(previous.localProjectByEnvironment).filter(
 				([environmentId]) => incomingIds.has(environmentId),
 			),
+		),
+		archiveIntents: Object.fromEntries(
+			Object.entries(previous.archiveIntents).filter(([environmentId]) => {
+				if (!incomingIds.has(environmentId)) return false;
+				const authoritative = incoming.find(
+					(summary) => summary.workspaceId === environmentId,
+				);
+				if (authoritative?.state !== "archived") return true;
+				const current = previous.summaries.find(
+					(summary) => summary.workspaceId === environmentId,
+				);
+				return (
+					current !== undefined &&
+					compareCloudChatSummaryVersion(authoritative, current) < 0
+				);
+			}),
 		),
 	});
 	return removed;

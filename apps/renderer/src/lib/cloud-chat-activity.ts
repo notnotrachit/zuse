@@ -40,19 +40,20 @@ export const deriveCloudChatActivity = ({
 }: CloudChatActivityInput): CloudChatActivity => {
 	if (
 		summary.state === "failed" ||
-		connection === "failed" ||
 		connection === "blocked-auth" ||
 		connection === "update-required" ||
 		connection === "revoked"
 	)
 		return "failed";
+	if (summary.state === "paused") return "paused";
+	if (connection === "failed") return "failed";
 
 	const computeReady =
 		summary.state === "ready" && summary.runtimeState === "online";
+
 	// A paused durable workspace cannot still be executing. Cached session state
 	// may describe the turn that completed before the sandbox paused, so the
 	// durable compute lifecycle must win once there is no command waiting.
-	if (summary.state === "paused") return "paused";
 	if (runtime === "failed") return "failed";
 	if (
 		!computeReady &&

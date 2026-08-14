@@ -4,6 +4,7 @@ import {
 	resourceKeyId,
 } from "@zuse/client-runtime/resource-ref";
 import {
+	CloudWorkspaceOpError,
 	ComposerInput,
 	EnvironmentId,
 	Message,
@@ -11,6 +12,7 @@ import {
 	PtyId,
 	QueueState,
 	SessionId,
+	SessionNotFoundError,
 	SessionTimelineProjection,
 } from "@zuse/contracts";
 import { Effect, Queue, Stream } from "effect";
@@ -18,9 +20,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	getRendererClientBus,
 	loadOlderSessionMessages,
-	registerEnvironmentWakeForTest,
+	registerEnvironmentActivationForTest,
 	registerRendererResourceDriver,
 	registerRendererResourcePersistence,
+	registerSessionTimelineCheckpointSynchronizer,
+	registerSessionTimelineOlderPageSynchronizer,
 	rehydrateRendererCommandPayload,
 	resetSessionTimelineClientBusForTest,
 	retainSessionTimeline,
@@ -218,6 +222,42 @@ describe("renderer session timeline ClientBus adapter", () => {
 		);
 	});
 
+	it("classifies a rejected cloud account as blocked auth", async () => {
+		registerEnvironmentActivationForTest(environmentId, async () => {
+			throw new CloudWorkspaceOpError({ code: "not-allowed" });
+		});
+
+		const retained = retainSessionTimeline(ref, "connect");
+		await waitUntil(
+			() =>
+				getRendererClientBus().connection(environmentId).phase ===
+				"blocked-auth",
+		);
+		expect(getRendererClientBus().connection(environmentId).error).toBe(
+			"not-allowed",
+		);
+		retained.lease.release();
+	});
+
+	it("keeps application stream errors resource-local", async () => {
+		setSessionTimelineRpcSessionForTest(async () => ({
+			client: {
+				"session.events": () =>
+					Stream.fail(new SessionNotFoundError({ sessionId })),
+			} as never,
+			dispose: async () => undefined,
+		}));
+
+		const retained = retainSessionTimeline(ref, "connect");
+		await waitUntil(
+			() => getRendererClientBus().snapshot(retained.key).sync === "failed",
+		);
+		expect(getRendererClientBus().connection(environmentId).phase).toBe(
+			"connected",
+		);
+		retained.lease.release();
+	});
+
 	it("prepares a woken environment on the same passive session", async () => {
 		let sessions = 0;
 		let preparedClient: unknown = null;
@@ -229,7 +269,7 @@ describe("renderer session timeline ClientBus adapter", () => {
 			sessions += 1;
 			return { client, dispose: async () => undefined };
 		});
-		registerEnvironmentWakeForTest(
+		registerEnvironmentActivationForTest(
 			environmentId,
 			async () => undefined,
 			async (resolved) => {
@@ -244,6 +284,31 @@ describe("renderer session timeline ClientBus adapter", () => {
 		);
 		expect(sessions).toBe(1);
 		expect(preparedClient).toBe(client);
+		retained.lease.release();
+	});
+
+	it("prepares a connected environment before acquiring its socket", async () => {
+		const order: string[] = [];
+		const frames = Effect.runSync(Queue.unbounded());
+		setSessionTimelineRpcSessionForTest(async () => {
+			order.push("socket");
+			return {
+				client: {
+					"session.events": () => Stream.fromQueue(frames),
+				} as never,
+				dispose: async () => undefined,
+			};
+		});
+		registerEnvironmentActivationForTest(environmentId, async (activation) => {
+			order.push(`prepare:${activation}`);
+		});
+
+		const retained = retainSessionTimeline(ref, "connect");
+		await waitUntil(
+			() =>
+				getRendererClientBus().connection(environmentId).phase === "connected",
+		);
+		expect(order).toEqual(["prepare:connect", "socket"]);
 		retained.lease.release();
 	});
 
@@ -399,6 +464,56 @@ describe("renderer session timeline ClientBus adapter", () => {
 			loaded: 0,
 			hasMore: true,
 		});
+	});
+
+	it("loads an older checkpoint page without connecting a paused environment", async () => {
+		const older = Message.make({
+			id: MessageId.make("offline-older"),
+			sessionId,
+			role: "assistant",
+			content: { _tag: "assistant", text: "from R2" },
+			createdAt: new Date(1),
+		});
+		registerSessionTimelineCheckpointSynchronizer(environmentId, async () => ({
+			data: SessionTimelineProjection.make({
+				messages: [],
+				olderMessageSequence: 20,
+				status: "idle",
+				currentTurn: null,
+				queue: QueueState.make({ items: [], paused: false }),
+				permissionMode: "default",
+				runtimeMode: "approval-required",
+			}),
+			cursor: { epoch: "r2-page", version: 8 },
+			origin: "checkpoint",
+		}));
+		let pageCalls = 0;
+		registerSessionTimelineOlderPageSynchronizer(
+			environmentId,
+			async (_ref, cursor, beforeSequence) => {
+				pageCalls += 1;
+				expect(cursor).toEqual({ epoch: "r2-page", version: 8 });
+				expect(beforeSequence).toBe(20);
+				return { messages: [older], olderMessageSequence: null };
+			},
+		);
+		const retained = retainSessionTimeline(ref, "sync");
+		await waitUntil(
+			() =>
+				getRendererClientBus().snapshot(retained.key).origin === "checkpoint",
+		);
+
+		await expect(loadOlderSessionMessages(ref)).resolves.toEqual({
+			applied: true,
+			loaded: 1,
+			hasMore: false,
+		});
+		expect(pageCalls).toBe(1);
+		expect(getRendererClientBus().snapshot(retained.key)).toMatchObject({
+			connection: "dormant",
+			data: { messages: [older], olderMessageSequence: null },
+		});
+		retained.lease.release();
 	});
 
 	it("routes resource persistence by kind without creating another bus", async () => {

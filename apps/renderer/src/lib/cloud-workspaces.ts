@@ -1,6 +1,11 @@
+import type { ResourceView } from "@zuse/client-runtime/resource-state";
+import type { SessionTimelineProjection } from "@zuse/contracts";
 import {
 	Chat,
+	CLOUD_TRANSCRIPT_CHECKPOINT_SCHEMA_VERSION,
 	type CloudChatSummary,
+	CloudTranscriptCheckpointPayload,
+	CloudTranscriptMessagePagePayload,
 	type CloudWorkspace,
 	EnvironmentId,
 	type FolderId,
@@ -9,7 +14,12 @@ import {
 	Session,
 	type SessionId,
 } from "@zuse/contracts";
-import { Effect } from "effect";
+import {
+	cloudTranscriptAdditionalData,
+	decryptCloudTranscript,
+	sha256Base64Url,
+} from "@zuse/utils/cloud-transcript-crypto";
+import { Effect, Schema } from "effect";
 import {
 	cloudWorkspaceStartupError,
 	isCloudWorkspaceReady,
@@ -18,20 +28,34 @@ import {
 import { overlayActiveEnvironmentShell } from "../lib/environment-entities.ts";
 import { formatError } from "../lib/format-error.ts";
 import {
+	clearCloudWorkspaceRuntimeRecovery,
+	cloudWorkspaceRequiresRuntimeRecovery,
 	getControlPlaneRpcClient,
 	registerCloudWorkspace,
 } from "../lib/rpc-client.ts";
-import { registerEnvironmentWake } from "../lib/session-timeline-client-bus.ts";
+import {
+	sessionTimelineCache,
+	timelineReadingPositionStore,
+} from "../lib/session-timeline-cache.ts";
+import {
+	registerEnvironmentActivation,
+	registerSessionTimelineCheckpointSynchronizer,
+	registerSessionTimelineOlderPageSynchronizer,
+} from "../lib/session-timeline-client-bus.ts";
 import { createAtomStore as create } from "../state/atom-store.ts";
 import { useChatsStore } from "../store/chats.ts";
 import { useSessionsStore } from "../store/sessions.ts";
+import { useUiStore } from "../store/ui.ts";
+import { useWorkspaceStore } from "../store/workspace.ts";
 import {
 	cloudSummaryForChat,
 	cloudSummaryForEnvironment,
 	cloudSummaryForSession,
 	compareCloudChatSummaryVersion,
+	hydrateCloudChatCatalogPersistence,
 	localProjectForCloudChat,
 	localProjectForCloudEnvironment,
+	optimisticallyArchiveCloudChat,
 	reconcileCloudChatCatalog,
 	registerCloudChat,
 	registerCloudChatCatalogRefresh,
@@ -47,7 +71,7 @@ type CloudChatsState = {
 
 const opening = new Map<string, Promise<void>>();
 const attaching = new Map<string, Promise<void>>();
-const registeredWakeByEnvironment = new Map<string, CloudChatSummary>();
+const registeredCloudEnvironments = new Map<string, CloudChatSummary>();
 let hydration: Promise<void> | null = null;
 
 /**
@@ -56,19 +80,120 @@ let hydration: Promise<void> | null = null;
  * teaching feature stores how to resume a workspace.
  */
 const registerCloudEnvironmentResolver = (summary: CloudChatSummary): void => {
-	const previous = registeredWakeByEnvironment.get(summary.workspaceId);
+	const previous = registeredCloudEnvironments.get(summary.workspaceId);
 	if (previous !== undefined) {
 		if (compareCloudChatSummaryVersion(summary, previous) < 0) return;
-		registeredWakeByEnvironment.set(summary.workspaceId, summary);
+		registeredCloudEnvironments.set(summary.workspaceId, summary);
 		return;
 	}
-	registeredWakeByEnvironment.set(summary.workspaceId, summary);
+	registeredCloudEnvironments.set(summary.workspaceId, summary);
 	let rootPrepared = false;
-	registerEnvironmentWake(
+	registerSessionTimelineCheckpointSynchronizer(
 		EnvironmentId.make(summary.workspaceId),
-		async () => {
+		async (ref, current: ResourceView<SessionTimelineProjection>) => {
+			const control = await getControlPlaneRpcClient();
+			const result = await Effect.runPromise(
+				control["cloud.transcript.get"]({
+					workspaceId: summary.workspaceId,
+					sessionId: ref.sessionId,
+					cursor: current.cursor ?? undefined,
+				}),
+			);
+			const checkpoint = result.checkpoint;
+			if (checkpoint === null) return null;
+			if (
+				checkpoint.metadata.workspaceId !== summary.workspaceId ||
+				checkpoint.metadata.sessionId !== ref.sessionId ||
+				(await sha256Base64Url(checkpoint.ciphertext)) !==
+					checkpoint.metadata.ciphertextSha256
+			)
+				throw new Error("Cloud transcript checkpoint failed integrity checks");
+			const plaintext = await decryptCloudTranscript({
+				encodedKey: checkpoint.transcriptKey,
+				additionalData: cloudTranscriptAdditionalData({
+					workspaceId: summary.workspaceId,
+					sessionId: ref.sessionId,
+					epoch: checkpoint.metadata.cursor.epoch,
+					version: checkpoint.metadata.cursor.version,
+					schemaVersion: CLOUD_TRANSCRIPT_CHECKPOINT_SCHEMA_VERSION,
+				}),
+				ciphertext: checkpoint.ciphertext,
+			});
+			const payload = Schema.decodeUnknownSync(
+				CloudTranscriptCheckpointPayload,
+			)(JSON.parse(new TextDecoder().decode(plaintext)));
+			if (
+				payload.workspaceId !== summary.workspaceId ||
+				payload.sessionId !== ref.sessionId ||
+				payload.cursor.epoch !== checkpoint.metadata.cursor.epoch ||
+				payload.cursor.version !== checkpoint.metadata.cursor.version
+			)
+				throw new Error("Cloud transcript checkpoint metadata mismatch");
+			return {
+				data: payload.projection,
+				cursor: payload.cursor,
+				resetEpoch:
+					current.cursor !== null &&
+					current.cursor.epoch !== payload.cursor.epoch,
+			};
+		},
+	);
+	registerSessionTimelineOlderPageSynchronizer(
+		EnvironmentId.make(summary.workspaceId),
+		async (ref, cursor, beforeSequence) => {
+			const control = await getControlPlaneRpcClient();
+			const result = await Effect.runPromise(
+				control["cloud.transcript.messages.page"]({
+					workspaceId: summary.workspaceId,
+					sessionId: ref.sessionId,
+					cursor,
+					beforeSequence,
+				}),
+			);
+			const encrypted = result.page;
+			if (encrypted === null) return null;
+			if (
+				encrypted.beforeSequence !== beforeSequence ||
+				encrypted.cursor.epoch !== cursor.epoch ||
+				encrypted.cursor.version !== cursor.version ||
+				(await sha256Base64Url(encrypted.ciphertext)) !==
+					encrypted.ciphertextSha256
+			)
+				throw new Error("Cloud transcript page failed integrity checks");
+			const plaintext = await decryptCloudTranscript({
+				encodedKey: encrypted.transcriptKey,
+				additionalData: cloudTranscriptAdditionalData({
+					workspaceId: summary.workspaceId,
+					sessionId: ref.sessionId,
+					epoch: cursor.epoch,
+					version: cursor.version,
+					schemaVersion: CLOUD_TRANSCRIPT_CHECKPOINT_SCHEMA_VERSION,
+					pageBeforeSequence: beforeSequence,
+				}),
+				ciphertext: encrypted.ciphertext,
+			});
+			const page = Schema.decodeUnknownSync(CloudTranscriptMessagePagePayload)(
+				JSON.parse(new TextDecoder().decode(plaintext)) as unknown,
+			);
+			if (
+				page.workspaceId !== summary.workspaceId ||
+				page.sessionId !== ref.sessionId ||
+				page.beforeSequence !== beforeSequence ||
+				page.cursor.epoch !== cursor.epoch ||
+				page.cursor.version !== cursor.version
+			)
+				throw new Error("Cloud transcript page belongs to another resource");
+			return {
+				messages: page.messages,
+				olderMessageSequence: page.olderMessageSequence,
+			};
+		},
+	);
+	registerEnvironmentActivation(
+		EnvironmentId.make(summary.workspaceId),
+		async (activation) => {
 			const fallback =
-				registeredWakeByEnvironment.get(summary.workspaceId) ?? summary;
+				registeredCloudEnvironments.get(summary.workspaceId) ?? summary;
 			const current =
 				useCloudChatCatalogStore
 					.getState()
@@ -77,7 +202,7 @@ const registerCloudEnvironmentResolver = (summary: CloudChatSummary): void => {
 					) ??
 				cloudSummaryForChat(fallback.chatId) ??
 				fallback;
-			await ensureCloudWorkspaceEnvironment(current);
+			await ensureCloudWorkspaceEnvironment(current, activation);
 		},
 		async (client) => {
 			if (rootPrepared) return;
@@ -129,6 +254,35 @@ export const repositoryIdentityForOrigin = (
 const sessionStatus = (summary: CloudChatSummary): Session["status"] =>
 	summary.state === "failed" ? "error" : "idle";
 
+/** Metadata fallback for rendering a cached transcript without a live shell. */
+export const cloudSessionPlaceholder = (
+	summary: CloudChatSummary,
+	projectId: FolderId,
+): Session => {
+	const now = new Date(summary.createdAt);
+	return Session.make({
+		id: summary.initialSessionId,
+		projectId,
+		title: summary.title,
+		titleProvenance: "manual",
+		providerId: summary.agent,
+		model: summary.model,
+		status: sessionStatus(summary),
+		archivedAt: null,
+		cursor: null,
+		resumeStrategy: "none",
+		runtimeMode: "approval-required",
+		worktreeId: null,
+		chatId: summary.chatId,
+		forkedFromSessionId: null,
+		forkedFromMessageId: null,
+		permissionMode: "default",
+		toolSearch: false,
+		createdAt: now,
+		updatedAt: new Date(summary.updatedAt),
+	});
+};
+
 /**
  * Relay catalog rows are placeholders only. The environment runtime timeline
  * replaces this shell as soon as the user retains the chat resource.
@@ -165,27 +319,7 @@ export const stageCloudChat = (
 		createdAt: now,
 		updatedAt: new Date(accepted.updatedAt),
 	});
-	const session = Session.make({
-		id: accepted.initialSessionId,
-		projectId,
-		title: accepted.title,
-		titleProvenance: "manual",
-		providerId: accepted.agent,
-		model: accepted.model,
-		status: sessionStatus(accepted),
-		archivedAt: null,
-		cursor: null,
-		resumeStrategy: "none",
-		runtimeMode: "approval-required",
-		worktreeId: null,
-		chatId: accepted.chatId,
-		forkedFromSessionId: null,
-		forkedFromMessageId: null,
-		permissionMode: "default",
-		toolSearch: false,
-		createdAt: now,
-		updatedAt: new Date(accepted.updatedAt),
-	});
+	const session = cloudSessionPlaceholder(accepted, projectId);
 	overlayActiveEnvironmentShell((shell) => ({
 		...shell,
 		chatsByProject: {
@@ -218,11 +352,28 @@ export const openCloudChat = (
 	if (existing !== undefined) return existing;
 	const operation = Promise.resolve().then(() => {
 		stageCloudChat(summary, projectId);
-		useChatsStore.getState().select(summary.chatId);
-		// The timeline retain is cache-first. An already-running workspace can be
-		// attached in the background; paused compute is woken only by a live action.
-		if (summary.state === "ready" && summary.runtimeState === "online")
-			void ensureCloudWorkspaceAttached(summary).catch(() => undefined);
+		// Catalog selection must not depend on a paused runtime shell. Select the
+		// durable ids now so the qualified timeline cache can hydrate immediately.
+		useUiStore.getState().setActiveMainTab("chat");
+		useChatsStore.setState((state) => ({
+			selectedChatId: summary.chatId,
+			selectedChatByProject: {
+				...state.selectedChatByProject,
+				[projectId]: summary.chatId,
+			},
+		}));
+		useSessionsStore.setState((state) => ({
+			selectedSessionId: summary.initialSessionId,
+			selectedSessionByProject: {
+				...state.selectedSessionByProject,
+				[projectId]: summary.initialSessionId,
+			},
+		}));
+		if (useWorkspaceStore.getState().selectedFolderId !== projectId) {
+			void useWorkspaceStore.getState().select(projectId);
+		}
+		// The retained timeline hydrates cache first. EnvironmentRuntime then
+		// prepares the gateway and attaches in one ordered background operation.
 	});
 	const tracked = operation.finally(() => opening.delete(summary.workspaceId));
 	opening.set(summary.workspaceId, tracked);
@@ -231,14 +382,12 @@ export const openCloudChat = (
 
 const workspaceNeedsWake = (
 	workspace: Pick<CloudWorkspace, "state">,
-): boolean =>
-	workspace.state === "paused" ||
-	workspace.state === "failed" ||
-	workspace.state === "resuming";
+): boolean => workspace.state === "paused" || workspace.state === "failed";
 
 /** Cloud is an EnvironmentResolver capability, not a second message path. */
 export const ensureCloudWorkspaceAttached = (
 	summary: CloudChatSummary,
+	activation: "connect" | "wake" = "wake",
 ): Promise<void> => {
 	const existing = attaching.get(summary.workspaceId);
 	if (existing !== undefined) return existing;
@@ -247,14 +396,35 @@ export const ensureCloudWorkspaceAttached = (
 		let workspace = await Effect.runPromise(
 			control["cloud.workspaces.get"]({ workspaceId: summary.workspaceId }),
 		);
-		if (workspaceNeedsWake(workspace)) {
+		const recoverRuntime = cloudWorkspaceRequiresRuntimeRecovery(
+			summary.workspaceId,
+		);
+		const recoverOnlineRuntime =
+			recoverRuntime &&
+			workspace.state === "ready" &&
+			workspace.runtimeState === "online";
+		if (
+			(workspaceNeedsWake(workspace) && activation === "wake") ||
+			recoverOnlineRuntime
+		) {
 			workspace = await Effect.runPromise(
 				control["cloud.workspaces.resume"]({
 					workspaceId: summary.workspaceId,
+					recoverRuntime: recoverOnlineRuntime || undefined,
 				}),
 			);
+			if (recoverOnlineRuntime) {
+				clearCloudWorkspaceRuntimeRecovery(summary.workspaceId);
+			}
 		}
 		updateSummary(refreshSummaryFromWorkspace(summary, workspace));
+		if (activation === "connect" && !isCloudWorkspaceReady(workspace)) {
+			throw new Error(
+				workspace.state === "paused"
+					? "Cloud workspace is paused."
+					: "Cloud workspace is not currently available for passive attachment.",
+			);
+		}
 		if (!isCloudWorkspaceReady(workspace)) {
 			const error = cloudWorkspaceStartupError(workspace);
 			if (error !== null) throw error;
@@ -282,9 +452,10 @@ export const ensureCloudWorkspaceAttached = (
 	return operation;
 };
 
-export const ensureCloudWorkspaceEnvironment = (
+const ensureCloudWorkspaceEnvironment = (
 	summary: CloudChatSummary,
-): Promise<void> => ensureCloudWorkspaceAttached(summary);
+	activation: "connect" | "wake",
+): Promise<void> => ensureCloudWorkspaceAttached(summary, activation);
 
 export { cloudSummaryForChat, localProjectForCloudChat };
 
@@ -325,6 +496,16 @@ const removeDeletedCloudPlaceholders = (
 	removed: ReadonlyArray<CloudChatSummary>,
 ): void => {
 	if (removed.length === 0) return;
+	for (const summary of removed) {
+		const ref = {
+			environmentId: EnvironmentId.make(summary.workspaceId),
+			sessionId: summary.initialSessionId,
+		};
+		void Promise.all([
+			sessionTimelineCache?.remove(ref),
+			timelineReadingPositionStore?.remove(ref),
+		]).catch(() => undefined);
+	}
 	const chatIds = new Set(removed.map((summary) => summary.chatId));
 	const sessionIds = new Set(
 		removed.map((summary) => summary.initialSessionId),
@@ -381,7 +562,35 @@ export const useCloudChatsStore = create<CloudChatsState>((set) => ({
 		hydration = (async () => {
 			set({ loading: true, error: null });
 			try {
+				await hydrateCloudChatCatalogPersistence();
+				for (const cached of useCloudChatCatalogStore.getState().summaries) {
+					registerCloudEnvironmentResolver(cached);
+					const cachedProject = localProjectForCloudEnvironment(
+						cached.workspaceId,
+					);
+					if (cachedProject !== null) stageCloudChat(cached, cachedProject);
+				}
 				const client = await getControlPlaneRpcClient();
+				for (const [workspaceId, intent] of Object.entries(
+					useCloudChatCatalogStore.getState().archiveIntents,
+				)) {
+					const cached = cloudSummaryForEnvironment(workspaceId);
+					if (cached === null) continue;
+					try {
+						const archived = await Effect.runPromise(
+							client["cloud.workspaces.archive"]({
+								workspaceId,
+								commandId: intent.commandId,
+							}),
+						);
+						updateSummary({
+							...refreshSummaryFromWorkspace(cached, archived),
+							archivedAt: intent.requestedAt,
+						});
+					} catch {
+						// The persisted intent remains hidden and retries on the next hydrate.
+					}
+				}
 				const result = await Effect.runPromise(
 					client["cloud.chats.list"]({ scope: "all" }),
 				);
@@ -406,13 +615,35 @@ export const useCloudChatsStore = create<CloudChatsState>((set) => ({
 		return hydration;
 	},
 	archive: async (summary) => {
-		const client = await getControlPlaneRpcClient();
-		const workspace = await Effect.runPromise(
-			client["cloud.workspaces.archive"]({
-				workspaceId: summary.workspaceId,
-			}),
+		const archivedAt = Date.now();
+		const commandId = crypto.randomUUID();
+		const optimistic = optimisticallyArchiveCloudChat(
+			summary,
+			archivedAt,
+			commandId,
 		);
-		updateSummary(refreshSummaryFromWorkspace(summary, workspace));
+		const projectId = localProjectForCloudEnvironment(summary.workspaceId);
+		if (projectId !== null) stageCloudChat(optimistic, projectId);
+		try {
+			const client = await getControlPlaneRpcClient();
+			const workspace = await Effect.runPromise(
+				client["cloud.workspaces.archive"]({
+					workspaceId: summary.workspaceId,
+					commandId,
+				}),
+			);
+			updateSummary({
+				...refreshSummaryFromWorkspace(summary, workspace),
+				archivedAt,
+			});
+		} catch (cause) {
+			set({ error: formatError(cause) });
+			// A response can be lost after Relay durably accepts the command. Keep
+			// the persisted intent as the authoritative optimistic fence and retry
+			// it during catalog hydration instead of flashing the row back into the
+			// active list. Reconciliation clears it only after Relay publishes the
+			// archived lifecycle state.
+		}
 	},
 }));
 

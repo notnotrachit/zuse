@@ -1,13 +1,13 @@
 import { type AuthState, CommandId, EnvironmentId } from "@zuse/contracts";
 import { toastManager } from "../components/ui/toast.tsx";
 import { environmentAuthResourceKey } from "../lib/auth-client-bus.ts";
+import { LOCAL_ENVIRONMENT_KEY } from "../lib/rpc-client.ts";
 import { getRendererClientBus } from "../lib/session-timeline-client-bus.ts";
 import {
 	readStorageWithLegacy,
 	removeStorageKeys,
 } from "../lib/storage-keys.ts";
 import { createAtomStore as create } from "../state/atom-store.ts";
-import { useEnvironmentCatalogStore } from "./environment-catalog.ts";
 
 /**
  * Auth actions and renderer-only display-name preference. Canonical server auth
@@ -73,9 +73,7 @@ type AuthStore = {
 };
 
 const activeAuthResource = () => {
-	const environmentId = EnvironmentId.make(
-		useEnvironmentCatalogStore.getState().activeEnvironmentId,
-	);
+	const environmentId = EnvironmentId.make(LOCAL_ENVIRONMENT_KEY);
 	return { environmentId, key: environmentAuthResourceKey(environmentId) };
 };
 
