@@ -15,6 +15,7 @@ import {
 	networkInterfaces,
 	arch as osArch,
 	release as osRelease,
+	tmpdir,
 	totalmem,
 	userInfo,
 } from "node:os";
@@ -139,6 +140,7 @@ import {
 import { createBufferedChannel, isPairingDeepLink } from "./deep-link.ts";
 import { listLocalServers } from "./host/local-port-inspector.ts";
 import {
+	executableOnPath,
 	listPortableOpenTargets,
 	openPathWithPortableTarget,
 } from "./host/open-targets.ts";
@@ -174,7 +176,16 @@ import {
 	sanitizeRemoteConnectionLog,
 	sanitizeRemoteDiagnosticValue,
 } from "./remote-diagnostic-sanitizer.ts";
+import {
+	prepareCloudSshAccess,
+	sshTargetLaunch,
+} from "./ssh/cloud-ssh-service.ts";
 import { SshEnvironmentManager } from "./ssh/environment-service.ts";
+import {
+	CloudSyncManager,
+	cloudSyncDefaultPath,
+	SYNC_MARKER_FILE,
+} from "./sync/cloud-sync-service.ts";
 import { TailnetEnvironmentManager } from "./tailnet/environment-service.ts";
 import {
 	getIsInstallingUpdate,
@@ -595,6 +606,9 @@ ipcMain.on("window:setAppearanceMode", (_event, value: unknown) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
+const cloudSyncManager = new CloudSyncManager((status) => {
+	mainWindow?.webContents.send("cloudSync:status", status);
+});
 let sshEnvironmentManager: SshEnvironmentManager | null = null;
 let tailnetEnvironmentManager: TailnetEnvironmentManager | null = null;
 let runtimeFiber: Fiber.Fiber<void, never> | null = null;
@@ -1876,9 +1890,10 @@ async function createMainWindow() {
 	});
 
 	ipcMain.handle("app:listOpenTargets", async (_event, rawPath: unknown) => {
-		if (typeof rawPath !== "string" || rawPath.length === 0) return [];
-		const existingPath = await pathExists(rawPath);
-		if (!existingPath) return [];
+		if (typeof rawPath !== "string") return [];
+		// An empty path lists installed apps without opening anything — used for
+		// remote (SSH) targets where no local workspace path exists.
+		if (rawPath.length > 0 && !(await pathExists(rawPath))) return [];
 		if (process.platform !== "darwin") {
 			return listPortableOpenTargets(process.platform as HostPlatform);
 		}
@@ -1946,6 +1961,145 @@ async function createMainWindow() {
 		clipboard.writeText(text);
 		return true;
 	});
+
+	ipcMain.handle("app:cloudSshPrepare", async (_event, rawAccess: unknown) => {
+		if (typeof rawAccess !== "object" || rawAccess === null) return null;
+		const access = rawAccess as Record<string, unknown>;
+		if (
+			typeof access.workspaceId !== "string" ||
+			!/^[A-Za-z0-9_-]+$/u.test(access.workspaceId) ||
+			typeof access.wsUrl !== "string" ||
+			!access.wsUrl.startsWith("wss://") ||
+			typeof access.ticket !== "string" ||
+			typeof access.expiresAt !== "number" ||
+			typeof access.user !== "string" ||
+			typeof access.workspacePath !== "string" ||
+			!access.workspacePath.startsWith("/")
+		)
+			return null;
+		try {
+			return await prepareCloudSshAccess({
+				workspaceId: access.workspaceId,
+				wsUrl: access.wsUrl,
+				ticket: access.ticket,
+				expiresAt: access.expiresAt,
+				user: access.user,
+				workspacePath: access.workspacePath,
+			});
+		} catch (cause) {
+			recordMainDiagnostic("error", "cloud-ssh.prepare", [cause]);
+			return null;
+		}
+	});
+
+	ipcMain.handle(
+		"app:openSshTarget",
+		async (
+			_event,
+			rawTarget: unknown,
+			rawHostAlias: unknown,
+			rawRemotePath: unknown,
+		) => {
+			if (
+				typeof rawTarget !== "string" ||
+				typeof rawHostAlias !== "string" ||
+				!/^zuse-[A-Za-z0-9_-]+$/u.test(rawHostAlias) ||
+				typeof rawRemotePath !== "string" ||
+				!rawRemotePath.startsWith("/")
+			)
+				return false;
+			const launch = sshTargetLaunch(rawTarget, rawHostAlias, rawRemotePath);
+			if (launch === null) return false;
+			try {
+				if (launch.kind === "uri") {
+					await shell.openExternal(launch.uri);
+					return true;
+				}
+				// Terminals cannot be handed a command via `open`; a temporary
+				// .command script is the supported macOS path.
+				if (process.platform === "darwin") {
+					const scriptPath = Path.join(tmpdir(), `${rawHostAlias}.command`);
+					await fs.writeFile(
+						scriptPath,
+						`#!/bin/sh\nexec ${launch.command}\n`,
+						{ mode: 0o755 },
+					);
+					await openWithApp("Terminal", scriptPath);
+					return true;
+				}
+				if (!(await executableOnPath("x-terminal-emulator"))) return false;
+				const child = spawn(
+					"x-terminal-emulator",
+					["-e", "sh", "-c", launch.command],
+					{ detached: true, stdio: "ignore" },
+				);
+				child.unref();
+				return true;
+			} catch (cause) {
+				recordMainDiagnostic("error", "cloud-ssh.open-target", [cause]);
+				return false;
+			}
+		},
+	);
+
+	ipcMain.handle(
+		"app:cloudSyncConfigure",
+		async (_event, rawInput: unknown) => {
+			if (typeof rawInput !== "object" || rawInput === null) return null;
+			const input = rawInput as Record<string, unknown>;
+			if (
+				typeof input.workspaceId !== "string" ||
+				!/^[A-Za-z0-9_-]+$/u.test(input.workspaceId) ||
+				typeof input.enabled !== "boolean" ||
+				typeof input.localPath !== "string" ||
+				typeof input.hostAlias !== "string" ||
+				!/^zuse-[A-Za-z0-9_-]+$/u.test(input.hostAlias) ||
+				typeof input.remotePath !== "string" ||
+				!input.remotePath.startsWith("/")
+			)
+				return null;
+			return cloudSyncManager.configure({
+				workspaceId: input.workspaceId,
+				enabled: input.enabled,
+				localPath: input.localPath,
+				hostAlias: input.hostAlias,
+				remotePath: input.remotePath,
+			});
+		},
+	);
+
+	ipcMain.handle("app:cloudSyncRequest", (_event, rawWorkspaceId: unknown) => {
+		if (typeof rawWorkspaceId !== "string") return;
+		cloudSyncManager.requestSync(rawWorkspaceId);
+	});
+
+	ipcMain.handle(
+		"app:cloudSyncDefaultPath",
+		async (
+			_event,
+			workspaceId: unknown,
+			repository: unknown,
+			branch: unknown,
+		) => {
+			if (
+				typeof workspaceId !== "string" ||
+				!/^[A-Za-z0-9_-]+$/u.test(workspaceId)
+			)
+				return null;
+			const path = cloudSyncDefaultPath(
+				app.getPath("home"),
+				repository,
+				branch,
+			);
+			if (path === null) return null;
+			await fs.mkdir(path, { recursive: true });
+			const marker = Path.join(path, SYNC_MARKER_FILE);
+			if ((await fs.readdir(path)).length > 0 && !fsSync.existsSync(marker))
+				return null;
+			await fs.writeFile(marker, `${JSON.stringify({ workspaceId })}\n`);
+			return path;
+		},
+	);
 
 	ipcMain.handle("app:getMainDiagnostics", () => mainDiagnosticLogs.slice());
 	ipcMain.on("app:recordFatalDiagnostic", (event, payload: unknown) => {

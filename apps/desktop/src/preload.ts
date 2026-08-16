@@ -1,5 +1,6 @@
 import {
 	AGENTS_RUNNING_COUNT_CHANNEL,
+	type CloudWorkspaceSshAccess,
 	IPC_CHANNEL,
 	type LagSample,
 	type PerformanceHistory,
@@ -315,6 +316,49 @@ const bridge = {
 			ipcRenderer.invoke("app:copyPath", path) as Promise<void>,
 		copyFileContents: (path: string) =>
 			ipcRenderer.invoke("app:copyFileContents", path) as Promise<boolean>,
+		cloudSshPrepare: (access: CloudWorkspaceSshAccess) =>
+			ipcRenderer.invoke("app:cloudSshPrepare", access) as Promise<{
+				readonly hostAlias: string;
+				readonly sshCommand: string;
+				readonly publicKey: string;
+				readonly remotePath: string;
+			} | null>,
+		openSshTarget: (target: string, hostAlias: string, remotePath: string) =>
+			ipcRenderer.invoke(
+				"app:openSshTarget",
+				target,
+				hostAlias,
+				remotePath,
+			) as Promise<boolean>,
+		cloudSyncConfigure: (input: {
+			readonly workspaceId: string;
+			readonly enabled: boolean;
+			readonly localPath: string;
+			readonly hostAlias: string;
+			readonly remotePath: string;
+		}) =>
+			ipcRenderer.invoke("app:cloudSyncConfigure", input) as Promise<unknown>,
+		cloudSyncRequest: (workspaceId: string) =>
+			ipcRenderer.invoke("app:cloudSyncRequest", workspaceId) as Promise<void>,
+		cloudSyncDefaultPath: (
+			workspaceId: string,
+			repositoryName: string,
+			branch: string,
+		) =>
+			ipcRenderer.invoke(
+				"app:cloudSyncDefaultPath",
+				workspaceId,
+				repositoryName,
+				branch,
+			) as Promise<string | null>,
+		onCloudSyncStatus: (handler: (status: unknown) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, status: unknown) =>
+				handler(status);
+			ipcRenderer.on("cloudSync:status", wrapped);
+			return () => {
+				ipcRenderer.off("cloudSync:status", wrapped);
+			};
+		},
 		getMainDiagnostics: () =>
 			ipcRenderer.invoke("app:getMainDiagnostics") as Promise<
 				ReadonlyArray<{

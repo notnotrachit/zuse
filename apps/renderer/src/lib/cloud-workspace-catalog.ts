@@ -9,18 +9,24 @@ import { Schema } from "effect";
 import { createAtomStore as create } from "../state/atom-store.ts";
 import { cloudChatCatalogPersistence } from "./session-timeline-cache.ts";
 
+export type CloudSyncPrefs = Readonly<{
+	enabled: boolean;
+}>;
+
 type CloudChatCatalogState = Readonly<{
 	summaries: ReadonlyArray<CloudChatSummary>;
 	localProjectByEnvironment: Readonly<Record<string, FolderId>>;
 	archiveIntents: Readonly<
 		Record<string, { readonly commandId: string; readonly requestedAt: number }>
 	>;
+	syncPrefs: Readonly<Record<string, CloudSyncPrefs>>;
 }>;
 
 const EMPTY_CATALOG: CloudChatCatalogState = {
 	summaries: [],
 	localProjectByEnvironment: {},
 	archiveIntents: {},
+	syncPrefs: {},
 };
 const LEGACY_CLOUD_CATALOG_STORAGE_KEY = "zuse:cloud-chat-catalog:v1";
 
@@ -72,7 +78,25 @@ const decodePersistedCatalog = (value: unknown): CloudChatCatalogState => {
 						),
 					)
 				: {};
-		return { summaries, localProjectByEnvironment: projects, archiveIntents };
+		const syncPrefs =
+			typeof parsed.syncPrefs === "object" && parsed.syncPrefs !== null
+				? Object.fromEntries(
+						Object.entries(parsed.syncPrefs).flatMap(([workspaceId, entry]) =>
+							typeof entry === "object" &&
+							entry !== null &&
+							"enabled" in entry &&
+							typeof entry.enabled === "boolean"
+								? [[workspaceId, { enabled: entry.enabled }]]
+								: [],
+						),
+					)
+				: {};
+		return {
+			summaries,
+			localProjectByEnvironment: projects,
+			archiveIntents,
+			syncPrefs,
+		};
 	} catch {
 		return EMPTY_CATALOG;
 	}
@@ -171,6 +195,10 @@ export const hydrateCloudChatCatalogPersistence = async (): Promise<void> => {
 				...persisted.archiveIntents,
 				...current.archiveIntents,
 			},
+			syncPrefs: {
+				...persisted.syncPrefs,
+				...current.syncPrefs,
+			},
 		}));
 		catalogPersistenceReady = true;
 		await cloudChatCatalogPersistence
@@ -252,6 +280,21 @@ export const registerCloudChat = (
 						[summary.workspaceId]: projectId,
 					},
 	}));
+};
+
+export const cloudSyncPrefsFor = (workspaceId: string): CloudSyncPrefs | null =>
+	useCloudChatCatalogStore.getState().syncPrefs[workspaceId] ?? null;
+
+export const setCloudSyncPrefs = (
+	workspaceId: string,
+	prefs: CloudSyncPrefs | null,
+): void => {
+	useCloudChatCatalogStore.setState((state) => {
+		const syncPrefs = { ...state.syncPrefs };
+		if (prefs === null) delete syncPrefs[workspaceId];
+		else syncPrefs[workspaceId] = prefs;
+		return { ...state, syncPrefs };
+	});
 };
 
 export const forgetCloudChat = (workspaceId: string): void => {
