@@ -25,6 +25,9 @@ import * as Config from "../../src/config.ts";
 import type { RelayContext } from "../../src/handler.ts";
 import {
 	AccountIdentity,
+	BetaAccess,
+	BetaAccessAllowAll,
+	BetaAccessDenied,
 	CloudBillingStoreMemory,
 	CloudCredentialVault,
 	CloudCredentialVaultLive,
@@ -128,6 +131,7 @@ const makeLayer = async (
 	liveCheckoutEnabled = false,
 	machineControlOverrides: Partial<MachineControlConfig> = {},
 	sandboxProvidersLayer: Layer.Layer<SandboxProviders> = SandboxProvidersFake,
+	betaAccessLayer: Layer.Layer<BetaAccess> = BetaAccessAllowAll,
 ): Promise<Layer.Layer<RelayContext>> => {
 	const billingLayer =
 		typeof billingLayerOrMaxEnvironments === "number"
@@ -172,6 +176,7 @@ const makeLayer = async (
 	);
 	return Layer.mergeAll(
 		configLayer,
+		betaAccessLayer,
 		WorkosVerifierTest,
 		RelayStoreMemory,
 		MachineStoreMemory,
@@ -337,6 +342,86 @@ beforeEach(async () => {
 });
 
 describe("@zuse/relay", () => {
+	test("gates hosted operations without blocking local links or resource cleanup", async () => {
+		const gatedRelay = makeRelay(
+			await makeLayer(
+				undefined,
+				BillingProvidersManual,
+				false,
+				{},
+				SandboxProvidersFake,
+				Layer.succeed(
+					BetaAccess,
+					BetaAccess.of({ check: () => Effect.fail(new BetaAccessDenied()) }),
+				),
+			),
+		);
+		const headers = { authorization: "Bearer test-token:user_a" };
+		const hosted = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/machine-offers`, { headers }),
+		);
+		expect(hosted.status).toBe(403);
+		expect(await hosted.json()).toEqual({
+			error: "cloud_beta_access_required",
+		});
+		const resume = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/cloud/workspaces/missing/resume`, {
+				method: "POST",
+				headers,
+			}),
+		);
+		expect(resume.status).toBe(403);
+
+		const portal = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}${RelayPaths.billingPortal}`, {
+				method: "POST",
+				headers,
+			}),
+		);
+		expect(portal.status).toBe(503);
+		expect(await portal.json()).toEqual({
+			error: "billing_provider_unavailable",
+		});
+
+		for (const action of ["pause", "archive", "delete"] as const) {
+			const cleanup = await gatedRelay.fetch(
+				new Request(`${RELAY_ISSUER}/v1/cloud/workspaces/missing/${action}`, {
+					method: "POST",
+					headers,
+				}),
+			);
+			expect(cleanup.status).toBe(404);
+			expect(await cleanup.json()).toEqual({
+				error: "cloud_workspace_not_found",
+			});
+		}
+
+		const cancel = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/machines/missing/cancel`, {
+				method: "POST",
+				headers,
+			}),
+		);
+		expect(cancel.status).toBe(404);
+		const destroy = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/machines/missing/destroy`, {
+				method: "POST",
+				headers: { ...headers, "content-type": "application/json" },
+				body: JSON.stringify({ machineId: "missing", confirmation: "destroy" }),
+			}),
+		);
+		expect(destroy.status).toBe(404);
+
+		const local = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/client/environment-link-challenges`, {
+				method: "POST",
+				headers,
+			}),
+		);
+		expect(local.status).toBe(200);
+		await gatedRelay.dispose();
+	});
+
 	test("offers each server-owned cloud machine and makes creation idempotent", async () => {
 		const headers = {
 			authorization: "Bearer test-token:user_a",

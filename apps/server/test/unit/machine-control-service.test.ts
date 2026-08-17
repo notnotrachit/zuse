@@ -43,15 +43,24 @@ describe("machine control relay URL", () => {
 		).toBe("branch-in-use");
 	});
 
+	it("preserves private-beta access failures", () => {
+		expect(mapRelayErrorCode(403, "cloud_beta_access_required").code).toBe(
+			"beta-access-required",
+		);
+		expect(mapRelayErrorCode(503, "cloud_beta_access_unavailable").code).toBe(
+			"beta-access-unavailable",
+		);
+	});
+
 	it("uses staging outside packaged production", () => {
 		expect(resolveMachineRelayUrl({ NODE_ENV: "development" })).toBe(
-			"https://relay-staging.stuff.md",
+			"https://relay-staging.zuse.sh",
 		);
 	});
 
 	it("uses production only for production or an explicit override", () => {
 		expect(resolveMachineRelayUrl({ NODE_ENV: "production" })).toBe(
-			"https://relay.stuff.md",
+			"https://relay.zuse.sh",
 		);
 		expect(
 			resolveMachineRelayUrl({

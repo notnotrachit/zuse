@@ -19,6 +19,7 @@ import { sha256Base64Url } from "@zuse/utils/cloud-transcript-crypto";
 import { Clock, Effect, Redacted, Schema } from "effect";
 import { CompactEncrypt, importJWK, type JWK } from "jose";
 import { requireWorkos } from "./auth.ts";
+import { type BetaAccess, requireCloudBetaAccess } from "./beta-access.ts";
 import { ensureAccountCloudBillingPeriod } from "./cloud-billing-period.ts";
 import { CloudBillingStore } from "./cloud-billing-store.ts";
 import { CloudCredentialVault } from "./cloud-credential-vault.ts";
@@ -79,6 +80,7 @@ export type CloudWorkspaceRouteContext =
 	| SandboxProviders
 	| SandboxOfferConfiguration
 	| RelayConfiguration
+	| BetaAccess
 	| WorkosVerifier
 	| CloudBillingStore;
 
@@ -1375,7 +1377,17 @@ export const routeCloudWorkspaceRequest = (
 			return response;
 		}
 
+		const actionMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/(pause|resume|restart|archive|unarchive|delete)$/u.exec(
+				path,
+			);
+		const isCleanupAction =
+			method === "POST" &&
+			(actionMatch?.[2] === "pause" ||
+				actionMatch?.[2] === "archive" ||
+				actionMatch?.[2] === "delete");
 		const principal = yield* requireWorkos(request);
+		if (!isCleanupAction) yield* requireCloudBetaAccess(principal.accountId);
 		const requireBillingCapacity = Effect.fn("requireCloudBillingCapacity")(
 			function* () {
 				if (!(yield* RelayConfiguration).cloudBillingEnforcementEnabled) return;
@@ -2027,10 +2039,6 @@ export const routeCloudWorkspaceRequest = (
 			return response;
 		}
 
-		const actionMatch =
-			/^\/v1\/cloud\/workspaces\/([^/]+)\/(pause|resume|restart|archive|unarchive|delete)$/u.exec(
-				path,
-			);
 		if (method === "POST" && actionMatch !== null) {
 			const workspace = yield* store.getWorkspace(
 				decodeURIComponent(actionMatch[1] ?? ""),

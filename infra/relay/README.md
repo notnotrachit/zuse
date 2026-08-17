@@ -2,11 +2,17 @@
 
 Thin control-plane relay for the account-based device-discovery model. It links a
 WorkOS account to the computers ("environments") that account controls, brokers
-short-lived DPoP-bound connect tokens, and tracks presence. **It is never in the
-data path** — chat traffic goes directly phone ↔ laptop.
+short-lived DPoP-bound connect tokens, and tracks presence. Ordinary paired
+environment traffic goes directly phone ↔ laptop. For Zuse Cloud, Relay also
+owns lifecycle and a thin Durable Object gateway that forwards opaque live
+frames; it does not store or project normal chat content.
+
+The cloud documentation starts at [Zuse Cloud](../../docs/cloud/README.md).
+Billing and production procedures remain in [cloud billing](CLOUD_BILLING.md)
+and the [private beta production runbook](PRIVATE_BETA_PRODUCTION.md).
 
 - Runtime: **Cloudflare Workers** (`src/worker.ts`).
-- Store: **PlanetScale Postgres via Cloudflare Hyperdrive** (`@effect/sql-pg`).
+- Store: **Postgres via Cloudflare Hyperdrive** (`@effect/sql-pg`).
 - Identity: **WorkOS** access tokens (verified against WorkOS JWKS).
 - Everything is **Effect**; every record is scoped by the WorkOS account id.
 
@@ -55,7 +61,7 @@ bun run deploy
 
 Staging is the unnamed Wrangler default, so these commands and even an
 unqualified `wrangler deploy` use the `zuse-relay-staging` Worker,
-`relay-staging.stuff.md`, a separate Hyperdrive binding, the `zenv-staging`
+`relay-staging.zuse.sh`, a separate Hyperdrive binding, the `zenv-staging`
 tunnel namespace, sandbox billing, the allowlisted Hetzner adapter, and live
 sandbox checkout. The secret scripts in this package also target staging by
 default. Production remains separately configured and disabled.
@@ -64,7 +70,7 @@ An intentional production deployment is guarded and requires both the explicit
 script and confirmation value:
 
 ```sh
-ZUSE_CONFIRM_PRODUCTION_RELAY_DEPLOY=deploy-relay.stuff.md \
+ZUSE_CONFIRM_PRODUCTION_RELAY_DEPLOY=deploy-relay.zuse.sh \
 	bun run deploy:production
 ```
 
@@ -90,8 +96,9 @@ binding requires separate, explicit approval.
    bun run db:migrate
    ```
    This is staging-only and validates the configured Neon host and database name
-   before Drizzle runs. Production migrations are intentionally not scripted
-   until an approved production database identity can be pinned and reviewed.
+   before Drizzle runs. Production uses the separately guarded
+   `db:migrate:production` command after its approved identity is pinned in
+   `production-database.json`; see the private beta production runbook.
 3. **Hyperdrive**: create the binding with SQL response caching disabled, then
    paste the id into `wrangler.jsonc`:
    ```sh
@@ -157,7 +164,7 @@ binding requires separate, explicit approval.
      valid JSON. Production checkout remains disabled while the fake adapter is
      selected.
 8. Deploy staging with `bun run deploy`. Development desktop and renderer
-   builds default to `https://relay-staging.stuff.md` and the staging WorkOS
+   builds default to `https://relay-staging.zuse.sh` and the staging WorkOS
    client; explicit `ZUSE_RELAY_URL`, `VITE_ZUSE_RELAY_URL`,
    `WORKOS_CLIENT_ID`, and `VITE_WORKOS_CLIENT_ID` values still override those
    defaults. Mobile development and preview profiles pin the same staging pair.
