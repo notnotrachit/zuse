@@ -70,7 +70,6 @@ export interface SandboxProviderAdapter {
 		readonly snapshotId: string;
 		readonly timeoutSeconds: number;
 		readonly env: Readonly<Record<string, string>>;
-		readonly network: SandboxNetworkPolicy;
 		readonly onTimeout: "pause" | "terminate";
 	}) => Effect.Effect<ProviderSandbox, SandboxProviderError>;
 	readonly recoverByLabel: (

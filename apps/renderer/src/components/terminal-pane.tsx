@@ -106,9 +106,7 @@ function PlainTerminalSlot({
 	const [pendingTerminalInput, setPendingTerminalInput] = useState("");
 	const ensureSlot = useTerminalsStore((s) => s.ensureSlot);
 	const resolvedRootPath =
-		cloudSummary === null
-			? rootPath
-			: (cloudShell.data?.folders[0]?.path ?? rootPath);
+		cloudSummary === null ? rootPath : "/home/zuse/workspace";
 
 	useEffect(() => {
 		if (cloudAttachment !== "ready") return;

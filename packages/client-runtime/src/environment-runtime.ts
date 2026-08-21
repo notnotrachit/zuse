@@ -145,11 +145,6 @@ export class EnvironmentRuntime<Client> {
 		) {
 			return Promise.resolve(this.current?.client ?? null);
 		}
-		// An escalated activation is an explicit user demand: it starts a fresh
-		// retry episode with visible progress instead of a quiet background one.
-		if (activationRank(this.desired) > activationRank(previousDesired)) {
-			this.retryAttempt = 0;
-		}
 		this.clearRetry();
 		if ((this.options.isOnline?.() ?? true) === false) {
 			this.emit({ phase: "offline", error: null });
@@ -219,24 +214,15 @@ export class EnvironmentRuntime<Client> {
 			}
 			await this.disposeInFlight;
 			const requested = this.desired as NetworkActivation;
-			// Automatic retries after a failure stay quiet: flipping the surface
-			// back to a progress phase every backoff tick reads as an endless
-			// failed↔connecting loop. The state moves again on success or when
-			// the user explicitly retries (which resets the attempt counter).
-			const quietRetry =
-				this.retryAttempt > 0 &&
-				(this.state.phase === "failed" || this.state.phase === "offline");
-			if (!quietRetry) {
-				this.emit({
-					phase:
-						requested === "wake"
-							? "waking"
-							: this.state.generation === 0
-								? "connecting"
-								: "reconnecting",
-					error: null,
-				});
-			}
+			this.emit({
+				phase:
+					requested === "wake"
+						? "waking"
+						: this.state.generation === 0
+							? "connecting"
+							: "reconnecting",
+				error: null,
+			});
 			const outcome = await Effect.runPromise(
 				this.resolver.resolve(this.environmentId, requested).pipe(
 					Effect.match({
@@ -311,17 +297,6 @@ export class EnvironmentRuntime<Client> {
 			this.desired === "cache-only" ||
 			this.desired === "sync" ||
 			this.retryCancel !== null
-		) {
-			return;
-		}
-		// A failure that survives the whole backoff ladder is not transient —
-		// keep the terminal failed state instead of retrying (and re-waking the
-		// environment) forever. A user retry, a stronger activation, or the
-		// platform online edge starts a fresh episode. Offline stays unbounded:
-		// it emits no oscillating phases and clears on the online edge anyway.
-		if (
-			this.state.phase === "failed" &&
-			this.retryAttempt >= EnvironmentRuntime.RETRY_DELAYS_MS.length
 		) {
 			return;
 		}

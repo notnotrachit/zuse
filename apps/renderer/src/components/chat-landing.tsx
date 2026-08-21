@@ -5,7 +5,6 @@ import {
 	type AttachmentRef,
 	type ChatId,
 	type ChatWorkspacePolicy,
-	type CloudAccountImage,
 	type CloudProject,
 	type CloudProviderOption,
 	CommandId,
@@ -35,6 +34,7 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import {
@@ -111,10 +111,7 @@ import {
 	type CreateFromSelection,
 } from "./composer/create-from-menu.tsx";
 import { ProviderIcon } from "./provider-icons";
-import {
-	CloudWorkspaceSetupView,
-	SetupCardView,
-} from "./worktree-setup-card.tsx";
+import { SetupCardView } from "./worktree-setup-card.tsx";
 
 const ChatComposer = lazy(() =>
 	import("./chat-composer.tsx").then((module) => ({
@@ -393,12 +390,11 @@ export function ChatLanding() {
 		ReadonlyArray<CloudProviderOption>
 	>([]);
 	const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
-	const [cloudAccountImage, setCloudAccountImage] =
-		useState<CloudAccountImage | null>(null);
 	const [cloudSubscribed, setCloudSubscribed] = useState(false);
 	const [cloudPlacementError, setCloudPlacementError] = useState(false);
 	const setView = useUiStore((state) => state.setView);
 	const setSettingsSection = useUiStore((state) => state.setSettingsSection);
+	const cloudCacheRefreshRequests = useRef(new Set<string>());
 	const [projectSetupOpen, setProjectSetupOpen] = useState(false);
 	const anchoredGroup = useMemo(
 		() =>
@@ -416,22 +412,21 @@ export function ChatLanding() {
 	useEffect(() => {
 		let cancelled = false;
 		let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+		cloudCacheRefreshRequests.current.clear();
 		setSelectedCloudProviderId(null);
 		setCloudProviders([]);
 		setCloudProject(null);
-		setCloudAccountImage(null);
 		setCloudSubscribed(false);
 		setCloudPlacementError(false);
 		if (!CLOUD_WORKSPACE_BETA_AVAILABLE || cloudRepositoryIdentity === null)
 			return;
 		const loadCloudPlacement = async (): Promise<void> => {
 			try {
-				const [providerResult, projectResult, entitlementResult, imageResult] =
+				const [providerResult, projectResult, entitlementResult] =
 					await Promise.all([
 						runControlPlane((client) => client["cloud.providers"]()),
 						runControlPlane((client) => client["cloud.projects.list"]()),
 						runControlPlane((client) => client["machines.entitlements"]()),
-						runControlPlane((client) => client["cloud.image.status"]()),
 					]);
 				if (cancelled) return;
 				const project =
@@ -451,11 +446,47 @@ export function ChatLanding() {
 				);
 				setCloudProviders(providerResult.providers);
 				setCloudProject(project);
-				setCloudAccountImage(imageResult);
 				setCloudSubscribed(subscribed);
 				setCloudPlacementError(false);
 
-				const buildIsChanging = imageResult.state === "building";
+				const staleProviders =
+					project === null || !subscribed
+						? []
+						: providerResult.providers.filter((provider) => {
+								const latest = project.latestBuilds[provider.providerId];
+								return (
+									project.activeBuilds[provider.providerId] === undefined &&
+									(latest?.state === "ready" || latest?.state === "failed")
+								);
+							});
+				for (const provider of staleProviders) {
+					const latest = project?.latestBuilds[provider.providerId];
+					if (project === null || latest === undefined) continue;
+					const requestKey = `${project.projectId}:${provider.providerId}`;
+					if (cloudCacheRefreshRequests.current.has(requestKey)) continue;
+					cloudCacheRefreshRequests.current.add(requestKey);
+					try {
+						await runControlPlane((client) =>
+							client["cloud.projects.prepare"]({
+								projectId: project.projectId,
+								providerId: provider.providerId,
+								idempotencyKey: `automatic-refresh:${requestKey}:${latest.buildId}`,
+							}),
+						);
+					} catch (cause) {
+						cloudCacheRefreshRequests.current.delete(requestKey);
+						throw cause;
+					}
+				}
+				const buildIsChanging =
+					staleProviders.length > 0 ||
+					(project !== null &&
+						Object.values(project.latestBuilds).some(
+							(build) =>
+								build.state === "queued" ||
+								build.state === "building" ||
+								build.state === "sanitizing",
+						));
 				if (buildIsChanging && !cancelled)
 					refreshTimer = setTimeout(() => {
 						void loadCloudPlacement();
@@ -473,42 +504,26 @@ export function ChatLanding() {
 	const cloudPickerItems = useMemo<ReadonlyArray<CloudComputerPickerItem>>(
 		() =>
 			cloudProviders.map((provider) => {
-				const included =
-					cloudProject !== null &&
-					cloudAccountImage?.repositories.some(
-						(repository) => repository.projectId === cloudProject.projectId,
-					) === true;
+				const build = cloudProject?.latestBuilds[provider.providerId];
 				const ready =
-					included &&
-					(cloudAccountImage?.state === "ready" ||
-						cloudAccountImage?.state === "outdated");
+					cloudProject?.activeBuilds[provider.providerId] !== undefined;
 				const statusText = cloudPlacementError
 					? "Unavailable"
 					: !cloudSubscribed
 						? "Subscription required"
 						: cloudProject === null
 							? "Connect repository"
-							: ready
+							: ready || build !== undefined
 								? provider.displayName
-								: cloudAccountImage?.state === "building"
-									? "Building cloud image"
-									: cloudAccountImage?.state === "auth-broken"
-										? "Rebuild authentication"
-										: "Update cloud image";
+								: "Getting ready";
 				return {
 					providerId: provider.providerId,
 					providerLabel: provider.displayName,
-					disabled: cloudPlacementError || !cloudSubscribed || !ready,
+					disabled: cloudPlacementError || !cloudSubscribed,
 					statusText,
 				};
 			}),
-		[
-			cloudAccountImage,
-			cloudPlacementError,
-			cloudProject,
-			cloudProviders,
-			cloudSubscribed,
-		],
+		[cloudPlacementError, cloudProject, cloudProviders, cloudSubscribed],
 	);
 	const resolvedTarget: NewChatTarget | null =
 		selectedCloudProviderId !== null
@@ -790,6 +805,7 @@ export function ChatLanding() {
 						baseRef: `origin/${cloudProject.defaultBranch}`,
 						agent: draft.providerId,
 						model: draft.model,
+						credentialKinds: [draft.providerId as "claude" | "codex"],
 						firstMessage: input.text,
 						idempotencyKey: crypto.randomUUID(),
 					}),
@@ -1212,7 +1228,15 @@ export function ChatLanding() {
 			<div className="flex min-h-0 flex-1 flex-col">
 				<div className="min-h-0 flex-1 overflow-y-auto">
 					{progress.kind === "cloud" ? (
-						<CloudWorkspaceSetupView phase="allocating" />
+						<div className="mx-auto mt-8 flex w-full max-w-2xl items-center gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+							<Spinner className="size-4" />
+							<div className="min-w-0">
+								<p className="text-sm font-medium">Starting Cloud Sandbox</p>
+								<p className="text-xs text-muted-foreground">
+									{progress.status}
+								</p>
+							</div>
+						</div>
 					) : null}
 					{progress.kind === "worktree" ? (
 						<SetupCardView
@@ -1232,10 +1256,7 @@ export function ChatLanding() {
 					) : null}
 				</div>
 				<div className="px-4 pb-4">
-					<QueuedComposerPreview
-						prompt={pendingPrompt}
-						waitingForSandbox={progress.kind === "cloud"}
-					/>
+					<QueuedComposerPill prompt={pendingPrompt} count={1} />
 				</div>
 			</div>
 		);
@@ -1660,19 +1681,28 @@ function providerThreadLabel(providerId: ProviderId): string {
 	return PROVIDER_LABEL[providerId] ?? providerId;
 }
 
-function QueuedComposerPreview({
+/**
+ * Compact "queued first message" indicator shown in the landing bridge while
+ * the worktree/chat is being created. Mirrors the queue chips the real
+ * composer's `QueueTray` shows once the session exists, so the message reads
+ * as held-not-sent throughout.
+ */
+function QueuedComposerPill({
 	prompt,
-	waitingForSandbox,
+	count,
 }: {
-	readonly prompt: string;
-	readonly waitingForSandbox: boolean;
+	prompt: string;
+	count: number;
 }) {
 	return (
-		<div className="mx-auto w-full max-w-3xl overflow-hidden rounded-md border border-border/50 bg-muted/20 text-[11px]">
-			<div className="border-b border-border/40 px-3 py-1.5 font-medium text-muted-foreground">
-				{waitingForSandbox ? "Waiting for sandbox" : "Queued"}
+		<div className="mx-auto w-full max-w-3xl">
+			<div className="flex items-center gap-2 rounded-xl border border-border/50 bg-muted/15 px-3.5 py-2.5 text-[13px]">
+				<Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+				<span className="flex-1 truncate text-foreground/80">{prompt}</span>
+				<span className="shrink-0 text-[11px] text-muted-foreground">
+					{count} queued
+				</span>
 			</div>
-			<div className="px-3 py-2 text-foreground/80">{prompt}</div>
 		</div>
 	);
 }

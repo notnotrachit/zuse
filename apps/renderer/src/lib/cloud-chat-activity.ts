@@ -18,10 +18,6 @@ export type CloudChatActivityInput = {
 	readonly runtime: SessionRuntimeState;
 };
 
-/** Whether the durable cloud lifecycle still owns the initial chat setup UI. */
-export const cloudWorkspaceIsStarting = (summary: CloudChatSummary): boolean =>
-	summary.startupPhase !== "running" && summary.startupPhase !== "failed";
-
 /** True only after a live runtime owns the turn. Resume, attachment, and
  * durable queueing have their own connection notice and must not render the
  * transcript working row or Stop controls from stale cached session state. */

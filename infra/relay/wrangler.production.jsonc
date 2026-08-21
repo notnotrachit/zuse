@@ -10,12 +10,7 @@
 	"rules": [
 		{
 			"type": "Text",
-			"globs": [
-				"**/*.yaml.tmpl",
-				"**/runtime-updater.mjs",
-				"**/project-builder.sh",
-				"**/workspace-bootstrap.sh"
-			],
+			"globs": ["**/*.yaml.tmpl", "**/runtime-updater.mjs"],
 			"fallthrough": true
 		}
 	],

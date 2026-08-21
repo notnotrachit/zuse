@@ -5,7 +5,6 @@ import {
 	QueuedMessageNotFoundError,
 	QueueState,
 	SessionId,
-	SessionNotFoundError,
 	SessionTimelineProjection,
 } from "@zuse/contracts";
 import { Effect, Queue, Stream } from "effect";
@@ -16,8 +15,6 @@ import {
 	isRecoveredPreAckSessionError,
 	optimisticQueuedMessageReady,
 	pendingSessionCommandError,
-	persistQueuedMessage,
-	queueSessionMessage,
 	updateQueuedMessage,
 } from "../../src/lib/session-actions.ts";
 import {
@@ -157,65 +154,6 @@ describe("session actions", () => {
 			getRendererClientBus().snapshot(retained.key).failedCommands,
 		).toEqual([]);
 		expect(pendingSessionCommandError(ref)).toBeNull();
-		retained.lease.release();
-	});
-
-	it("removes an optimistic queue row after an authoritative add rejection", async () => {
-		const frames = Effect.runSync(Queue.unbounded());
-		let streamStarts = 0;
-		const input = ComposerInput.make({
-			text: "deliver after resume",
-			attachments: [],
-			fileRefs: [],
-			skillRefs: [],
-		});
-		const queueId = "queue-missing-runtime-session";
-		setSessionTimelineRpcClientForTest(
-			async () =>
-				({
-					"session.events": () => {
-						streamStarts += 1;
-						return Stream.fromQueue(frames);
-					},
-					"messages.queue.add": () =>
-						Effect.fail(new SessionNotFoundError({ sessionId })),
-				}) as never,
-		);
-
-		const retained = retainSessionTimeline(ref, "connect");
-		await waitUntil(() => streamStarts === 1);
-		Queue.offerUnsafe(frames, {
-			kind: "snapshot",
-			sessionId,
-			throughVersion: 0,
-			cursor: { epoch: "queue-epoch", version: 0 },
-			projection: SessionTimelineProjection.make({
-				messages: [],
-				status: "idle",
-				currentTurn: null,
-				queue: QueueState.make({ items: [], paused: false }),
-				permissionMode: "default",
-				runtimeMode: "approval-required",
-			}),
-		});
-		await waitUntil(
-			() =>
-				getRendererClientBus().snapshot(retained.key).data?.queue.items
-					.length === 0,
-		);
-		queueSessionMessage(ref, input, { persist: false, ready: false, queueId });
-		expect(
-			getRendererClientBus().snapshot(retained.key).data?.queue.items,
-		).toHaveLength(1);
-
-		await persistQueuedMessage(ref, queueId, input);
-
-		expect(
-			getRendererClientBus().snapshot(retained.key).data?.queue.items,
-		).toEqual([]);
-		expect(pendingSessionCommandError(ref)?.message).toContain(
-			"SessionNotFoundError",
-		);
 		retained.lease.release();
 	});
 });

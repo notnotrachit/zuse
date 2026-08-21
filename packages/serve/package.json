@@ -29,7 +29,7 @@
 		"src/status-types.ts"
 	],
 	"scripts": {
-		"build": "tsdown --config tsdown.config.ts",
+		"build": "vp pack src/bin.ts src/cli.ts src/status.ts",
 		"check-types": "tsc --noEmit",
 		"test": "vitest run test"
 	},

@@ -421,22 +421,16 @@ export const ProjectScaffoldLive = Layer.effect(
 			limit,
 		) =>
 			Effect.gen(function* () {
-				const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+				const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
 				const result = yield* runCommand(
 					"gh",
 					[
-						"api",
-						"--method",
-						"GET",
-						"--paginate",
-						"--slurp",
-						"user/repos",
-						"-f",
-						"affiliation=owner,collaborator,organization_member",
-						"-f",
-						`per_page=${Math.min(100, safeLimit)}`,
-						"-f",
-						"sort=updated",
+						"repo",
+						"list",
+						"--json",
+						"nameWithOwner,description,sshUrl,url,isPrivate,defaultBranchRef,updatedAt",
+						"--limit",
+						String(safeLimit),
 					],
 					null,
 				).pipe(Effect.option);
@@ -453,43 +447,36 @@ export const ProjectScaffoldLive = Layer.effect(
 				if (parsed._tag === "None" || !Array.isArray(parsed.value)) {
 					return [] as ReadonlyArray<GithubRepoSummary>;
 				}
-				const rows = parsed.value.flatMap((page) =>
-					Array.isArray(page) ? page : [],
-				);
 				const out: GithubRepoSummary[] = [];
-				for (const row of rows) {
-					if (out.length >= safeLimit) break;
+				for (const row of parsed.value) {
 					if (row === null || typeof row !== "object") continue;
 					const r = row as Record<string, unknown>;
 					if (
-						typeof r.full_name !== "string" ||
-						typeof r.ssh_url !== "string" ||
-						typeof r.html_url !== "string" ||
-						typeof r.private !== "boolean" ||
-						typeof r.default_branch !== "string" ||
-						typeof r.updated_at !== "string"
+						typeof r.nameWithOwner !== "string" ||
+						typeof r.sshUrl !== "string" ||
+						typeof r.url !== "string" ||
+						typeof r.isPrivate !== "boolean" ||
+						r.defaultBranchRef === null ||
+						typeof r.defaultBranchRef !== "object" ||
+						typeof r.updatedAt !== "string"
 					) {
 						continue;
 					}
-					const owner =
-						r.owner !== null && typeof r.owner === "object"
-							? (r.owner as Record<string, unknown>)
-							: undefined;
+					const defaultBranch = (r.defaultBranchRef as Record<string, unknown>)
+						.name;
+					if (typeof defaultBranch !== "string") continue;
 					out.push(
 						GithubRepoSummary.make({
-							nameWithOwner: r.full_name,
+							nameWithOwner: r.nameWithOwner,
 							description:
 								typeof r.description === "string" && r.description.length > 0
 									? r.description
 									: null,
-							sshUrl: r.ssh_url,
-							httpsUrl: r.html_url,
-							isPrivate: r.private,
-							defaultBranch: r.default_branch,
-							updatedAt: new Date(r.updated_at),
-							...(typeof owner?.avatar_url === "string"
-								? { ownerAvatarUrl: owner.avatar_url }
-								: {}),
+							sshUrl: r.sshUrl,
+							httpsUrl: r.url,
+							isPrivate: r.isPrivate,
+							defaultBranch,
+							updatedAt: new Date(r.updatedAt),
 						}),
 					);
 				}

@@ -344,11 +344,9 @@ export const persistQueuedMessage = async (
 		markRendererInteraction(ref.sessionId, "queue-persisted");
 		setSessionError(ref, null);
 	} catch (cause) {
-		if (retryableFailure(ref, commandId)) return;
-		// The optimistic item never became durable. Leaving it disabled implies it
-		// will eventually run even after an authoritative domain rejection.
-		updateQueue(ref, (items) => items.filter((item) => item.id !== queueId));
-		setSessionError(ref, classifyError(cause, options?.providerId));
+		if (!retryableFailure(ref, commandId)) {
+			setSessionError(ref, classifyError(cause, options?.providerId));
+		}
 	}
 };
 

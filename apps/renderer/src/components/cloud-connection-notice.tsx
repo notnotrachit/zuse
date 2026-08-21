@@ -45,7 +45,7 @@ const copy: Record<
 };
 
 export function CloudConnectionNotice() {
-	const { signIn, signingIn, isSignedIn, isLoading } = useAuth();
+	const { signIn, signingIn } = useAuth();
 	const selectedChatId = useChatsStore((state) => state.selectedChatId);
 	const registered =
 		selectedChatId === null ? null : cloudSummaryForChat(selectedChatId);
@@ -72,10 +72,8 @@ export function CloudConnectionNotice() {
 		runtime,
 	});
 	const presentation = cloudConnectionPresentation(summary, activity);
-	// A signed-out session can never reconnect a cloud workspace, so it shows
-	// one steady sign-in banner immediately — never the reconnect states.
-	const blockedAuth =
-		(!isLoading && !isSignedIn) || shell.connection === "blocked-auth";
+	if (presentation === "hidden") return null;
+	const blockedAuth = shell.connection === "blocked-auth";
 	const connectionError = getRendererClientBus().connection(
 		EnvironmentId.make(summary.workspaceId),
 	).error;
@@ -83,13 +81,6 @@ export function CloudConnectionNotice() {
 		connectionError?.includes("beta-access-required") === true;
 	const betaCheckUnavailable =
 		connectionError?.includes("beta-access-unavailable") === true;
-	if (
-		presentation === "hidden" &&
-		!blockedAuth &&
-		!inviteRequired &&
-		!betaCheckUnavailable
-	)
-		return null;
 	const retry = () =>
 		retryRendererEnvironmentConnection(EnvironmentId.make(summary.workspaceId));
 	const value = inviteRequired
@@ -105,18 +96,10 @@ export function CloudConnectionNotice() {
 			: blockedAuth
 				? {
 						title: "Sign in required",
-						detail:
-							"Your session expired — sign in to reconnect this cloud workspace.",
+						detail: "Sign in to reconnect this cloud workspace.",
 					}
-				: presentation === "hidden"
-					? null
-					: copy[presentation];
-	if (value === null) return null;
-	const busy =
-		!blockedAuth &&
-		!inviteRequired &&
-		!betaCheckUnavailable &&
-		(presentation === "resuming" || presentation === "updating");
+				: copy[presentation];
+	const busy = presentation === "resuming" || presentation === "updating";
 	return (
 		<div
 			role="status"
@@ -139,15 +122,13 @@ export function CloudConnectionNotice() {
 				)}
 				<p className="truncate text-muted-foreground">{value.detail}</p>
 			</div>
-			{blockedAuth ||
-			betaCheckUnavailable ||
-			(presentation === "failed" && !inviteRequired) ? (
+			{presentation === "failed" && !inviteRequired ? (
 				<button
 					type="button"
 					disabled={signingIn}
 					className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 					onClick={() => {
-						if (blockedAuth) void signIn();
+						if (blockedAuth) void signIn().then(retry);
 						else retry();
 					}}
 				>

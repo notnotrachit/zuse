@@ -5,16 +5,13 @@ import {
 import { Effect, Layer, Redacted, Ref } from "effect";
 import { describe, expect, test } from "vitest";
 import { CloudBillingStoreMemory } from "../../src/cloud-billing-store-memory.ts";
-import { cloudRepositoryWorkspacePath } from "../../src/cloud-workspace-paths.ts";
+import { CloudCredentialVault } from "../../src/cloud-credential-vault.ts";
 import {
 	ARCHIVED_WORKSPACE_RETENTION_MS,
-	cloudWorkspaceStartupNeedsObservation,
-	RUNTIME_CONNECTION_TIMEOUT_MS,
 	reconcileCloudWorkspace,
 	reusableAccountBuildSnapshot,
 	sanitizeProjectBuildDiagnostic,
-	sanitizeProjectBuildLog,
-	snapshotSanitizationFailures,
+	WORKSPACE_RUNTIME_PROCESS_SELECTOR,
 	WORKSPACE_RUNTIME_RESUME_SCRIPT,
 } from "../../src/cloud-workspace-reconciler.ts";
 import {
@@ -43,6 +40,11 @@ const testLayer = Layer.mergeAll(
 		memoryMib: 1_024,
 		createTimeoutSeconds: 3_600,
 		keepAliveTimeoutSeconds: 600,
+	}),
+	Layer.succeed(CloudCredentialVault, {
+		enabled: false,
+		encrypt: () => Effect.die("unused"),
+		decrypt: () => Effect.die("unused"),
 	}),
 );
 
@@ -108,6 +110,7 @@ const seedWorkspace = Effect.fn("seedArchiveWorkspace")(function* (
 		state: input.state,
 		desiredState: input.desiredState,
 		statusCode: input.statusCode,
+		credentialEpoch: 0,
 		archiveRequestedAtMs: input.archiveRequestedAtMs,
 		archiveDeleteAtMs: input.archiveDeleteAtMs,
 		idempotencyKey: `workspace-key-${workspaceId}`,
@@ -140,114 +143,19 @@ const seedWorkspace = Effect.fn("seedArchiveWorkspace")(function* (
 });
 
 describe("cloud workspace reconciler", () => {
-	test("maps GitHub repositories to stable folders outside the runtime home", () => {
-		expect(cloudRepositoryWorkspacePath("github.com/swarajbachu/zuse")).toBe(
-			"/home/repos/swarajbachu/zuse",
-		);
-		expect(() =>
-			cloudRepositoryWorkspacePath("github.com/owner/../escape"),
-		).toThrow("Unsupported repository identity");
-	});
-	test("starts the baked runtime directly when resuming", () => {
+	test("updates the signed runtime before a resumed launch", () => {
 		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).toContain(
-			"/opt/zuse/current/bin.mjs",
+			"ZUSE_RUNTIME_INSTALL_ONLY=1",
 		);
-		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).toContain("serve --foreground");
-		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).not.toContain("nohup");
-		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).not.toContain("</dev/null &");
-		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).not.toContain(
-			"runtime-updater.mjs",
+		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).toContain(
+			"/usr/local/lib/zuse/runtime-updater.mjs",
 		);
 	});
 
-	test("actively observes startup and the bounded warm-resume window", () => {
-		expect(RUNTIME_CONNECTION_TIMEOUT_MS).toBe(10_000);
-		expect(
-			cloudWorkspaceStartupNeedsObservation({
-				state: "resuming",
-				runtimeState: "connecting",
-			}),
-		).toBe(true);
-		expect(
-			cloudWorkspaceStartupNeedsObservation({
-				state: "provisioning",
-				runtimeState: "offline",
-			}),
-		).toBe(true);
-		expect(
-			cloudWorkspaceStartupNeedsObservation({
-				state: "setup",
-				runtimeState: "connecting",
-			}),
-		).toBe(false);
-		expect(
-			cloudWorkspaceStartupNeedsObservation({
-				state: "failed",
-				runtimeState: "offline",
-			}),
-		).toBe(false);
-	});
-
-	test("replaces an incomplete retry with a claimed warm sandbox", async () => {
-		const result = await Effect.runPromise(
-			Effect.gen(function* () {
-				const store = yield* CloudWorkspaceStore;
-				const control = yield* FakeSandboxProviderControlService;
-				const workspace = yield* seedWorkspace({
-					workspaceId: "workspace-incomplete-retry",
-					state: "queued",
-					desiredState: "ready",
-					statusCode: "resume-queued",
-					requestConfig: { startupTimings: { requestedAt: Date.now() } },
-				});
-				const warmSandboxId = "warm-incomplete-retry";
-				yield* Ref.update(control.sandboxes, (sandboxes) =>
-					new Map(sandboxes).set(warmSandboxId, {
-						providerSandboxId: warmSandboxId,
-						providerLabel: "warm-incomplete-retry",
-						state: "paused",
-					}),
-				);
-				yield* store.savePool({
-					poolId: "pool-incomplete-retry",
-					accountId: workspace.accountId,
-					provider: workspace.provider,
-					imageGeneration: workspace.buildId,
-					providerSandboxId: warmSandboxId,
-					state: "available",
-					createdAtMs: Date.now(),
-					updatedAtMs: Date.now(),
-				});
-
-				yield* reconcileCloudWorkspace(workspace.workspaceId);
-				return {
-					workspace: yield* store.getWorkspace(workspace.workspaceId),
-					pool: yield* store.listPool(workspace.accountId, workspace.provider),
-					sandboxes: yield* Ref.get(control.sandboxes),
-					network: yield* Ref.get(control.networkBySandbox),
-				};
-			}).pipe(Effect.provide(testLayer)),
-		);
-
-		expect(result.workspace).toMatchObject({
-			state: "provisioning",
-			providerSandboxId: "warm-incomplete-retry",
-			statusCode: "runtime-starting",
-		});
-		expect(result.workspace?.requestConfig.poolClaimedAt).toEqual(
-			expect.any(Number),
-		);
-		expect(result.pool).toContainEqual(
-			expect.objectContaining({
-				state: "claimed",
-				claimedWorkspaceId: "workspace-incomplete-retry",
-			}),
-		);
-		expect(result.sandboxes.has("source-workspace-incomplete-retry")).toBe(
-			false,
-		);
-		expect(result.network.get("warm-incomplete-retry")).toEqual({
-			kind: "open",
+	test("cleans matching runtime children on every replacement", () => {
+		expect(WORKSPACE_RUNTIME_PROCESS_SELECTOR).toMatchObject({
+			tag: "zuse-runtime",
+			legacyCleanup: "matching-command",
 		});
 	});
 
@@ -261,35 +169,6 @@ describe("cloud workspace reconciler", () => {
 		expect(diagnostic).not.toContain("ghp_");
 		expect(diagnostic).not.toContain("github.com/acme/private");
 		expect(diagnostic.length).toBeLessThanOrEqual(2_048);
-	});
-
-	test("retains full sanitized build output without retaining secrets", () => {
-		const log = sanitizeProjectBuildLog(
-			`starting\nAPI_KEY=super-secret-value\nclone https://user:password@github.com/acme/private.git\n${"a".repeat(10_000)}`,
-		);
-
-		expect(log).toContain("starting");
-		expect(log).not.toContain("super-secret-value");
-		expect(log).not.toContain("password");
-		expect(log.length).toBeLessThanOrEqual(256 * 1_024);
-	});
-
-	test("reports the exact safe snapshot validation failures", () => {
-		expect(
-			snapshotSanitizationFailures({
-				forbiddenPaths: ["/home/zuse/.netrc"],
-				forbiddenResults: [true],
-				sourceCommit: "not-a-digest",
-				templateVersion: "old-runtime",
-				expectedTemplateVersion: "current-runtime",
-				configurationDigest: "same-config",
-				expectedConfigurationDigest: "same-config",
-			}),
-		).toEqual([
-			"/home/zuse/.netrc",
-			"invalid source manifest digest",
-			"runtime version mismatch",
-		]);
 	});
 
 	test("reuses account snapshots only from the current template", () => {
@@ -323,12 +202,10 @@ describe("cloud workspace reconciler", () => {
 				return {
 					workspace: yield* store.getWorkspace(workspace.workspaceId),
 					sandboxes: yield* Ref.get(control.sandboxes),
-					deleteAt,
 				};
 			}).pipe(Effect.provide(testLayer)),
 		);
 
-		expect(result.workspace?.nextActionAtMs).toBe(result.deleteAt);
 		expect(result.workspace).toMatchObject({
 			state: "archived",
 			desiredState: "archived",
@@ -336,6 +213,7 @@ describe("cloud workspace reconciler", () => {
 			nextActionAtMs: expect.any(Number),
 			providerSandboxId: "source-archive-paused",
 		});
+		expect(result.workspace?.nextActionAtMs).toBeGreaterThan(Date.now());
 		expect(result.sandboxes.has("source-archive-paused")).toBe(true);
 	});
 
@@ -428,6 +306,7 @@ describe("cloud workspace reconciler", () => {
 					state: "ready" as const,
 					desiredState: "paused" as const,
 					statusCode: "agent-running",
+					credentialEpoch: 0,
 					idempotencyKey: "workspace-resume-key",
 					requestConfig: {},
 					nextActionAtMs: nowMs,
@@ -501,7 +380,6 @@ describe("cloud workspace reconciler", () => {
 					resumeBeforeMissing,
 					resumeInputs: yield* Ref.get(control.resumeInputs),
 					startProcessCalls: yield* Ref.get(control.startProcessCalls),
-					networkBySandbox: yield* Ref.get(control.networkBySandbox),
 				};
 			}).pipe(Effect.provide(testLayer)),
 		);
@@ -519,18 +397,15 @@ describe("cloud workspace reconciler", () => {
 			statusCode: "resume-runtime-waking",
 			runtimeState: "connecting",
 		});
-		// The boot token travels directly to the runtime process. Resume must not
-		// serialize a remote file write and chmod before starting it.
-		expect(result.startProcessCalls).toHaveLength(1);
+		// One chmod for the boot token and one runtime launch. Resume must not
+		// serialize extra remote process calls before starting the runtime.
+		expect(result.startProcessCalls).toHaveLength(2);
 		expect(result.workspace).toMatchObject({
 			state: "provisioning",
 			statusCode: "resume-runtime-restarting",
 			runtimeState: "offline",
 		});
 		expect(result.workspace?.runtimeBootTokenHash).toBeTruthy();
-		expect(result.networkBySandbox.get("sandbox-resume")).toEqual({
-			kind: "open",
-		});
 		expect(result.missing).toMatchObject({
 			state: "queued",
 			providerSandboxId: undefined,
@@ -562,9 +437,9 @@ describe("cloud workspace reconciler", () => {
 		);
 
 		// The sandbox is already running, so restart must not call provider
-		// resume — it relaunches the runtime with a fresh in-memory boot token.
+		// resume — only stage a boot token and relaunch the runtime process.
 		expect(result.resumeInputs).toHaveLength(0);
-		expect(result.startProcessCalls).toHaveLength(1);
+		expect(result.startProcessCalls).toHaveLength(2);
 		expect(result.workspace).toMatchObject({
 			state: "provisioning",
 			statusCode: "resume-runtime-restarting",

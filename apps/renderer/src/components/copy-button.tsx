@@ -3,7 +3,6 @@ import { Copy01Icon, Tick02Icon } from "@zuse/icons/solid-rounded";
 import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import { copyText } from "../lib/platform-capabilities.ts";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip.tsx";
 
 export function CopyButton({
@@ -24,10 +23,7 @@ export function CopyButton({
 	}, [copied]);
 
 	const onCopy = () => {
-		void copyText(text).then(
-			() => setCopied(true),
-			() => setCopied(false),
-		);
+		void navigator.clipboard?.writeText(text).then(() => setCopied(true));
 	};
 
 	const icon = copied ? Tick02Icon : Copy01Icon;

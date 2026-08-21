@@ -64,7 +64,7 @@ import { ModelPicker } from "./model-picker.tsx";
 import { ProviderCard } from "./provider-card.tsx";
 import { ProviderIcon } from "./provider-icons.tsx";
 import { MODE_META, MODES_ORDER } from "./runtime-mode-meta.ts";
-import { CloudWorkspacePool } from "./settings/cloud-workspace-pool.tsx";
+import { CloudMachinesPane } from "./settings/cloud-machines-pane.tsx";
 import { DeveloperPane } from "./settings/developer-pane.tsx";
 import { DevicesPane } from "./settings/devices-pane.tsx";
 import { DiagnosticsPane as FullDiagnosticsPane } from "./settings/diagnostics-pane.tsx";
@@ -490,13 +490,7 @@ function Pane({ section }: { section: SettingsSection }) {
 	if (section.kind === "integrations") return <LinearIntegrationsPane />;
 	if (section.kind === "mcp") return <McpServersPane />;
 	if (section.kind === "devices") return <DevicesPane />;
-	if (section.kind === "machines") {
-		return (
-			<section className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3 text-xs">
-				<CloudWorkspacePool />
-			</section>
-		);
-	}
+	if (section.kind === "machines") return <CloudMachinesPane />;
 	if (section.kind === "browser") return <BrowserSettingsPagePane />;
 	if (section.kind === "pokedex") return <PokedexPane />;
 	if (section.kind === "diagnostics") return <FullDiagnosticsPane />;

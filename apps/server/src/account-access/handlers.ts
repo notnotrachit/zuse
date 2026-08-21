@@ -30,19 +30,34 @@ const Status = MemoizeRpcs.toLayerHandler("accountAccess.status", () =>
 	withService((service) => service.status()),
 );
 
+const DetectLocal = MemoizeRpcs.toLayerHandler(
+	"accountAccess.detectLocal",
+	() => withService((service) => service.detectLocal()),
+);
+
 const StartLogin = MemoizeRpcs.toLayerHandler(
 	"accountAccess.startLogin",
 	({ providerId }) => withStream((service) => service.startLogin(providerId)),
 );
 
-const SetCredential = MemoizeRpcs.toLayerHandler(
-	"accountAccess.setCredential",
-	(input) => withService((service) => service.setCredential(input)),
+const PrepareImport = MemoizeRpcs.toLayerHandler(
+	"accountAccess.prepareImport",
+	(input) => withService((service) => service.prepareImport(input)),
 );
 
-const ConfigureCustom = MemoizeRpcs.toLayerHandler(
-	"accountAccess.configureCustom",
-	(input) => withService((service) => service.configureCustom(input)),
+const CreateClaudeTransfer = MemoizeRpcs.toLayerHandler(
+	"accountAccess.createClaudeTransfer",
+	(input) => withStream((service) => service.createClaudeTransfer(input)),
+);
+
+const ContinueClaudeTransfer = MemoizeRpcs.toLayerHandler(
+	"accountAccess.continueClaudeTransfer",
+	(input) => withService((service) => service.continueClaudeTransfer(input)),
+);
+
+const ImportCredential = MemoizeRpcs.toLayerHandler(
+	"accountAccess.import",
+	(input) => withService((service) => service.importCredential(input)),
 );
 
 const Disconnect = MemoizeRpcs.toLayerHandler(
@@ -52,8 +67,11 @@ const Disconnect = MemoizeRpcs.toLayerHandler(
 
 export const AccountAccessHandlersLayer = Layer.mergeAll(
 	Status,
+	DetectLocal,
 	StartLogin,
-	SetCredential,
-	ConfigureCustom,
+	PrepareImport,
+	CreateClaudeTransfer,
+	ContinueClaudeTransfer,
+	ImportCredential,
 	Disconnect,
 );

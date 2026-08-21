@@ -1,17 +1,4 @@
 export const WORKSPACE_GATEWAY_PROTOCOL = "zuse-workspace-v2" as const;
-export const LEGACY_WORKSPACE_GATEWAY_PROTOCOL = "zuse-workspace-v1" as const;
-
-export type WorkspaceGatewayProtocol =
-	| typeof WORKSPACE_GATEWAY_PROTOCOL
-	| typeof LEGACY_WORKSPACE_GATEWAY_PROTOCOL;
-
-export const workspaceGatewayProtocol = (
-	value: string | undefined,
-): WorkspaceGatewayProtocol | undefined =>
-	value === WORKSPACE_GATEWAY_PROTOCOL ||
-	value === LEGACY_WORKSPACE_GATEWAY_PROTOCOL
-		? value
-		: undefined;
 
 export {
 	WORKSPACE_GATEWAY_AUTH_EXPIRED_CLOSE,

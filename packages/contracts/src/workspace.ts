@@ -82,8 +82,7 @@ export class WorkspaceCreateFailedError extends Schema.TaggedErrorClass<Workspac
 
 /**
  * One entry in the Clone-dialog's recents list. Populated by
- * `workspace.listGithubRepos` which queries `gh api user/repos` using the
- * user's GitHub CLI OAuth session.
+ * `workspace.listGithubRepos` which shells out to `gh repo list --json`.
  * `sshUrl` is preferred when the user has SSH keys; `httpsUrl` is the
  * gh-CLI-friendly fallback.
  */
@@ -97,7 +96,6 @@ export class GithubRepoSummary extends Schema.Class<GithubRepoSummary>(
 	isPrivate: Schema.Boolean,
 	defaultBranch: Schema.String,
 	updatedAt: Schema.DateFromString,
-	ownerAvatarUrl: Schema.optional(Schema.String),
 }) {}
 
 /**

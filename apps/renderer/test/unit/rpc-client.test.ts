@@ -13,11 +13,8 @@ const {
 	clearCloudWorkspaceRuntimeRecovery,
 	cloudWorkspaceRequiresRuntimeRecovery,
 	cloudWorkspaceRuntimeRecoveryCommandId,
-	isAuthCodedConnectionError,
 	isIgnorableRendererFailure,
 	isRpcClientTransportError,
-	markCloudWorkspaceConnectionHealthy,
-	refreshCloudWorkspaceConnectionWithRecovery,
 	RENDERER_WEBSOCKET_OPEN_TIMEOUT,
 	resolveRendererRpcTransportForTest,
 	shouldReconnectRendererConnection,
@@ -59,29 +56,6 @@ describe("renderer RPC transport selection", () => {
 		});
 
 		expect(resolveRendererRpcTransportForTest()).toEqual({ kind: "electron" });
-	});
-
-	it("classifies coded auth rejections that carry no message text", async () => {
-		const { CloudWorkspaceOpError, ConnectAuthError } = await import(
-			"@zuse/contracts"
-		);
-		expect(
-			isAuthCodedConnectionError(
-				new CloudWorkspaceOpError({ code: "not-allowed" }),
-			),
-		).toBe(true);
-		expect(
-			isAuthCodedConnectionError(
-				new ConnectAuthError({ reason: "not-allowed" }),
-			),
-		).toBe(true);
-		expect(
-			isAuthCodedConnectionError(
-				new CloudWorkspaceOpError({ code: "conflict" }),
-			),
-		).toBe(false);
-		expect(isAuthCodedConnectionError(new Error("boom"))).toBe(false);
-		expect(isAuthCodedConnectionError(null)).toBe(false);
 	});
 
 	it("restarts only terminal cloud connection failures", () => {
@@ -198,26 +172,6 @@ describe("renderer RPC transport selection", () => {
 		await next.dispose();
 	});
 
-	it("discards a cloud ticket when the WebSocket upgrade is rejected", async () => {
-		const events: string[] = [];
-		const hooks = {
-			prepare: async (environmentId: string) => ({
-				key: `workspace:${environmentId}`,
-				create: async () => {
-					events.push("create-rejected");
-					throw new Error("WebSocket rejected with HTTP 401");
-				},
-			}),
-			invalidateCloudTicket: (workspaceId: string) =>
-				events.push(`invalidate:${workspaceId}`),
-		};
-
-		await expect(
-			acquireRendererRpcSession("workspace-expired", { hooks }),
-		).rejects.toThrow("HTTP 401");
-		expect(events).toEqual(["create-rejected", "invalidate:workspace-expired"]);
-	});
-
 	it("marks a cloud runtime for recovery after the gateway proves it is absent", async () => {
 		let close: (event: {
 			code: number;
@@ -264,60 +218,10 @@ describe("renderer RPC transport selection", () => {
 			"WebSocket closed (4100: workspace runtime unavailable).",
 			"WebSocket closed (4100: workspace runtime unavailable).",
 		]);
-		const events: string[] = [];
-		const ticket = await refreshCloudWorkspaceConnectionWithRecovery(
-			"workspace-recover",
-			async (recoveryId) => {
-				events.push(`recover:${recoveryId}`);
-			},
-			async () => {
-				events.push("connect");
-				return {
-					workspaceId: "workspace-recover",
-					wsUrl: "wss://cloud.example/workspaces/workspace-recover",
-					protocol: "zuse-workspace-v2",
-					role: "client" as const,
-					generation: 2,
-					gatewayEpoch: 2,
-					credential: "new-ticket",
-					expiresAt: Date.now() + 60_000,
-				};
-			},
-		);
-		expect(events).toEqual([`recover:${commandId}`, "connect"]);
-		expect(ticket.generation).toBe(2);
+		clearCloudWorkspaceRuntimeRecovery("workspace-recover");
 		expect(cloudWorkspaceRuntimeRecoveryCommandId("workspace-recover")).toBe(
 			undefined,
 		);
 		await session.dispose();
-	});
-
-	it("recovers the first pre-handshake browser-abnormal gateway close", async () => {
-		let close: (event: {
-			code: number;
-			reason: string;
-			wasClean: boolean;
-		}) => void = () => undefined;
-		const workspaceId = "workspace-abnormal-close";
-		const hooks = {
-			prepare: async () => ({
-				key: `workspace:${workspaceId}`,
-				create: async (onClose: typeof close) => {
-					close = onClose;
-					return { client: {} as never, dispose: async () => undefined };
-				},
-			}),
-			invalidateCloudTicket: () => undefined,
-		};
-		const first = await acquireRendererRpcSession(workspaceId, { hooks });
-		close({ code: 1006, reason: "", wasClean: false });
-		expect(cloudWorkspaceRequiresRuntimeRecovery(workspaceId)).toBe(true);
-		clearCloudWorkspaceRuntimeRecovery(workspaceId);
-		markCloudWorkspaceConnectionHealthy(workspaceId);
-		close({ code: 1006, reason: "", wasClean: false });
-		expect(cloudWorkspaceRequiresRuntimeRecovery(workspaceId)).toBe(false);
-		close({ code: 1006, reason: "", wasClean: false });
-		expect(cloudWorkspaceRequiresRuntimeRecovery(workspaceId)).toBe(true);
-		await first.dispose();
 	});
 });

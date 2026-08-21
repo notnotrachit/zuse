@@ -17,26 +17,6 @@ describe("cloud runtime assets", () => {
 		expect(builder).not.toContain("repository-script.ts setup");
 		expect(builder).not.toContain("ZUSE_SETUP_COMMAND");
 		expect(reconciler).not.toContain("ZUSE_SETUP_COMMAND");
-		expect(builder).toContain("repositories.tsv");
-		expect(builder).toContain("repository-commits.tsv");
-		expect(builder).toContain("/var/lib/zuse/account-image/manifest.json");
-		expect(builder).not.toContain("ZUSE_REPOSITORY_URL");
-	});
-
-	test("uses the image checkout directly without launch-time Git networking", async () => {
-		const bootstrap = await readWorkspaceFile(
-			"infra/cloud-sandboxes/workspace-bootstrap.sh",
-		);
-		expect(bootstrap).toContain(`workspace="\${ZUSE_CLOUD_WORKSPACE_ROOT:?}"`);
-		expect(bootstrap).not.toContain("worktree add --force");
-		expect(bootstrap).not.toContain("git clone --no-hardlinks");
-		expect(bootstrap).not.toContain("git fetch");
-		expect(bootstrap.indexOf("repository_pid=$!")).toBeLessThan(
-			bootstrap.indexOf('wait -n "$runtime_pid" "$credentials_wait_pid"'),
-		);
-		expect(bootstrap.indexOf('wait "$repository_pid"')).toBeGreaterThan(
-			bootstrap.indexOf('wait -n "$runtime_pid" "$credentials_wait_pid"'),
-		);
 	});
 
 	test("boots workspace-native runtime without an inbound provider endpoint", async () => {
@@ -60,27 +40,12 @@ describe("cloud runtime assets", () => {
 			"runtime_command=(node /opt/zuse/current/bin.mjs serve --foreground)",
 		);
 		expect(reconciler).toContain('exec node "$runtime" serve');
-		expect(bootstrap).not.toContain("runtime-updater.mjs");
-		expect(reconciler).toContain("ZUSE_RUNTIME_INSTALL_ONLY=1");
-		expect(reconciler).toContain("ZUSE_RUNTIME_SKIP_TOOLCHAIN=1");
-		expect(reconciler).toContain("WORKSPACE_BOOTSTRAP_SOURCE");
-		expect(reconciler).toContain("command: WORKSPACE_BOOTSTRAP_FILE");
 		expect(reconciler).toContain("replacingFailedSandbox");
 		expect(reconciler).toContain(
 			"yield* provider.kill(workspace.providerSandboxId)",
 		);
 		expect(bootstrap).not.toContain("workspace-ready.ts");
 		expect(runtime).toContain("bootstrap.gatewayUrl");
-		expect(runtime.indexOf("waitForRepository,")).toBeLessThan(
-			runtime.indexOf("const launchIntent = bootstrap.launchIntent"),
-		);
-		expect(
-			runtime.indexOf(
-				'runtimeCredential.credential,\n\t\t\t\t\t\t"repository-ready"',
-			),
-		).toBeLessThan(
-			runtime.indexOf("const launchIntent = bootstrap.launchIntent"),
-		);
 		expect(runtime).toContain("decodeWorkspaceGatewayFrame");
 		expect(runtime).toContain("encodeWorkspaceGatewayFrame");
 		expect(runtime).not.toContain('encoding: "base64"');

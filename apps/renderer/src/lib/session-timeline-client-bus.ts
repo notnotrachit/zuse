@@ -40,11 +40,8 @@ import {
 } from "./client-command-outbox.ts";
 import {
 	acquireRendererRpcSession,
-	isAuthCodedConnectionError,
-	isCloudWorkspaceEnvironment,
 	isRpcClientTransportError,
 	type MemoizeClient,
-	markCloudWorkspaceConnectionHealthy,
 	type RendererRpcSession,
 } from "./rpc-client.ts";
 import { sessionTimelineCache } from "./session-timeline-cache.ts";
@@ -1043,7 +1040,7 @@ const faultFor = (cause: unknown): EnvironmentFault => {
 				? "update-required"
 				: code === "beta-access-required" || lower.includes("revoked")
 					? "revoked"
-					: isAuthCodedConnectionError(cause) ||
+					: code === "not-allowed" ||
 							lower.includes("unauthorized") ||
 							lower.includes("authentication")
 						? "blocked-auth"
@@ -1079,11 +1076,7 @@ const environmentResolver: EnvironmentResolver<MemoizeClient> = {
 					...session,
 					onActivated: (activeGeneration: number) => {
 						generation = activeGeneration;
-						if (pendingFault === null) {
-							if (isCloudWorkspaceEnvironment(environmentId))
-								markCloudWorkspaceConnectionHealthy(environmentId);
-							return;
-						}
+						if (pendingFault === null) return;
 						const fault = pendingFault;
 						pendingFault = null;
 						queueMicrotask(() => {

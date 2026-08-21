@@ -14,7 +14,6 @@ import { MachineHandlersLayer } from "./machine/handlers.ts";
 import { McpHandlersLayer } from "./mcp/handlers.ts";
 import { PingHandlersLayer } from "./ping/handlers.ts";
 import { PokemonHandlersLayer } from "./pokemon/handlers.ts";
-import { PreviewsHandlersLayer } from "./previews/handlers.ts";
 import { ProviderHandlersLayer } from "./provider/handlers.ts";
 import { PtyHandlersLayer } from "./pty/handlers.ts";
 import { RelayHandlersLayer } from "./relay/handlers.ts";
@@ -32,7 +31,6 @@ import { WorktreeHandlersLayer } from "./worktree/handlers.ts";
  */
 export const HandlersLayer = Layer.mergeAll(
 	PingHandlersLayer,
-	PreviewsHandlersLayer,
 	AccountAccessHandlersLayer,
 	AnalyticsHandlersLayer,
 	LanAuthHandlersLayer,

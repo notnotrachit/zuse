@@ -185,19 +185,16 @@ export const runHeadlessServer = (
 		(runtimeBootTokenFile === undefined
 			? undefined
 			: readFileSync(runtimeBootTokenFile, "utf8").trim());
-	const cloudWorkspaceRoot = process.env.ZUSE_CLOUD_WORKSPACE_ROOT;
 	const cloudWorkspaceRuntime =
 		workspaceId !== undefined &&
 		relayUrl !== undefined &&
-		runtimeBootToken !== undefined &&
-		cloudWorkspaceRoot !== undefined
+		runtimeBootToken !== undefined
 			? {
 					workspaceId,
 					relayUrl,
 					bootToken: Redacted.make(runtimeBootToken),
 					bootTokenFile: runtimeBootTokenFile,
 					localPort: port,
-					workspaceRoot: cloudWorkspaceRoot,
 				}
 			: undefined;
 	delete process.env.ZUSE_ENROLLMENT_TOKEN;

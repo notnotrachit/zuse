@@ -6,6 +6,7 @@ import {
 } from "@zuse/contracts";
 import { Effect, Layer, Stream } from "effect";
 
+import { AccountAccessService } from "../account-access/service.ts";
 import {
 	type MachineControlError,
 	MachineControlService,
@@ -66,52 +67,6 @@ const Offers = MemoizeRpcs.toLayerHandler("machines.offers", () =>
 const CloudProviders = MemoizeRpcs.toLayerHandler("cloud.providers", () =>
 	withCloudControl((service) => service.cloudProviders()),
 );
-const CloudAuthStatus = MemoizeRpcs.toLayerHandler("cloud.auth.status", () =>
-	withCloudControl((service) => service.cloudAuthStatus()),
-);
-const CloudAuthProvision = MemoizeRpcs.toLayerHandler(
-	"cloud.auth.provision",
-	() => withCloudControl((service) => service.provisionCloudAuth()),
-);
-const CloudAuthConfigure = MemoizeRpcs.toLayerHandler(
-	"cloud.auth.configure",
-	(input) => withCloudControl((service) => service.configureCloudAuth(input)),
-);
-const CloudAuthLoginStart = MemoizeRpcs.toLayerHandler(
-	"cloud.auth.login.start",
-	({ providerId }) =>
-		withCloudControl((service) => service.startCloudAuthLogin(providerId)),
-);
-const CloudAuthLoginPoll = MemoizeRpcs.toLayerHandler(
-	"cloud.auth.login.poll",
-	({ operationId }) =>
-		withCloudControl((service) => service.pollCloudAuthLogin(operationId)),
-);
-const CloudAuthLoginCancel = MemoizeRpcs.toLayerHandler(
-	"cloud.auth.login.cancel",
-	({ operationId }) =>
-		withCloudControl((service) => service.cancelCloudAuthLogin(operationId)),
-);
-const CloudAuthDisconnect = MemoizeRpcs.toLayerHandler(
-	"cloud.auth.disconnect",
-	({ providerId }) =>
-		withCloudControl((service) => service.disconnectCloudAuth(providerId)),
-);
-const CloudGithubStatus = MemoizeRpcs.toLayerHandler(
-	"cloud.github.status",
-	() => withCloudControl((service) => service.cloudGithubStatus()),
-);
-const CloudGithubInstall = MemoizeRpcs.toLayerHandler(
-	"cloud.github.install",
-	() => withCloudControl((service) => service.installCloudGithub()),
-);
-const CloudGithubDisconnect = MemoizeRpcs.toLayerHandler(
-	"cloud.github.disconnect",
-	({ installationId }) =>
-		withCloudControl((service) =>
-			service.disconnectCloudGithub(installationId),
-		),
-);
 const CloudBillingSummaryHandler = MemoizeRpcs.toLayerHandler(
 	"cloud.billing.summary",
 	() => withCloudControl((service) => service.cloudBillingSummary()),
@@ -131,23 +86,9 @@ const CloudBillingSetCapHandler = MemoizeRpcs.toLayerHandler(
 const CloudProjects = MemoizeRpcs.toLayerHandler("cloud.projects.list", () =>
 	withCloudControl((service) => service.cloudProjects()),
 );
-const CloudAccountImageStatus = MemoizeRpcs.toLayerHandler(
-	"cloud.image.status",
-	() => withCloudControl((service) => service.cloudAccountImage()),
-);
-const CloudAccountImageBuild = MemoizeRpcs.toLayerHandler(
-	"cloud.image.build",
-	(input) =>
-		withCloudControl((service) => service.buildCloudAccountImage(input)),
-);
 const ConnectCloudProject = MemoizeRpcs.toLayerHandler(
 	"cloud.projects.connect",
 	(input) => withCloudControl((service) => service.connectCloudProject(input)),
-);
-const RemoveCloudProject = MemoizeRpcs.toLayerHandler(
-	"cloud.projects.remove",
-	({ projectId }) =>
-		withCloudControl((service) => service.removeCloudProject(projectId)),
 );
 const PrepareCloudProject = MemoizeRpcs.toLayerHandler(
 	"cloud.projects.prepare",
@@ -236,13 +177,6 @@ const CloudWorkspaceSshAccess = MemoizeRpcs.toLayerHandler(
 	({ workspaceId }) =>
 		withCloudControl((service) => service.cloudWorkspaceSshAccess(workspaceId)),
 );
-const CloudWorkspacePreviewUrl = MemoizeRpcs.toLayerHandler(
-	"cloud.workspaces.previewUrl",
-	({ workspaceId, port }) =>
-		withCloudControl((service) =>
-			service.cloudWorkspacePreviewUrl(workspaceId, port),
-		),
-);
 const ArchiveCloudWorkspace = MemoizeRpcs.toLayerHandler(
 	"cloud.workspaces.archive",
 	({ workspaceId, commandId }) =>
@@ -263,6 +197,39 @@ const DeleteCloudWorkspace = MemoizeRpcs.toLayerHandler(
 		withCloudControl((service) =>
 			service.cloudWorkspaceAction(workspaceId, "delete", { commandId }),
 		),
+);
+const CloudCredentials = MemoizeRpcs.toLayerHandler(
+	"cloud.credentials.list",
+	() => withCloudControl((service) => service.cloudCredentials()),
+);
+const ImportLocalCloudCredential = MemoizeRpcs.toLayerHandler(
+	"cloud.credentials.importLocal",
+	({ kind }) =>
+		Effect.gen(function* () {
+			const accountAccess = yield* AccountAccessService;
+			const credential = yield* accountAccess
+				.readLocalCredential(kind)
+				.pipe(
+					Effect.mapError(
+						() => new CloudWorkspaceOpError({ code: "invalid-request" }),
+					),
+				);
+			return yield* withCloudControl((service) =>
+				service.connectCloudCredential({
+					kind,
+					credentialType: credential.credentialType,
+					secret: credential.secret,
+					...(credential.accountLabel === undefined
+						? {}
+						: { accountLabel: credential.accountLabel }),
+				}),
+			);
+		}),
+);
+const DisconnectCloudCredential = MemoizeRpcs.toLayerHandler(
+	"cloud.credentials.disconnect",
+	({ kind }) =>
+		withCloudControl((service) => service.disconnectCloudCredential(kind)),
 );
 const List = MemoizeRpcs.toLayerHandler("machines.list", () =>
 	withControl((service) => service.list()),
@@ -356,25 +323,12 @@ const ResourcesWatch = MemoizeRpcs.toLayerHandler(
 );
 
 export const MachineHandlersLayer = Layer.mergeAll(
-	CloudAuthStatus,
-	CloudAuthProvision,
-	CloudAuthConfigure,
-	CloudAuthLoginStart,
-	CloudAuthLoginPoll,
-	CloudAuthLoginCancel,
-	CloudAuthDisconnect,
-	CloudGithubStatus,
-	CloudGithubInstall,
-	CloudGithubDisconnect,
 	CloudBillingSummaryHandler,
 	CloudBillingUsageHandler,
 	CloudBillingSetCapHandler,
 	CloudProviders,
-	CloudAccountImageStatus,
-	CloudAccountImageBuild,
 	CloudProjects,
 	ConnectCloudProject,
-	RemoveCloudProject,
 	PrepareCloudProject,
 	CloudWorkspaces,
 	CloudWorkspace,
@@ -388,10 +342,12 @@ export const MachineHandlersLayer = Layer.mergeAll(
 	ResumeCloudWorkspace,
 	RestartCloudWorkspace,
 	CloudWorkspaceSshAccess,
-	CloudWorkspacePreviewUrl,
 	ArchiveCloudWorkspace,
 	UnarchiveCloudWorkspace,
 	DeleteCloudWorkspace,
+	CloudCredentials,
+	ImportLocalCloudCredential,
+	DisconnectCloudCredential,
 	Offers,
 	List,
 	Get,

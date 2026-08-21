@@ -31,8 +31,10 @@ import {
 import { overlayActiveEnvironmentShell } from "../lib/environment-entities.ts";
 import { formatError } from "../lib/format-error.ts";
 import {
+	clearCloudWorkspaceRuntimeRecovery,
+	cloudWorkspaceRequiresRuntimeRecovery,
+	cloudWorkspaceRuntimeRecoveryCommandId,
 	getControlPlaneRpcClient,
-	refreshCloudWorkspaceConnectionWithRecovery,
 	registerCloudWorkspace,
 } from "../lib/rpc-client.ts";
 import {
@@ -223,9 +225,14 @@ const registerCloudEnvironmentResolver = (summary: CloudChatSummary): void => {
 		async (client) => {
 			if (rootPrepared) return;
 			const folders = await Effect.runPromise(client["workspace.list"]({}));
-			// The cloud runtime registers the selected checkout before Relay marks the
-			// sandbox repository-ready. Never manufacture a second, placeholder root.
-			rootPrepared = folders.length > 0;
+			if (
+				folders.every((candidate) => candidate.path !== "/home/zuse/workspace")
+			) {
+				await Effect.runPromise(
+					client["workspace.add"]({ path: "/home/zuse/workspace" }),
+				);
+			}
+			rootPrepared = true;
 		},
 	);
 };
@@ -238,7 +245,6 @@ const refreshSummaryFromWorkspace = (
 	state: workspace.state,
 	runtimeState: workspace.runtimeState,
 	statusCode: workspace.statusCode,
-	failureDiagnostic: workspace.failureDiagnostic,
 	startupPhase: workspace.startupPhase,
 	desiredState: workspace.desiredState,
 	revision: workspace.revision,
@@ -423,10 +429,24 @@ export const ensureCloudWorkspaceAttached = (
 		let workspace = await Effect.runPromise(
 			control["cloud.workspaces.get"]({ workspaceId: summary.workspaceId }),
 		);
-		if (workspaceNeedsWake(workspace) && activation === "wake") {
+		const recoverRuntime = cloudWorkspaceRequiresRuntimeRecovery(
+			summary.workspaceId,
+		);
+		const recoverOnlineRuntime =
+			recoverRuntime &&
+			workspace.state === "ready" &&
+			workspace.runtimeState === "online";
+		if (
+			(workspaceNeedsWake(workspace) && activation === "wake") ||
+			recoverOnlineRuntime
+		) {
 			workspace = await Effect.runPromise(
 				control["cloud.workspaces.resume"]({
 					workspaceId: summary.workspaceId,
+					recoverRuntime: recoverOnlineRuntime || undefined,
+					commandId: recoverOnlineRuntime
+						? cloudWorkspaceRuntimeRecoveryCommandId(summary.workspaceId)
+						: undefined,
 				}),
 			);
 		}
@@ -450,42 +470,19 @@ export const ensureCloudWorkspaceAttached = (
 			);
 		}
 		const connectionForWorkspace = () =>
-			refreshCloudWorkspaceConnectionWithRecovery(
-				summary.workspaceId,
-				async (recoveryCommandId) => {
-					let recovered = await Effect.runPromise(
-						control["cloud.workspaces.resume"]({
-							workspaceId: summary.workspaceId,
-							recoverRuntime: true,
-							commandId: recoveryCommandId,
-						}),
-					);
-					updateSummary(refreshSummaryFromWorkspace(summary, recovered));
-					if (!isCloudWorkspaceReady(recovered)) {
-						const error = cloudWorkspaceStartupError(recovered);
-						if (error !== null) throw error;
-						recovered = await waitForCloudWorkspaceReady(
-							control["cloud.workspaces.watch"]({
-								workspaceId: summary.workspaceId,
-								afterRevision: recovered.revision,
-							}),
-							(next) =>
-								updateSummary(refreshSummaryFromWorkspace(summary, next)),
-						);
-					}
-				},
-				() =>
-					Effect.runPromise(
-						control["cloud.workspaces.connect"]({
-							workspaceId: summary.workspaceId,
-						}),
-					),
+			Effect.runPromise(
+				control["cloud.workspaces.connect"]({
+					workspaceId: summary.workspaceId,
+				}),
 			);
 		registerCloudWorkspace(
 			summary.workspaceId,
 			await connectionForWorkspace(),
 			connectionForWorkspace,
 		);
+		if (recoverRuntime) {
+			clearCloudWorkspaceRuntimeRecovery(summary.workspaceId);
+		}
 	})().finally(() => attaching.delete(summary.workspaceId));
 	attaching.set(summary.workspaceId, operation);
 	return operation;
@@ -520,7 +517,6 @@ export const summaryFromLaunch = (input: {
 	state: input.workspace.state,
 	runtimeState: input.workspace.runtimeState,
 	statusCode: input.workspace.statusCode,
-	failureDiagnostic: input.workspace.failureDiagnostic,
 	startupPhase: input.workspace.startupPhase,
 	desiredState: input.workspace.desiredState,
 	revision: input.workspace.revision,

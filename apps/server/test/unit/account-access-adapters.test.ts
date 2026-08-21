@@ -10,17 +10,22 @@ import {
 } from "../../src/account-access/adapters.ts";
 
 describe("account-access provider adapters", () => {
-	it("uses official target-machine login commands", () => {
+	it("uses native device authorization for GitHub and Codex", () => {
+		expect(getAccountAccessLoginCommand("github")).toEqual({
+			command: "gh",
+			environment: { GH_PROMPT_DISABLED: "1" },
+			args: [
+				"auth",
+				"login",
+				"--hostname",
+				"github.com",
+				"--git-protocol",
+				"https",
+				"--web",
+			],
+		});
 		expect(getAccountAccessLoginCommand("codex")).toEqual({
 			command: "codex",
-			args: ["login", "--device-auth"],
-		});
-		expect(getAccountAccessLoginCommand("cursor")).toEqual({
-			command: "cursor-agent",
-			args: ["login"],
-		});
-		expect(getAccountAccessLoginCommand("grok")).toEqual({
-			command: "grok",
 			args: ["login", "--device-auth"],
 		});
 	});
@@ -49,11 +54,11 @@ describe("account-access provider adapters", () => {
 	it("extracts only provider-approved verification URLs and short codes", () => {
 		expect(
 			parseDeviceLoginVerification(
-				"cursor",
-				"Copy ABCD-EFGH and open https://cursor.com/login/device",
+				"github",
+				"Copy ABCD-EFGH and open https://github.com/login/device",
 			),
 		).toEqual({
-			url: "https://cursor.com/login/device",
+			url: "https://github.com/login/device",
 			code: "ABCD-EFGH",
 		});
 		expect(
@@ -76,7 +81,7 @@ describe("account-access provider adapters", () => {
 		});
 		expect(
 			parseDeviceLoginVerification(
-				"grok",
+				"github",
 				"Open https://phishing.example/login and enter ABCD-EFGH",
 			),
 		).toEqual({ code: "ABCD-EFGH" });

@@ -2,11 +2,20 @@ import type {
 	AccountAccessProvider,
 	AccountAccessProviderStatus,
 	AccountAccessTransferEvent,
+	LocalAccountDescriptor,
 } from "@zuse/contracts";
 import type { Effect, Stream } from "effect";
 import stripAnsi from "strip-ansi";
 
 import type { AccountAccessServiceError } from "./errors.ts";
+
+export interface LocalAccountSource {
+	readonly providerId: AccountAccessProvider;
+	readonly detect: () => Effect.Effect<
+		LocalAccountDescriptor,
+		AccountAccessServiceError
+	>;
+}
 
 export interface CloudAccountAccessAdapter {
 	readonly providerId: AccountAccessProvider;
@@ -24,7 +33,7 @@ export interface CloudAccountAccessAdapter {
 	>;
 }
 
-type DeviceLoginProvider = "codex" | "cursor" | "grok";
+type DeviceLoginProvider = "github" | "codex";
 
 const LOGIN_COMMANDS: Record<
 	DeviceLoginProvider,
@@ -34,16 +43,21 @@ const LOGIN_COMMANDS: Record<
 		readonly environment?: Readonly<Record<string, string>>;
 	}
 > = {
+	github: {
+		command: "gh",
+		environment: { GH_PROMPT_DISABLED: "1" },
+		args: [
+			"auth",
+			"login",
+			"--hostname",
+			"github.com",
+			"--git-protocol",
+			"https",
+			"--web",
+		],
+	},
 	codex: {
 		command: "codex",
-		args: ["login", "--device-auth"],
-	},
-	cursor: {
-		command: "cursor-agent",
-		args: ["login"],
-	},
-	grok: {
-		command: "grok",
 		args: ["login", "--device-auth"],
 	},
 };
@@ -178,13 +192,11 @@ const allowedLoginUrl = (
 		const url = new URL(candidate.replace(/[),.;\]}]+$/u, ""));
 		if (url.protocol !== "https:" || url.username || url.password) return null;
 		const allowedDomains =
-			providerId === "codex"
-				? ["openai.com", "chatgpt.com"]
-				: providerId === "cursor"
-					? ["cursor.com"]
-					: providerId === "grok"
-						? ["x.ai"]
-						: ["anthropic.com", "claude.ai", "claude.com"];
+			providerId === "github"
+				? ["github.com"]
+				: providerId === "codex"
+					? ["openai.com", "chatgpt.com"]
+					: ["anthropic.com", "claude.ai", "claude.com"];
 		return allowedDomains.some(
 			(domain) =>
 				url.hostname === domain || url.hostname.endsWith(`.${domain}`),

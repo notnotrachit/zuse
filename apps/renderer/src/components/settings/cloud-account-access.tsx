@@ -1,16 +1,37 @@
-import type {
-	AccountAccessAuthKind,
-	AccountAccessErrorCode,
-	AccountAccessProvider,
-	AccountAccessProviderStatus,
-	AccountAccessTransferEvent,
+import {
+	AccountAccessCreateClaudeTransferRequest,
+	type AccountAccessErrorCode,
+	AccountAccessImportRequest,
+	type AccountAccessProvider,
+	type AccountAccessProviderStatus,
+	type AccountAccessSealedCredential,
+	type AccountAccessStatus,
+	type AccountAccessTransferEvent,
+	type LocalAccountDescriptor,
 } from "@zuse/contracts";
 import { Effect } from "effect";
 import { Copy, ExternalLink, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { copyText, openExternal } from "../../lib/platform-capabilities.ts";
+import {
+	controlPlaneClient,
+	runControlPlane,
+} from "../../lib/control-plane-client.ts";
+import {
+	getVerifiedRpcClient,
+	reportRendererRpcFailure,
+} from "../../lib/rpc-client.ts";
 import { runtimeOperationClient } from "../../lib/runtime-operation-client.ts";
 import { runStreamOperation } from "../../lib/stream-operation.ts";
+import {
+	AlertDialog,
+	AlertDialogClose,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogPopup,
+	AlertDialogTitle,
+} from "../ui/alert-dialog.tsx";
 import { Badge } from "../ui/badge.tsx";
 import { Button } from "../ui/button.tsx";
 import {
@@ -25,27 +46,41 @@ import {
 import { Input } from "../ui/input.tsx";
 import { CloudSettingsGroup, CloudSettingsRow } from "./cloud-settings-ui.tsx";
 
-const PROVIDERS = ["claude", "codex", "cursor", "grok"] as const;
+const PROVIDERS = ["github", "claude", "codex"] as const;
 const PROVIDER_LABEL: Record<AccountAccessProvider, string> = {
-	claude: "Claude Code",
+	github: "GitHub",
+	claude: "Claude",
 	codex: "Codex",
-	cursor: "Cursor",
-	grok: "Grok",
 };
 
-const SUBSCRIPTION_HELP: Record<AccountAccessProvider, string> = {
-	claude:
-		"Run `claude setup-token` on your computer, then paste the newly issued setup token below. Zuse never reads your existing Claude credentials.",
-	codex: "Authorize this cloud computer with OpenAI's device-code flow.",
-	cursor: "Authorize this cloud computer with Cursor's browser login.",
-	grok: "Authorize this cloud computer with Grok's device-code flow.",
-};
+export const hasConnectedClaudeAccess = (
+	status: AccountAccessStatus,
+): boolean =>
+	status.providers.some(
+		(provider) =>
+			provider.providerId === "claude" && provider.state === "connected",
+	);
 
-const API_KEY_HELP: Record<AccountAccessProvider, string> = {
-	claude: "Use an Anthropic API key for API-billed Claude Code sessions.",
-	codex: "Use an OpenAI API key instead of a ChatGPT subscription.",
-	cursor: "Use a Cursor user API key for the Cursor agent SDK.",
-	grok: "Use an xAI API key for Grok agent sessions.",
+export const claudeAuthorizationFailureMessage = (cause: unknown): string => {
+	const reason =
+		cause instanceof Error
+			? cause.message
+			: typeof cause === "string"
+				? cause
+				: "";
+	if (reason.includes("invalid-code")) {
+		return "Claude rejected that value. Copy the full authorization code, including the part after #, then start a fresh login.";
+	}
+	if (reason.includes("exchange-failed")) {
+		return "Claude could not exchange that authorization code. Start a fresh login and use the newly generated code.";
+	}
+	if (reason.includes("policy-blocked")) {
+		return "Your Claude organization does not allow long-lived setup tokens. Use an Anthropic API key instead.";
+	}
+	if (reason.includes("token-not-captured")) {
+		return "Claude finished authorization, but Zuse could not capture the credential. Restart Zuse and try once more.";
+	}
+	return "Claude authorization did not finish. Start a fresh login and try again.";
 };
 
 const ACCOUNT_ACCESS_ERROR_CODES: ReadonlyArray<AccountAccessErrorCode> = [
@@ -54,10 +89,11 @@ const ACCOUNT_ACCESS_ERROR_CODES: ReadonlyArray<AccountAccessErrorCode> = [
 	"unsupported-provider",
 	"tool-not-installed",
 	"login-failed",
+	"transfer-expired",
+	"transfer-replayed",
+	"transfer-rejected",
 	"credential-store-failed",
 	"cleanup-failed",
-	"invalid-credential",
-	"invalid-configuration",
 ];
 
 const stableAccountAccessErrorCode = (
@@ -72,7 +108,7 @@ const stableAccountAccessErrorCode = (
 			return code as AccountAccessErrorCode;
 		}
 	}
-	const text = cause instanceof Error ? cause.message : String(cause);
+	const text = typeof cause === "string" ? cause : "";
 	return (
 		ACCOUNT_ACCESS_ERROR_CODES.find((candidate) => text.includes(candidate)) ??
 		null
@@ -88,61 +124,62 @@ type RowProgress = {
 
 const statusBadge = (
 	status: AccountAccessProviderStatus | undefined,
+	available: boolean,
 	loading: boolean,
 ): {
 	readonly label: string;
 	readonly variant: "success" | "warning" | "outline";
 } => {
-	if (loading && status === undefined)
-		return { label: "Checking", variant: "outline" };
+	if (!available) {
+		return loading
+			? { label: "Checking", variant: "outline" }
+			: { label: "Unavailable", variant: "warning" };
+	}
 	if (status?.state === "connected")
 		return { label: "Authorized", variant: "success" };
-	if (status?.state === "expired")
-		return { label: "Reconnect", variant: "warning" };
 	if (status?.state === "missing-tool")
 		return { label: "Tool missing", variant: "warning" };
-	if (status?.state === "error")
-		return { label: "Needs attention", variant: "warning" };
 	return { label: "Signed out", variant: "outline" };
 };
 
 export function CloudAccountAccess({
 	environmentId,
-	unavailableReason = "Create and connect the persistent cloud computer before configuring agent authentication.",
 }: {
-	readonly environmentId?: string;
-	readonly unavailableReason?: string;
+	readonly environmentId: string;
 }) {
 	const [statuses, setStatuses] = useState<
 		ReadonlyArray<AccountAccessProviderStatus>
 	>([]);
-	const [loading, setLoading] = useState(environmentId !== undefined);
+	const [localAccounts, setLocalAccounts] = useState<
+		ReadonlyArray<LocalAccountDescriptor>
+	>([]);
+	const [loading, setLoading] = useState(true);
 	const [pendingProvider, setPendingProvider] =
 		useState<AccountAccessProvider | null>(null);
-	const [method, setMethod] = useState<AccountAccessAuthKind>("subscription");
 	const [busyProvider, setBusyProvider] =
 		useState<AccountAccessProvider | null>(null);
 	const [progress, setProgress] = useState<RowProgress | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [claudeTransferId, setClaudeTransferId] = useState<string | null>(null);
+	const [claudeCodeError, setClaudeCodeError] = useState<string | null>(null);
+	const [claudeCodeReady, setClaudeCodeReady] = useState(false);
+	const [submittingClaudeCode, setSubmittingClaudeCode] = useState(false);
+	const claudeLoginCancelled = useRef(false);
 
 	const refresh = useCallback(async () => {
-		if (environmentId === undefined) {
-			setStatuses([]);
-			setError(null);
-			setLoading(false);
-			return;
-		}
 		setLoading(true);
 		try {
 			const environment = await runtimeOperationClient(environmentId);
-			const remote = await Effect.runPromise(
-				environment["accountAccess.status"](),
-			);
+			const [remote, local] = await Promise.all([
+				Effect.runPromise(environment["accountAccess.status"]()),
+				runControlPlane((control) => control["accountAccess.detectLocal"]()),
+			]);
 			setStatuses(remote.providers);
+			setLocalAccounts(local.accounts);
 			setError(null);
 		} catch {
 			setError(
-				"Agent authorization could not be checked. Reconnect the cloud computer and try again.",
+				"Account access could not be checked. Update or reconnect the machine, then try again.",
 			);
 		} finally {
 			setLoading(false);
@@ -157,121 +194,249 @@ export function CloudAccountAccess({
 		() => new Map(statuses.map((status) => [status.providerId, status])),
 		[statuses],
 	);
+	const localByProvider = useMemo(
+		() =>
+			new Map(localAccounts.map((account) => [account.providerId, account])),
+		[localAccounts],
+	);
 	const missingTools = statuses.filter(
 		(status) => status.state === "missing-tool",
 	);
+	const accountAccessAvailable = statuses.length === PROVIDERS.length;
 	const developerTools =
-		environmentId === undefined
-			? { description: unavailableReason, label: "Cloud computer required" }
-			: loading && statuses.length === 0
-				? { description: "Checking installed agent tools.", label: "Checking" }
+		loading && statuses.length === 0
+			? {
+					description: "Checking installed developer tools.",
+					label: "Checking",
+					variant: "outline" as const,
+				}
+			: statuses.length !== PROVIDERS.length
+				? {
+						description: "Installed developer tools could not be verified.",
+						label: "Unavailable",
+						variant: "warning" as const,
+					}
 				: missingTools.length > 0
 					? {
 							description: `${missingTools.map((status) => PROVIDER_LABEL[status.providerId]).join(", ")} ${missingTools.length === 1 ? "is" : "are"} not installed.`,
 							label: "Needs update",
+							variant: "warning" as const,
 						}
 					: {
 							description:
-								"Claude Code, Codex, Cursor, and Grok are available on this computer.",
+								"Git, GitHub CLI, Bun, Node, Claude Code, and Codex are installed.",
 							label: "Ready",
+							variant: "success" as const,
 						};
 
-	const runSubscriptionLogin = async (providerId: AccountAccessProvider) => {
-		if (providerId === "claude" || environmentId === undefined) return;
-		setBusyProvider(providerId);
+	const runSetup = async (providerId: AccountAccessProvider) => {
+		let claudePhase: "authorization" | "remote-import" = "authorization";
+		setClaudeCodeReady(false);
+		setSubmittingClaudeCode(false);
+		if (!accountAccessAvailable) {
+			setError(
+				"Account setup is unavailable on this machine runtime. Finish the update, then refresh.",
+			);
+			return;
+		}
 		setPendingProvider(null);
+		setBusyProvider(providerId);
 		setProgress({ providerId, message: "Waiting for authorization…" });
 		setError(null);
+		claudeLoginCancelled.current = false;
 		try {
 			const environment = await runtimeOperationClient(environmentId);
-			await runStreamOperation(
-				environment["accountAccess.startLogin"]({ providerId }),
-				async (event: AccountAccessTransferEvent) => {
-					if (event._tag === "verification") {
-						let copied = false;
-						if (event.code !== undefined) {
-							try {
-								await copyText(event.code);
-								copied = true;
-							} catch {
-								// The code stays visible for manual copying.
-							}
+			if (providerId === "claude") {
+				const control = await controlPlaneClient();
+				const session = await runControlPlane((control) =>
+					control["auth.getSession"]({}),
+				);
+				if (session._tag !== "SignedIn") throw new Error("not-signed-in");
+				const prepared = await Effect.runPromise(
+					environment["accountAccess.prepareImport"]({
+						accountId: session.session.user.id,
+						providerId: "claude",
+					}),
+				);
+				// The Claude CLI may open the browser itself and render its manual-code
+				// prompt without a newline. Keep the destination visible from the moment
+				// the interactive process starts instead of making the dialog depend on
+				// parsing a verification URL from terminal output.
+				setClaudeTransferId(prepared.transferId);
+				setClaudeCodeError(null);
+				setProgress({
+					providerId,
+					message: "Sign in to Claude. The code field will unlock when ready.",
+				});
+				let sealed: AccountAccessSealedCredential | null = null;
+				await runStreamOperation(
+					control["accountAccess.createClaudeTransfer"](
+						new AccountAccessCreateClaudeTransferRequest({ prepared }),
+					),
+					async (event: AccountAccessTransferEvent) => {
+						if (event._tag === "input-ready") {
+							setClaudeCodeReady(true);
+							setProgress({
+								providerId,
+								message: "Paste the full authorization code from Claude.",
+							});
+						} else if (event._tag === "verification") {
+							setProgress({
+								providerId,
+								message:
+									"Finish authorization. Waiting for Claude's code prompt…",
+								code: event.code,
+								url: event.url,
+							});
+							await openExternal(event.url);
+						} else if (event._tag === "sealed") {
+							setProgress({
+								providerId,
+								message: "Saving Claude access on this machine…",
+							});
+							sealed = event.sealed;
+						} else if (event._tag === "done" && !event.ok) {
+							throw new Error(event.reason ?? "login-failed");
 						}
-						setProgress({
-							providerId,
-							message: copied
-								? "Code copied. Finish sign-in in your browser."
-								: "Finish sign-in in your browser.",
-							...(event.code === undefined ? {} : { code: event.code }),
-							url: event.url,
-						});
-						await openExternal(event.url);
-					} else if (event._tag === "done" && !event.ok) {
-						throw new Error(event.reason ?? "login-failed");
+					},
+				).done;
+				if (sealed === null) throw new Error("transfer-rejected");
+				const importRequest = new AccountAccessImportRequest({
+					transferId: prepared.transferId,
+					sealed,
+				});
+				claudePhase = "remote-import";
+				try {
+					const destination = await getVerifiedRpcClient(environmentId);
+					await Effect.runPromise(
+						destination["accountAccess.import"](importRequest).pipe(
+							Effect.timeout("10 seconds"),
+						),
+					);
+				} catch (cause) {
+					// The response may be lost after the remote machine stores this
+					// single-use transfer. Reconcile status instead of replaying it.
+					reportRendererRpcFailure(cause, environmentId);
+					const destination = await getVerifiedRpcClient(environmentId);
+					const reconciled = await Effect.runPromise(
+						destination["accountAccess.status"]().pipe(
+							Effect.timeout("10 seconds"),
+						),
+					);
+					if (!hasConnectedClaudeAccess(reconciled)) {
+						throw cause;
 					}
-				},
-			).done;
+				}
+			} else {
+				await runStreamOperation(
+					environment["accountAccess.startLogin"]({ providerId }),
+					async (event: AccountAccessTransferEvent) => {
+						if (event._tag === "verification") {
+							let codeCopied = false;
+							if (event.code !== undefined) {
+								try {
+									await copyText(event.code);
+									codeCopied = true;
+								} catch {
+									// The code remains visible in the row for manual copying.
+								}
+							}
+							setProgress({
+								providerId,
+								message: codeCopied
+									? "Code copied. Paste it in your browser."
+									: "Enter the code in your browser.",
+								code: event.code,
+								url: event.url,
+							});
+							await openExternal(event.url);
+						} else if (event._tag === "done" && !event.ok) {
+							throw new Error(event.reason ?? "login-failed");
+						}
+					},
+				).done;
+			}
 			setProgress({ providerId, message: "Connected." });
+			setClaudeTransferId(null);
 			await refresh();
 		} catch (cause) {
-			const code = stableAccountAccessErrorCode(cause);
 			setProgress(null);
-			setError(
-				`${PROVIDER_LABEL[providerId]} could not be connected${code === null ? "." : ` (${code}).`}`,
-			);
+			if (!claudeLoginCancelled.current) {
+				const code = stableAccountAccessErrorCode(cause);
+				const detail =
+					providerId === "claude" && claudePhase === "remote-import"
+						? "Claude authorized locally, but access could not be saved on the cloud machine. Reconnect and try again."
+						: providerId === "claude"
+							? claudeAuthorizationFailureMessage(cause)
+							: `${PROVIDER_LABEL[providerId]} access could not be connected.`;
+				setError(`${detail}${code === null ? "" : ` (${code})`}`);
+			}
 		} finally {
+			setClaudeTransferId(null);
+			setClaudeCodeReady(false);
+			setSubmittingClaudeCode(false);
 			setBusyProvider(null);
 		}
 	};
 
-	const submitCredential = async (form: HTMLFormElement) => {
-		if (pendingProvider === null || environmentId === undefined) return;
-		const providerId = pendingProvider;
-		const data = new FormData(form);
-		const secret = String(data.get("secret") ?? "").trim();
-		if (secret.length === 0) {
-			setError("Enter the credential before continuing.");
+	const continueClaudeTransfer = async (form: HTMLFormElement) => {
+		if (claudeTransferId === null) return;
+		if (!claudeCodeReady) {
+			setClaudeCodeError("Wait until Claude is ready for the code.");
 			return;
 		}
-		setBusyProvider(providerId);
-		setError(null);
+		const code = new FormData(form).get("claude-authorization-code");
+		if (typeof code !== "string" || code.trim().length === 0) {
+			setClaudeCodeError("Paste the full authorization code from Claude.");
+			return;
+		}
+		setSubmittingClaudeCode(true);
+		setClaudeCodeError(null);
+		setProgress({
+			providerId: "claude",
+			message: "Submitting the authorization code…",
+		});
 		try {
-			const environment = await runtimeOperationClient(environmentId);
-			if (method === "custom") {
-				await Effect.runPromise(
-					environment["accountAccess.configureCustom"]({
-						providerId,
-						baseUrl: String(data.get("base-url") ?? ""),
-						secret,
-						modelProvider:
-							String(data.get("model-provider") ?? "").trim() || undefined,
-					}),
-				);
-			} else {
-				await Effect.runPromise(
-					environment["accountAccess.setCredential"]({
-						providerId,
-						method,
-						secret,
-					}),
-				);
-			}
-			form.reset();
-			setPendingProvider(null);
-			setProgress({ providerId, message: "Connected." });
-			await refresh();
-		} catch (cause) {
-			const code = stableAccountAccessErrorCode(cause);
-			setError(
-				`The credential could not be saved${code === null ? "." : ` (${code}).`}`,
+			await runControlPlane((control) =>
+				control["accountAccess.continueClaudeTransfer"]({
+					_tag: "code",
+					transferId: claudeTransferId,
+					code,
+				}),
 			);
-		} finally {
-			setBusyProvider(null);
+			form.reset();
+			setProgress({
+				providerId: "claude",
+				message: "Exchanging the authorization code securely…",
+			});
+		} catch {
+			setSubmittingClaudeCode(false);
+			setClaudeCodeError("The code could not be submitted. Try again.");
+		}
+	};
+
+	const cancelClaudeTransfer = async () => {
+		if (claudeTransferId === null) return;
+		const transferId = claudeTransferId;
+		claudeLoginCancelled.current = true;
+		setClaudeTransferId(null);
+		setClaudeCodeError(null);
+		setClaudeCodeReady(false);
+		setSubmittingClaudeCode(false);
+		setProgress(null);
+		try {
+			await runControlPlane((control) =>
+				control["accountAccess.continueClaudeTransfer"]({
+					_tag: "cancel",
+					transferId,
+				}),
+			);
+		} catch {
+			setError("Claude login could not be cancelled cleanly.");
 		}
 	};
 
 	const disconnect = async (providerId: AccountAccessProvider) => {
-		if (environmentId === undefined) return;
 		setBusyProvider(providerId);
 		setError(null);
 		try {
@@ -282,24 +447,28 @@ export function CloudAccountAccess({
 			setProgress(null);
 			await refresh();
 		} catch {
-			setError(`${PROVIDER_LABEL[providerId]} could not be disconnected.`);
+			setError(
+				`${PROVIDER_LABEL[providerId]} access could not be disconnected.`,
+			);
 		} finally {
 			setBusyProvider(null);
 		}
 	};
 
+	const selectedLocal =
+		pendingProvider === null ? undefined : localByProvider.get(pendingProvider);
+
 	return (
 		<>
 			<CloudSettingsGroup
-				title="Agents"
-				description="Authentication belongs to the persistent cloud computer and is brokered to each isolated E2B chat. Existing credentials on this Mac are never imported."
+				title="Developer access"
+				description="Machine connectivity is separate from account authorization. Authorize each developer account you want available remotely."
 				action={
 					<Button
 						size="icon-sm"
 						variant="ghost"
-						aria-label="Refresh agent authorization"
+						aria-label="Refresh developer access"
 						loading={loading}
-						disabled={environmentId === undefined}
 						onClick={() => void refresh()}
 					>
 						<RefreshCw aria-hidden />
@@ -314,40 +483,33 @@ export function CloudAccountAccess({
 				}
 			>
 				<CloudSettingsRow
-					title="Agent tools"
+					title="Developer tools"
 					description={developerTools.description}
 					action={
-						<Badge
-							variant={
-								developerTools.label === "Ready"
-									? "success"
-									: environmentId === undefined
-										? "outline"
-										: "warning"
-							}
-						>
+						<Badge variant={developerTools.variant}>
 							{developerTools.label}
 						</Badge>
 					}
 				/>
 				{PROVIDERS.map((providerId) => {
 					const status = statusByProvider.get(providerId);
-					const badge =
-						environmentId === undefined
-							? ({ label: "Not available", variant: "outline" } as const)
-							: statusBadge(status, loading);
+					const local = localByProvider.get(providerId);
+					const badge = statusBadge(status, accountAccessAvailable, loading);
 					const connected = status?.state === "connected";
 					const busy = busyProvider === providerId;
 					const rowProgress =
 						progress?.providerId === providerId ? progress : null;
-					const description =
-						rowProgress?.message ??
-						(environmentId === undefined
-							? unavailableReason
-							: status?.accountLabel) ??
-						(status?.authMethod === undefined
-							? "Not configured on this cloud computer"
-							: `Connected with ${status.authMethod}`);
+					const description = !accountAccessAvailable
+						? loading
+							? "Checking whether account setup is available."
+							: "Update this machine before configuring account access."
+						: rowProgress === null
+							? (status?.accountLabel ??
+								local?.accountLabel ??
+								(providerId === "claude"
+									? "Secure token transfer from this Mac"
+									: "Authorize this machine in your browser"))
+							: rowProgress.message;
 					return (
 						<CloudSettingsRow
 							key={providerId}
@@ -356,48 +518,62 @@ export function CloudAccountAccess({
 							action={
 								<>
 									<Badge variant={badge.variant}>{badge.label}</Badge>
-									<Button
-										size="xs"
-										variant={connected ? "ghost" : "outline"}
-										loading={busy}
-										disabled={
-											environmentId === undefined ||
-											loading ||
-											busyProvider !== null ||
-											status?.installed === false
-										}
-										onClick={() => {
-											setMethod("subscription");
-											setPendingProvider(providerId);
-										}}
-									>
-										{connected ? "Manage" : "Set up"}
-									</Button>
 									{connected ? (
+										<>
+											<Button
+												size="xs"
+												variant="ghost"
+												disabled={busyProvider !== null}
+												onClick={() => setPendingProvider(providerId)}
+											>
+												Re-sync
+											</Button>
+											<Button
+												size="xs"
+												variant="ghost"
+												disabled={busyProvider !== null}
+												onClick={() => void disconnect(providerId)}
+											>
+												Disconnect
+											</Button>
+										</>
+									) : (
 										<Button
 											size="xs"
-											variant="ghost"
-											disabled={busyProvider !== null}
-											onClick={() => void disconnect(providerId)}
+											variant="outline"
+											loading={busy}
+											disabled={
+												loading ||
+												!accountAccessAvailable ||
+												busyProvider !== null ||
+												status?.installed === false
+											}
+											onClick={() => setPendingProvider(providerId)}
 										>
-											Disconnect
+											Connect
 										</Button>
-									) : null}
+									)}
 								</>
 							}
 						>
 							{rowProgress?.code === undefined ? null : (
 								<div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/35 px-2.5 py-2">
-									<code className="select-all font-semibold text-sm tracking-[0.12em]">
-										{rowProgress.code}
-									</code>
+									<div className="min-w-0 flex-1">
+										<p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+											Device code
+										</p>
+										<code className="mt-0.5 block select-all font-semibold text-sm tracking-[0.12em] text-foreground">
+											{rowProgress.code}
+										</code>
+									</div>
 									<Button
 										type="button"
 										size="xs"
 										variant="outline"
 										onClick={() => void copyText(rowProgress.code ?? "")}
 									>
-										<Copy aria-hidden /> Copy code
+										<Copy aria-hidden />
+										Copy code
 									</Button>
 									{rowProgress.url === undefined ? null : (
 										<Button
@@ -406,7 +582,8 @@ export function CloudAccountAccess({
 											variant="ghost"
 											onClick={() => void openExternal(rowProgress.url ?? "")}
 										>
-											<ExternalLink aria-hidden /> Open login page
+											<ExternalLink aria-hidden />
+											Open login page
 										</Button>
 									)}
 								</div>
@@ -414,144 +591,154 @@ export function CloudAccountAccess({
 						</CloudSettingsRow>
 					);
 				})}
+				<CloudSettingsRow
+					title="Private repository access"
+					description={
+						!accountAccessAvailable
+							? "Update this machine before checking repository authorization."
+							: statusByProvider.get("github")?.state === "connected"
+								? "GitHub CLI can clone, fetch, and push private repositories."
+								: "Connect GitHub before opening a private repository."
+					}
+					action={
+						<Badge
+							variant={
+								!accountAccessAvailable
+									? "warning"
+									: statusByProvider.get("github")?.state === "connected"
+										? "success"
+										: "outline"
+							}
+						>
+							{!accountAccessAvailable
+								? loading
+									? "Checking"
+									: "Unavailable"
+								: statusByProvider.get("github")?.state === "connected"
+									? "Ready"
+									: "Pending"}
+						</Badge>
+					}
+				/>
 			</CloudSettingsGroup>
 
-			<Dialog
+			<AlertDialog
 				open={pendingProvider !== null}
 				onOpenChange={(open) => {
 					if (!open) setPendingProvider(null);
 				}}
 			>
-				<DialogPopup className="max-w-md">
+				<AlertDialogPopup className="max-w-sm">
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							Give this machine account access?
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{pendingProvider === null
+								? ""
+								: `${PROVIDER_LABEL[pendingProvider]}${selectedLocal?.accountLabel ? ` (${selectedLocal.accountLabel})` : ""} will be usable by agents and terminals on this cloud machine. Local config folders, SSH private keys, cookies, and environment files stay on this Mac.`}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogClose render={<Button size="xs" variant="ghost" />}>
+							Cancel
+						</AlertDialogClose>
+						<Button
+							size="xs"
+							onClick={() => {
+								if (pendingProvider !== null) void runSetup(pendingProvider);
+							}}
+						>
+							Continue
+						</Button>
+					</AlertDialogFooter>
+				</AlertDialogPopup>
+			</AlertDialog>
+
+			<Dialog
+				open={claudeTransferId !== null}
+				onOpenChange={(open) => {
+					if (!open) void cancelClaudeTransfer();
+				}}
+			>
+				<DialogPopup
+					className="max-w-sm overflow-hidden"
+					showCloseButton={false}
+				>
 					<form
+						className="flex min-h-0 flex-col"
 						onSubmit={(event) => {
 							event.preventDefault();
-							if (pendingProvider !== null) {
-								if (method === "subscription" && pendingProvider !== "claude") {
-									void runSubscriptionLogin(pendingProvider);
-								} else {
-									void submitCredential(event.currentTarget);
-								}
-							}
+							void continueClaudeTransfer(event.currentTarget);
 						}}
 					>
 						<DialogHeader>
-							<DialogTitle>
-								Set up{" "}
-								{pendingProvider === null
-									? "agent"
-									: PROVIDER_LABEL[pendingProvider]}
-							</DialogTitle>
+							<DialogTitle>Finish Claude authorization</DialogTitle>
 							<DialogDescription>
-								The credential is created for and stored on this cloud computer.
-								Existing credentials on your Mac are never read.
+								{submittingClaudeCode
+									? "Exchanging the authorization code. This normally takes only a few seconds."
+									: claudeCodeReady
+										? "Copy the full authorization code shown by Claude, including the part after #. It is sent only to the local login process."
+										: "Complete sign-in in your browser. The code field will unlock when the local Claude process is ready."}
 							</DialogDescription>
 						</DialogHeader>
 						<DialogPanel
-							className="space-y-4 px-4 pb-4 pt-1"
+							className="space-y-2 px-4 pb-4 pt-1"
 							scrollFade={false}
 						>
-							<div className="grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
-								{(["subscription", "api-key", "custom"] as const).map(
-									(candidate) => (
-										<Button
-											key={candidate}
-											type="button"
-											size="xs"
-											variant={method === candidate ? "secondary" : "ghost"}
-											onClick={() => setMethod(candidate)}
-										>
-											{candidate === "api-key"
-												? "API key"
-												: candidate === "custom"
-													? "Custom"
-													: "Subscription"}
-										</Button>
-									),
-								)}
-							</div>
-							{pendingProvider === null ? null : (
-								<p className="text-xs text-muted-foreground">
-									{method === "subscription"
-										? SUBSCRIPTION_HELP[pendingProvider]
-										: method === "api-key"
-											? API_KEY_HELP[pendingProvider]
-											: "Configure an HTTPS-compatible provider endpoint and its secret directly on this computer."}
-								</p>
-							)}
-							{method === "subscription" && pendingProvider === "claude" ? (
-								<div className="space-y-2">
-									<div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
-										<code className="text-xs">claude setup-token</code>
-										<Button
-											type="button"
-											size="xs"
-											variant="ghost"
-											onClick={() => void copyText("claude setup-token")}
-										>
-											<Copy aria-hidden /> Copy
-										</Button>
-									</div>
-									<Input
-										name="secret"
-										type="password"
-										autoComplete="off"
-										placeholder="sk-ant-oat01-…"
-										data-1p-ignore
-									/>
-								</div>
-							) : null}
-							{method === "api-key" ? (
+							<label
+								className="block space-y-1"
+								htmlFor="claude-authorization-code"
+							>
+								<span className="text-[11px] font-medium">
+									Authorization code
+								</span>
 								<Input
-									name="secret"
+									id="claude-authorization-code"
+									name="claude-authorization-code"
 									type="password"
 									autoComplete="off"
-									placeholder="Paste API key"
+									spellCheck={false}
 									data-1p-ignore
+									autoFocus
+									disabled={!claudeCodeReady || submittingClaudeCode}
+									aria-invalid={claudeCodeError !== null}
+									aria-describedby={
+										claudeCodeError === null
+											? undefined
+											: "claude-authorization-code-error"
+									}
 								/>
-							) : null}
-							{method === "custom" ? (
-								<div className="space-y-2">
-									<Input
-										name="base-url"
-										type="url"
-										placeholder="https://provider.example/v1"
-										autoComplete="off"
-									/>
-									<Input
-										name="model-provider"
-										placeholder="Provider identifier (optional)"
-										autoComplete="off"
-									/>
-									<Input
-										name="secret"
-										type="password"
-										autoComplete="off"
-										placeholder="Provider secret"
-										data-1p-ignore
-									/>
-								</div>
-							) : null}
+							</label>
+							{claudeCodeError === null ? null : (
+								<p
+									id="claude-authorization-code-error"
+									role="alert"
+									className="text-[11px] text-destructive"
+								>
+									{claudeCodeError}
+								</p>
+							)}
 						</DialogPanel>
-						<DialogFooter>
+						<DialogFooter className="px-4 py-2">
 							<Button
 								type="button"
 								size="xs"
 								variant="ghost"
-								onClick={() => setPendingProvider(null)}
+								onClick={() => void cancelClaudeTransfer()}
 							>
-								Cancel
+								Cancel login
 							</Button>
 							<Button
 								type="submit"
 								size="xs"
-								loading={
-									pendingProvider !== null && busyProvider === pendingProvider
-								}
+								disabled={!claudeCodeReady || submittingClaudeCode}
 							>
-								{method === "subscription" && pendingProvider !== "claude"
-									? "Start browser login"
-									: "Save on computer"}
+								{submittingClaudeCode
+									? "Connecting…"
+									: claudeCodeReady
+										? "Continue"
+										: "Waiting…"}
 							</Button>
 						</DialogFooter>
 					</form>

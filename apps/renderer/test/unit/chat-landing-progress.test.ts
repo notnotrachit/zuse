@@ -2,7 +2,6 @@ import { ExternalThread } from "@zuse/contracts";
 import { describe, expect, test } from "vitest";
 import { filterImportThreads } from "../../src/components/chat-landing.tsx";
 import chatLandingSource from "../../src/components/chat-landing.tsx?raw";
-import queueChipSource from "../../src/components/composer/queue-chip.tsx?raw";
 import { chatLandingProgress } from "../../src/lib/chat-landing-progress.ts";
 import cloudChatsSource from "../../src/lib/cloud-workspaces.ts?raw";
 import externalThreadsSource from "../../src/store/external-threads.ts?raw";
@@ -93,22 +92,6 @@ describe("chat landing progress", () => {
 		expect(chatLandingSource).not.toContain(
 			'control["cloud.workspaces.agentStarted"]',
 		);
-	});
-
-	test("keeps the submitted cloud message in the queued composer surface", () => {
-		const message = chatLandingSource.indexOf("<QueuedComposerPreview");
-		const cloudLifecycle = chatLandingSource.indexOf(
-			'<CloudWorkspaceSetupView phase="allocating" />',
-		);
-
-		expect(message).toBeGreaterThan(-1);
-		expect(message).toBeGreaterThan(cloudLifecycle);
-		expect(chatLandingSource).toContain(
-			'waitingForSandbox={progress.kind === "cloud"}',
-		);
-		expect(chatLandingSource).toContain("Waiting for sandbox");
-		expect(chatLandingSource).not.toContain("Starting Cloud Sandbox");
-		expect(queueChipSource).not.toContain("Saving message");
 	});
 
 	test("owns lifecycle polling behind the control-plane stream", () => {

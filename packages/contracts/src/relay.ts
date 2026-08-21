@@ -70,25 +70,7 @@ export const RelayPaths = {
 	cloudBillingUsage: "/v1/cloud/billing/usage",
 	cloudBillingCap: "/v1/cloud/billing/cap",
 	cloudProviders: "/v1/cloud/providers",
-	cloudAuth: "/v1/cloud/auth",
-	cloudAuthProvision: "/v1/cloud/auth/provision",
-	cloudAuthConfigure: "/v1/cloud/auth/configure",
-	cloudAuthLoginStart: "/v1/cloud/auth/login/start",
-	cloudAuthLoginPoll: (operationId: string) =>
-		`/v1/cloud/auth/login/${encodeURIComponent(operationId)}`,
-	cloudAuthLoginCancel: (operationId: string) =>
-		`/v1/cloud/auth/login/${encodeURIComponent(operationId)}/cancel`,
-	cloudAuthDisconnect: (providerId: string) =>
-		`/v1/cloud/auth/providers/${encodeURIComponent(providerId)}`,
-	cloudGithub: "/v1/cloud/github",
-	cloudGithubInstall: "/v1/cloud/github/install",
-	cloudGithubDisconnect: (installationId: number) =>
-		`/v1/cloud/github/installations/${installationId}`,
 	cloudProjects: "/v1/cloud/projects",
-	cloudProject: (projectId: string) =>
-		`/v1/cloud/projects/${encodeURIComponent(projectId)}`,
-	cloudAccountImage: "/v1/cloud/image",
-	cloudAccountImageBuild: "/v1/cloud/image/build",
 	cloudProjectPrepare: (projectId: string) =>
 		`/v1/cloud/projects/${encodeURIComponent(projectId)}/prepare`,
 	cloudWorkspaces: "/v1/cloud/workspaces",
@@ -98,8 +80,6 @@ export const RelayPaths = {
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/gateway/ticket`,
 	cloudWorkspaceSshAccess: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/ssh-access`,
-	cloudWorkspacePreviewUrl: (workspaceId: string) =>
-		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/preview-url`,
 	cloudWorkspaceGateway: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/gateway`,
 	cloudWorkspaceBootstrap: (workspaceId: string) =>
@@ -131,6 +111,9 @@ export const RelayPaths = {
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/${encodeURIComponent(action)}`,
 	cloudWorkspaceReady: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/ready`,
+	cloudCredentials: "/v1/cloud/credentials",
+	cloudCredentialDisconnect: (kind: string) =>
+		`/v1/cloud/credentials/${encodeURIComponent(kind)}/disconnect`,
 } as const;
 
 export const RelayAuthTokenGrant = Schema.Union([

@@ -2,10 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import {
-	STAGING_RELAY_URL,
-	WORKOS_STAGING_PUBLIC_CLIENT_ID,
-} from "@zuse/contracts";
+import { WORKOS_STAGING_PUBLIC_CLIENT_ID } from "@zuse/contracts";
 import { parse } from "jsonc-parser";
 import { describe, expect, test } from "vitest";
 
@@ -31,7 +28,6 @@ const relayDirectory = fileURLToPath(new URL("../..", import.meta.url));
 
 interface WranglerTarget {
 	readonly name: string;
-	readonly placement?: { readonly region: string };
 	readonly routes: ReadonlyArray<{ readonly pattern: string }>;
 	readonly vars: Readonly<Record<string, string>>;
 	readonly hyperdrive: ReadonlyArray<{
@@ -70,18 +66,17 @@ describe("relay deployment safety", () => {
 
 		expect(config.name).toBe("zuse-relay-staging");
 		expect(config.routes).toEqual([
-			{ pattern: "relay-staging.stuff.md", custom_domain: true },
+			{ pattern: "relay-staging.zuse.sh", custom_domain: true },
 		]);
-		expect(config.vars.RELAY_ISSUER).toBe(STAGING_RELAY_URL);
-		expect(`https://${config.routes[0]?.pattern}`).toBe(STAGING_RELAY_URL);
+		expect(config.vars.RELAY_ISSUER).toBe("https://relay-staging.zuse.sh");
 		expect(config.vars.MANAGED_TUNNEL_NAMESPACE).toBe("zenv-staging");
 		expect(config.vars.WORKOS_JWKS_URL).toBe(
 			`https://api.workos.com/sso/jwks/${WORKOS_STAGING_PUBLIC_CLIENT_ID}`,
 		);
 		expect(config.vars.MACHINE_ALPHA_ALLOWLIST).toBe(
-			"user_01KW7R9WGJFFSKDNESE7RN00N1,user_01M0HA239JJ7P73AA1X5M8KDHF",
+			"user_01KW7R9WGJFFSKDNESE7RN00N1",
 		);
-		expect(config.vars.MACHINE_MANUAL_ENTITLEMENTS).toBe("true");
+		expect(config.vars.MACHINE_MANUAL_ENTITLEMENTS).toBe("false");
 		expect(config.vars.MACHINE_PROVIDER).toBe("hetzner");
 		expect(config.vars.HETZNER_ADAPTER_ENABLED).toBe("true");
 		expect(config.vars.HETZNER_FIREWALL_ID).toBe("11418954");
@@ -92,15 +87,18 @@ describe("relay deployment safety", () => {
 			JSON.parse(config.vars.MACHINE_RUNTIME_SIGNING_PUBLIC_JWK ?? ""),
 		).not.toThrow();
 		expect(config.vars.MACHINE_LIVE_CHECKOUT_ENABLED).toBe("true");
-		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL).toBe("");
-		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK).toBe("");
+		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL).toBe(
+			config.vars.MACHINE_RUNTIME_MANIFEST_URL,
+		);
+		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK).toBe(
+			config.vars.MACHINE_RUNTIME_SIGNING_PUBLIC_JWK,
+		);
 		expect(config.vars).not.toHaveProperty("SANDBOX_DEFAULT_PROVIDER");
 		expect(config.vars.E2B_ADAPTER_ENABLED).toBe("true");
 		expect(config.vars.E2B_TEMPLATE_ID).toBe("zuse-cloud-sandbox");
 		expect(config.vars.E2B_TEMPLATE_VERSION).toBe(
-			"e147c717-5a91-4d68-a244-f1ca65034a3d",
+			"4dae42be-6c3b-4d78-ab63-cfa406d3d70d",
 		);
-		expect(config.placement).toEqual({ region: "aws:ap-southeast-1" });
 		expect(config.vars.E2B_VCPU_COUNT).toBe("2");
 		expect(config.vars.E2B_MEMORY_MIB).toBe("4096");
 		expect(config.vars.POLAR_PRODUCT_PERSISTENT_STANDARD_V1).toBe(

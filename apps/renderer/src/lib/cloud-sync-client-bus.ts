@@ -23,6 +23,8 @@ import { getRendererClientBus } from "./session-timeline-client-bus.ts";
  * Preferences persist per workspace in the cloud chat catalog.
  */
 
+const CLOUD_WORKSPACE_ROOT = "/home/zuse/workspace";
+
 export const cloudSyncSupported = (): boolean =>
 	getAppBridge()?.cloudSyncConfigure !== undefined;
 
@@ -62,7 +64,11 @@ const resolveWorkspaceFolderId = async (
 	const client = getRendererClientBus().client(workspaceId as never);
 	if (client === null) return null;
 	const folders = await Effect.runPromise(client["workspace.list"]({}));
-	return folders[0]?.id ?? null;
+	return (
+		folders.find((folder) => folder.path === CLOUD_WORKSPACE_ROOT)?.id ??
+		folders[0]?.id ??
+		null
+	);
 };
 
 const startWatcher = (workspaceId: string, entry: ActiveSync): void => {
@@ -164,7 +170,7 @@ const stopSync = async (workspaceId: string): Promise<void> => {
 		enabled: false,
 		localPath: "",
 		hostAlias: `zuse-${workspaceId}`,
-		remotePath: "",
+		remotePath: CLOUD_WORKSPACE_ROOT,
 	});
 	if (status !== undefined && status !== null) {
 		statuses.set(workspaceId, status);

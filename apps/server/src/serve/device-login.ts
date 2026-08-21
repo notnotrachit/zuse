@@ -1,7 +1,7 @@
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
 import { SessionStoreLive } from "../auth/layers/session-store.ts";
-import { refreshStoredSession } from "../auth/layers/stored-session-refresh.ts";
+import { refreshSession } from "../auth/layers/workos.ts";
 import {
 	type DeviceAuthorizationGrant,
 	pollDeviceAuthorization,
@@ -33,25 +33,18 @@ export const ensureServeSession = (
 			if (existing.expiresAt - Date.now() > 60_000) {
 				return { email: existing.user.email };
 			}
-			const refreshed = yield* Effect.result(
-				refreshStoredSession(store, {
-					clientId: options.clientId,
-					seed: existing,
-					refreshSkewMs: 60_000,
-				}),
+			const refreshed = yield* Effect.exit(
+				refreshSession(options.clientId, existing.refreshToken),
 			);
-			if (refreshed._tag === "Success") {
-				return { email: refreshed.success.user.email };
+			if (Exit.isSuccess(refreshed)) {
+				yield* store
+					.write(refreshed.value)
+					.pipe(Effect.mapError((cause) => new Error(cause.reason)));
+				return { email: refreshed.value.user.email };
 			}
-			if (
-				!(
-					refreshed.failure._tag === "AuthTokenError" &&
-					(refreshed.failure.code === "invalid_grant" ||
-						refreshed.failure.reason === "Signed out during refresh.")
-				)
-			) {
-				return yield* Effect.fail(new Error(refreshed.failure.reason));
-			}
+			yield* store
+				.clear()
+				.pipe(Effect.mapError((cause) => new Error(cause.reason)));
 		}
 
 		const grant = yield* Effect.tryPromise({
@@ -70,7 +63,7 @@ export const ensureServeSession = (
 				cause instanceof Error ? cause : new Error(String(cause)),
 		});
 		yield* store
-			.withLock(store.write(session))
+			.write(session)
 			.pipe(Effect.mapError((cause) => new Error(cause.reason)));
 		return { email: session.user.email };
 	}).pipe(Effect.provide(SessionStoreLive));

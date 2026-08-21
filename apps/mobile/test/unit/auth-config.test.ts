@@ -17,7 +17,7 @@ describe("mobile relay configuration", () => {
 		expect(defaultWorkosClientId(false)).toBe(
 			"client_01KWGQ818571ARFATQ3G9AR2Y2",
 		);
-		expect(defaultRelayBaseUrl(true)).toBe("https://relay-staging.stuff.md");
+		expect(defaultRelayBaseUrl(true)).toBe("https://relay-staging.zuse.sh");
 		expect(defaultRelayBaseUrl(false)).toBe("https://relay.stuff.md");
 	});
 
@@ -35,7 +35,7 @@ describe("mobile relay configuration", () => {
 		for (const profile of ["development", "preview"]) {
 			expect(eas.build[profile]?.env).toMatchObject({
 				EXPO_PUBLIC_WORKOS_CLIENT_ID: "client_01KW6ZEZKVMZ0G429A89XZD83Q",
-				EXPO_PUBLIC_ZUSE_RELAY_URL: "https://relay-staging.stuff.md",
+				EXPO_PUBLIC_ZUSE_RELAY_URL: "https://relay-staging.zuse.sh",
 			});
 		}
 		expect(eas.build.production?.env?.EXPO_PUBLIC_WORKOS_CLIENT_ID).toBe(

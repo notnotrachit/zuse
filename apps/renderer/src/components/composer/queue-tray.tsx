@@ -13,11 +13,9 @@ import { TrayPill } from "./tray-pill.tsx";
 export function QueueTray({
 	sessionId,
 	environmentId,
-	waitingForSandbox = false,
 }: {
 	sessionId: SessionId;
 	environmentId: EnvironmentId;
-	readonly waitingForSandbox?: boolean;
 }) {
 	const timeline = useRendererSessionTimeline(
 		sessionId,
@@ -50,9 +48,6 @@ export function QueueTray({
 
 	return (
 		<div ref={listRef}>
-			<div className="border-b border-border/40 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
-				{waitingForSandbox ? "Waiting for sandbox" : "Queued"}
-			</div>
 			{showPausedPill ? (
 				<TrayPill
 					flush

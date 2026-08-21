@@ -496,6 +496,15 @@ export const ProviderServiceLive = Layer.effect(
 							resumeCursor,
 						).pipe(Effect.provideService(AttachmentService, attachmentService));
 					} else if (input.providerId === "cursor") {
+						if (apiKey === null || apiKey.trim().length === 0) {
+							return yield* Effect.fail(
+								new AgentSessionStartError({
+									providerId: "cursor",
+									reason:
+										"API key required. Add an API key in provider settings and try again.",
+								}),
+							);
+						}
 						const userMcpServers = yield* mcp.resolveForCursorSession(cwd);
 						providerHandle = yield* startCursorSession(
 							driverInput,

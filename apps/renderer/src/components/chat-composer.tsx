@@ -109,7 +109,6 @@ import { parseComposerInput } from "../composer/segment-parser.ts";
 import { uploadAttachment } from "../lib/attachments.ts";
 import {
 	cloudChatShowsWorking,
-	cloudWorkspaceIsStarting,
 	deriveCloudChatActivity,
 } from "../lib/cloud-chat-activity.ts";
 import { useCloudChatSummaryForSession } from "../lib/cloud-workspaces.ts";
@@ -1298,10 +1297,6 @@ export function ChatComposer({
 								<QueueTray
 									environmentId={qualifiedEnvironmentId}
 									sessionId={sessionId}
-									waitingForSandbox={
-										cloudSummary !== null &&
-										cloudWorkspaceIsStarting(cloudSummary)
-									}
 								/>
 							</div>
 						) : null}

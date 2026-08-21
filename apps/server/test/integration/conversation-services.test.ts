@@ -1063,7 +1063,6 @@ describe("ConversationServices — chat & session lifecycle", () => {
 				chats,
 				chatId,
 				sessionId,
-				workspaceRoot: "/home/zuse/workspace",
 				launchIntent: {
 					commandId,
 					turnId,

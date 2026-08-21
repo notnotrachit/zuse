@@ -182,6 +182,10 @@ const bridge = {
 				message: string;
 				defaultPrompt?: string;
 			} | null>,
+		listLocalServers: () =>
+			ipcRenderer.invoke("browser:listLocalServers") as Promise<
+				ReadonlyArray<{ name: string; port: number }>
+			>,
 		saveRecording: (bytes: Uint8Array, mimeType: string, durationMs: number) =>
 			ipcRenderer.invoke(
 				"browser:saveRecording",
@@ -308,8 +312,6 @@ const bridge = {
 			ipcRenderer.invoke("app:openPathInApp", path, appId) as Promise<void>,
 		revealPath: (path: string) =>
 			ipcRenderer.invoke("app:revealPath", path) as Promise<void>,
-		copyText: (text: string) =>
-			ipcRenderer.invoke("app:copyText", text) as Promise<void>,
 		copyPath: (path: string) =>
 			ipcRenderer.invoke("app:copyPath", path) as Promise<void>,
 		copyFileContents: (path: string) =>
@@ -418,32 +420,6 @@ const bridge = {
 		updateProfileLabel: (profileId: string, label: string) =>
 			ipcRenderer.invoke("ssh:updateProfileLabel", profileId, label) as Promise<
 				import("@zuse/contracts").RemoteEnvironmentProfile
-			>,
-	},
-	tunnels: {
-		open: (input: {
-			environmentId: string;
-			remotePort: number;
-			cloudWorkspaceId?: string;
-		}) =>
-			ipcRenderer.invoke("tunnels:open", input) as Promise<{
-				environmentId: string;
-				remotePort: number;
-				localPort: number;
-			}>,
-		close: (environmentId: string, remotePort: number) =>
-			ipcRenderer.invoke(
-				"tunnels:close",
-				environmentId,
-				remotePort,
-			) as Promise<void>,
-		list: (environmentId?: string) =>
-			ipcRenderer.invoke("tunnels:list", environmentId) as Promise<
-				ReadonlyArray<{
-					environmentId: string;
-					remotePort: number;
-					localPort: number;
-				}>
 			>,
 	},
 	tailnet: {

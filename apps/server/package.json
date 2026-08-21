@@ -38,7 +38,7 @@
 	},
 	"scripts": {
 		"serve": "tsx src/bin.ts",
-		"build:bundle": "tsdown --config tsdown.config.ts && tsc -p tsconfig.build.json",
+		"build:bundle": "vp pack && tsc -p tsconfig.build.json",
 		"build": "bun run --filter renderer build && vp pack && tsc -p tsconfig.build.json && node scripts/copy-client.mjs",
 		"build:cloud-runtime": "node scripts/build-linux-runtime.mjs",
 		"check-types": "tsc --noEmit",

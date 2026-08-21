@@ -101,7 +101,7 @@ const aad = (accountId: string, workspaceId: string): Uint8Array =>
 
 export const CloudWorkspaceLaunchIntentCipherLive = Effect.gen(function* () {
 	const config = yield* RelayConfiguration;
-	const encodedKey = config.cloudDataEncryptionKey;
+	const encodedKey = config.cloudCredentialVaultKey;
 	if (encodedKey === undefined)
 		return yield* Effect.fail(
 			failure("launch_intent_encryption_not_configured"),

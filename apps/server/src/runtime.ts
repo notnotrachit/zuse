@@ -312,6 +312,7 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
 			makeCloudEnrollmentLayer(deps.cloudEnrollment).pipe(
 				Layer.provide(LanAuthLayer),
 				Layer.provide(ManagedTunnelLayer),
+				Layer.provide(CredentialsLayer),
 			),
 		),
 	);
@@ -492,6 +493,8 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
 	);
 	const AccountAccessLayer = AccountAccessServiceLive.pipe(
 		Layer.provide(AccountAccessProcessLive),
+		Layer.provide(AuthLayer),
+		Layer.provide(EnrolledLanAuthLayer),
 		Layer.provide(CredentialsLayer),
 		Layer.provide(AppPathsLayer),
 		Layer.provide(MachineRuntimeRoleLayer),

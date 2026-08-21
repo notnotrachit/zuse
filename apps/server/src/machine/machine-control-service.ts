@@ -2,17 +2,13 @@ import {
 	BillingCheckout,
 	type BillingCheckoutRequest,
 	BillingPortal,
-	CloudAccountImage,
-	type CloudAccountImageBuildRequest,
-	type CloudAuthConfigureRequest,
-	CloudAuthLoginOperation,
-	type CloudAuthProvider,
-	CloudAuthProviderStatus,
-	CloudAuthStatus,
 	CloudBillingSummary,
 	CloudBillingUsagePage,
 	CloudChatList,
-	CloudGithubStatus,
+	CloudCredentialConnection,
+	type CloudCredentialConnectRequest,
+	type CloudCredentialKind,
+	CloudCredentialList,
 	CloudProject,
 	CloudProjectBuild,
 	type CloudProjectConnectRequest,
@@ -26,7 +22,6 @@ import {
 	type CloudWorkspaceCreateRequest,
 	CloudWorkspaceLaunch,
 	CloudWorkspaceList,
-	CloudWorkspacePreviewUrl,
 	CloudWorkspaceSshAccess,
 	EntitlementList,
 	type EnvironmentId,
@@ -57,47 +52,6 @@ import { AuthService } from "../auth/services/auth-service.ts";
 import { MachineRuntimeRole } from "./machine-runtime-role.ts";
 
 export interface MachineControlServiceShape {
-	readonly cloudAccountImage: () => Effect.Effect<
-		CloudAccountImage,
-		MachineControlError
-	>;
-	readonly buildCloudAccountImage: (
-		input: CloudAccountImageBuildRequest,
-	) => Effect.Effect<CloudAccountImage, MachineControlError>;
-	readonly cloudAuthStatus: () => Effect.Effect<
-		CloudAuthStatus,
-		MachineControlError
-	>;
-	readonly provisionCloudAuth: () => Effect.Effect<
-		CloudAuthStatus,
-		MachineControlError
-	>;
-	readonly configureCloudAuth: (
-		input: CloudAuthConfigureRequest,
-	) => Effect.Effect<CloudAuthProviderStatus, MachineControlError>;
-	readonly startCloudAuthLogin: (
-		providerId: "codex" | "grok",
-	) => Effect.Effect<CloudAuthLoginOperation, MachineControlError>;
-	readonly pollCloudAuthLogin: (
-		operationId: string,
-	) => Effect.Effect<CloudAuthLoginOperation, MachineControlError>;
-	readonly cancelCloudAuthLogin: (
-		operationId: string,
-	) => Effect.Effect<CloudAuthLoginOperation, MachineControlError>;
-	readonly disconnectCloudAuth: (
-		providerId: CloudAuthProvider,
-	) => Effect.Effect<CloudAuthProviderStatus, MachineControlError>;
-	readonly cloudGithubStatus: () => Effect.Effect<
-		CloudGithubStatus,
-		MachineControlError
-	>;
-	readonly installCloudGithub: () => Effect.Effect<
-		{ readonly url: string },
-		MachineControlError
-	>;
-	readonly disconnectCloudGithub: (
-		installationId: number,
-	) => Effect.Effect<{ readonly ok: boolean }, MachineControlError>;
 	readonly cloudBillingSummary: () => Effect.Effect<
 		CloudBillingSummary,
 		MachineControlError
@@ -121,9 +75,6 @@ export interface MachineControlServiceShape {
 	>;
 	readonly connectCloudProject: (
 		input: CloudProjectConnectRequest,
-	) => Effect.Effect<CloudProject, MachineControlError>;
-	readonly removeCloudProject: (
-		projectId: string,
 	) => Effect.Effect<CloudProject, MachineControlError>;
 	readonly prepareCloudProject: (
 		input: CloudProjectPrepareRequest,
@@ -167,10 +118,16 @@ export interface MachineControlServiceShape {
 	readonly cloudWorkspaceSshAccess: (
 		workspaceId: string,
 	) => Effect.Effect<CloudWorkspaceSshAccess, MachineControlError>;
-	readonly cloudWorkspacePreviewUrl: (
-		workspaceId: string,
-		port: number,
-	) => Effect.Effect<CloudWorkspacePreviewUrl, MachineControlError>;
+	readonly cloudCredentials: () => Effect.Effect<
+		CloudCredentialList,
+		MachineControlError
+	>;
+	readonly connectCloudCredential: (
+		input: CloudCredentialConnectRequest,
+	) => Effect.Effect<CloudCredentialConnection, MachineControlError>;
+	readonly disconnectCloudCredential: (
+		kind: CloudCredentialKind,
+	) => Effect.Effect<CloudCredentialConnection, MachineControlError>;
 	readonly list: () => Effect.Effect<MachineList, MachineControlError>;
 	readonly get: (
 		machineId: string,
@@ -276,10 +233,7 @@ export const mapRelayErrorCode = (
 	}
 	if (code === "cloud_entitlement_required")
 		return new MachineControlError("entitlement-required");
-	if (
-		code === "cloud_project_not_ready" ||
-		code === "cloud_image_rebuild_required"
-	)
+	if (code === "cloud_project_not_ready")
 		return new MachineControlError("invalid-state");
 	if (code === "cloud_credential_connection_required")
 		return new MachineControlError("credential-required");
@@ -296,12 +250,6 @@ export const mapRelayErrorCode = (
 	}
 	if (code === "invalid_machine_state" || code === "machine_not_recoverable") {
 		return new MachineControlError("invalid-state");
-	}
-	// An expired or rejected credential must surface as an auth fault, not a
-	// generic failure — clients stop retrying and prompt for sign-in instead
-	// of looping a reconnect that can never succeed.
-	if (status === 401 || status === 403) {
-		return new MachineControlError("not-allowed");
 	}
 	if (status === 409) return new MachineControlError("conflict");
 	if (status >= 500) return new MachineControlError("provider-unavailable");
@@ -382,65 +330,6 @@ export const MachineControlServiceLive: Layer.Layer<
 			});
 
 		return MachineControlService.of({
-			cloudAccountImage: () =>
-				request(RelayPaths.cloudAccountImage, CloudAccountImage),
-			buildCloudAccountImage: (input) =>
-				request(
-					RelayPaths.cloudAccountImageBuild,
-					CloudAccountImage,
-					"POST",
-					input,
-				),
-			cloudAuthStatus: () => request(RelayPaths.cloudAuth, CloudAuthStatus),
-			provisionCloudAuth: () =>
-				request(RelayPaths.cloudAuthProvision, CloudAuthStatus, "POST", {}),
-			configureCloudAuth: (input) =>
-				request(
-					RelayPaths.cloudAuthConfigure,
-					CloudAuthProviderStatus,
-					"POST",
-					input,
-				),
-			startCloudAuthLogin: (providerId) =>
-				request(
-					RelayPaths.cloudAuthLoginStart,
-					CloudAuthLoginOperation,
-					"POST",
-					{ providerId },
-				),
-			pollCloudAuthLogin: (operationId) =>
-				request(
-					RelayPaths.cloudAuthLoginPoll(operationId),
-					CloudAuthLoginOperation,
-				),
-			cancelCloudAuthLogin: (operationId) =>
-				request(
-					RelayPaths.cloudAuthLoginCancel(operationId),
-					CloudAuthLoginOperation,
-					"POST",
-					{},
-				),
-			disconnectCloudAuth: (providerId) =>
-				request(
-					RelayPaths.cloudAuthDisconnect(providerId),
-					CloudAuthProviderStatus,
-					"DELETE",
-				),
-			cloudGithubStatus: () =>
-				request(RelayPaths.cloudGithub, CloudGithubStatus),
-			installCloudGithub: () =>
-				request(
-					RelayPaths.cloudGithubInstall,
-					Schema.Struct({ url: Schema.String }),
-					"POST",
-					{},
-				),
-			disconnectCloudGithub: (installationId) =>
-				request(
-					RelayPaths.cloudGithubDisconnect(installationId),
-					Schema.Struct({ ok: Schema.Boolean }),
-					"DELETE",
-				),
 			cloudBillingSummary: () =>
 				request(RelayPaths.cloudBillingSummary, CloudBillingSummary),
 			cloudBillingUsage: (cursor, limit) => {
@@ -463,8 +352,6 @@ export const MachineControlServiceLive: Layer.Layer<
 			cloudProjects: () => request(RelayPaths.cloudProjects, CloudProjectList),
 			connectCloudProject: (input) =>
 				request(RelayPaths.cloudProjects, CloudProject, "POST", input),
-			removeCloudProject: (projectId) =>
-				request(RelayPaths.cloudProject(projectId), CloudProject, "DELETE"),
 			prepareCloudProject: (input) =>
 				request(
 					RelayPaths.cloudProjectPrepare(input.projectId),
@@ -541,12 +428,21 @@ export const MachineControlServiceLive: Layer.Layer<
 					"POST",
 					{ workspaceId },
 				),
-			cloudWorkspacePreviewUrl: (workspaceId, port) =>
+			cloudCredentials: () =>
+				request(RelayPaths.cloudCredentials, CloudCredentialList),
+			connectCloudCredential: (input) =>
 				request(
-					RelayPaths.cloudWorkspacePreviewUrl(workspaceId),
-					CloudWorkspacePreviewUrl,
+					RelayPaths.cloudCredentials,
+					CloudCredentialConnection,
 					"POST",
-					{ port },
+					input,
+				),
+			disconnectCloudCredential: (kind) =>
+				request(
+					RelayPaths.cloudCredentialDisconnect(kind),
+					CloudCredentialConnection,
+					"POST",
+					{},
 				),
 			offers: () => request(RelayPaths.machineOffers, MachineOfferList),
 			list: () => request(RelayPaths.machines, MachineList),

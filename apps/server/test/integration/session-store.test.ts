@@ -9,8 +9,6 @@ import type { SessionBundle } from "../../src/auth/layers/workos.ts";
 import { SessionStore } from "../../src/auth/services/session-store.ts";
 
 const originalAuthDir = process.env.ZUSE_AUTH_DIR;
-const originalClientId = process.env.WORKOS_CLIENT_ID;
-const TEST_CLIENT_ID = "client_test_integration";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -18,11 +16,6 @@ afterEach(async () => {
 		delete process.env.ZUSE_AUTH_DIR;
 	} else {
 		process.env.ZUSE_AUTH_DIR = originalAuthDir;
-	}
-	if (originalClientId === undefined) {
-		delete process.env.WORKOS_CLIENT_ID;
-	} else {
-		process.env.WORKOS_CLIENT_ID = originalClientId;
 	}
 	await Promise.all(
 		tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
@@ -33,15 +26,8 @@ const makeTempAuthDir = async (): Promise<string> => {
 	const dir = await mkdtemp(join(tmpdir(), "zuse-auth-"));
 	tempDirs.push(dir);
 	process.env.ZUSE_AUTH_DIR = dir;
-	process.env.WORKOS_CLIENT_ID = TEST_CLIENT_ID;
 	return dir;
 };
-
-const authPath = (dir: string): string =>
-	join(dir, `auth-${TEST_CLIENT_ID}.json`);
-
-const lockPath = (dir: string): string =>
-	join(dir, `auth-${TEST_CLIENT_ID}.lock`);
 
 const makeBundle = (overrides: Partial<SessionBundle> = {}): SessionBundle => ({
 	accessToken: "access",
@@ -81,7 +67,7 @@ describe("SessionStoreLive", () => {
 		const dir = await makeTempAuthDir();
 		const bundle = makeBundle({ refreshToken: "newer", refreshedAt: 2 });
 		await withStore((svc) => svc.write(bundle));
-		const path = authPath(dir);
+		const path = join(dir, "auth.json");
 		const mode = (await stat(path)).mode & 0o777;
 		expect(mode).toBe(0o600);
 		expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
@@ -94,11 +80,11 @@ describe("SessionStoreLive", () => {
 
 	it("fails on corrupt JSON but treats wrong-shape JSON as signed out", async () => {
 		const dir = await makeTempAuthDir();
-		await writeFile(authPath(dir), "{", { mode: 0o600 });
+		await writeFile(join(dir, "auth.json"), "{", { mode: 0o600 });
 		const corrupt = await withStore((svc) => svc.read().pipe(Effect.result));
 		expect(corrupt._tag).toBe("Failure");
 
-		await writeFile(authPath(dir), JSON.stringify({ nope: true }), {
+		await writeFile(join(dir, "auth.json"), JSON.stringify({ nope: true }), {
 			mode: 0o600,
 		});
 		const wrongShape = await withStore((svc) => svc.read());
@@ -119,7 +105,7 @@ describe("SessionStoreLive", () => {
 	it("serializes work under the lock and breaks stale locks", async () => {
 		const dir = await makeTempAuthDir();
 		await writeFile(
-			lockPath(dir),
+			join(dir, "auth.lock"),
 			JSON.stringify({ pid: 99999999, createdAt: Date.now() - 60_000 }),
 			{ mode: 0o600 },
 		);

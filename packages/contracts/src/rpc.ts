@@ -31,32 +31,18 @@ import {
 	BrowserSetCredentialRpc,
 } from "./browser.ts";
 import {
-	CloudAuthConfigureRpc,
-	CloudAuthDisconnectRpc,
-	CloudAuthLoginCancelRpc,
-	CloudAuthLoginPollRpc,
-	CloudAuthLoginStartRpc,
-	CloudAuthProvisionRpc,
-	CloudAuthStatusRpc,
-} from "./cloud-auth.ts";
-import {
 	CloudBillingSetCapRpc,
 	CloudBillingSummaryRpc,
 	CloudBillingUsageRpc,
 } from "./cloud-billing.ts";
 import {
-	CloudGithubDisconnectRpc,
-	CloudGithubInstallRpc,
-	CloudGithubStatusRpc,
-} from "./cloud-github.ts";
-import {
-	CloudAccountImageBuildRpc,
-	CloudAccountImageStatusRpc,
 	CloudChatsListRpc,
+	CloudCredentialsDisconnectRpc,
+	CloudCredentialsImportLocalRpc,
+	CloudCredentialsListRpc,
 	CloudProjectsConnectRpc,
 	CloudProjectsListRpc,
 	CloudProjectsPrepareRpc,
-	CloudProjectsRemoveRpc,
 	CloudProvidersRpc,
 	CloudTranscriptCheckpointGetRpc,
 	CloudTranscriptMessagePageGetRpc,
@@ -67,7 +53,6 @@ import {
 	CloudWorkspacesGetRpc,
 	CloudWorkspacesListRpc,
 	CloudWorkspacesPauseRpc,
-	CloudWorkspacesPreviewUrlRpc,
 	CloudWorkspacesRestartRpc,
 	CloudWorkspacesResumeRpc,
 	CloudWorkspacesSshAccessRpc,
@@ -156,9 +141,12 @@ import {
 	LinearPrepareContextRpc,
 } from "./linear.ts";
 import {
-	AccountAccessConfigureCustomRpc,
+	AccountAccessContinueClaudeTransferRpc,
+	AccountAccessCreateClaudeTransferRpc,
+	AccountAccessDetectLocalRpc,
 	AccountAccessDisconnectRpc,
-	AccountAccessSetCredentialRpc,
+	AccountAccessImportRpc,
+	AccountAccessPrepareImportRpc,
 	AccountAccessStartLoginRpc,
 	AccountAccessStatusRpc,
 	MachinePrivateNetworkEnableRpc,
@@ -204,7 +192,6 @@ import {
 } from "./permission.ts";
 import { PingRpc } from "./ping.ts";
 import { PokemonEnsureSpriteCachedRpc, PokemonPokedexRpc } from "./pokemon.ts";
-import { PreviewsListServersRpc } from "./previews.ts";
 import {
 	PtyCloseRpc,
 	PtyOpenRpc,
@@ -330,7 +317,6 @@ import {
  */
 export const MemoizeRpcs = RpcGroup.make(
 	PingRpc,
-	PreviewsListServersRpc,
 	AnalyticsGetContextRpc,
 	AnalyticsContextChangesRpc,
 	AuthGetSessionRpc,
@@ -359,22 +345,9 @@ export const MemoizeRpcs = RpcGroup.make(
 	CloudBillingSummaryRpc,
 	CloudBillingUsageRpc,
 	CloudBillingSetCapRpc,
-	CloudAuthStatusRpc,
-	CloudAuthProvisionRpc,
-	CloudAuthConfigureRpc,
-	CloudAuthLoginStartRpc,
-	CloudAuthLoginPollRpc,
-	CloudAuthLoginCancelRpc,
-	CloudAuthDisconnectRpc,
-	CloudGithubStatusRpc,
-	CloudGithubInstallRpc,
-	CloudGithubDisconnectRpc,
-	CloudAccountImageStatusRpc,
-	CloudAccountImageBuildRpc,
 	CloudProvidersRpc,
 	CloudProjectsListRpc,
 	CloudProjectsConnectRpc,
-	CloudProjectsRemoveRpc,
 	CloudProjectsPrepareRpc,
 	CloudWorkspacesListRpc,
 	CloudWorkspacesGetRpc,
@@ -386,12 +359,14 @@ export const MemoizeRpcs = RpcGroup.make(
 	CloudWorkspacesResumeRpc,
 	CloudWorkspacesRestartRpc,
 	CloudWorkspacesSshAccessRpc,
-	CloudWorkspacesPreviewUrlRpc,
 	CloudWorkspacesArchiveRpc,
 	CloudWorkspacesUnarchiveRpc,
 	CloudWorkspacesDeleteRpc,
 	CloudTranscriptCheckpointGetRpc,
 	CloudTranscriptMessagePageGetRpc,
+	CloudCredentialsListRpc,
+	CloudCredentialsImportLocalRpc,
+	CloudCredentialsDisconnectRpc,
 	MachinesOffersRpc,
 	MachinesListRpc,
 	MachinesGetRpc,
@@ -413,9 +388,12 @@ export const MemoizeRpcs = RpcGroup.make(
 	MachineResourcesWatchRpc,
 	MachineSshModeSetRpc,
 	AccountAccessStatusRpc,
+	AccountAccessDetectLocalRpc,
 	AccountAccessStartLoginRpc,
-	AccountAccessSetCredentialRpc,
-	AccountAccessConfigureCustomRpc,
+	AccountAccessPrepareImportRpc,
+	AccountAccessCreateClaudeTransferRpc,
+	AccountAccessContinueClaudeTransferRpc,
+	AccountAccessImportRpc,
 	AccountAccessDisconnectRpc,
 	RelayEnvironmentsRpc,
 	RelayConnectEnvironmentRpc,

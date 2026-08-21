@@ -38,38 +38,11 @@ export const openExternal = async (url: string): Promise<void> => {
 	window.open(url, "_blank", "noopener,noreferrer");
 };
 
-const copyTextWithSelection = (text: string): boolean => {
-	if (globalThis.document?.body === undefined) return false;
-	const input = document.createElement("textarea");
-	input.value = text;
-	input.setAttribute("readonly", "");
-	input.style.position = "fixed";
-	input.style.opacity = "0";
-	document.body.append(input);
-	input.select();
-	input.setSelectionRange(0, text.length);
-	const copied = document.execCommand("copy");
-	input.remove();
-	return copied;
-};
-
 export const copyText = async (text: string): Promise<void> => {
-	const bridge = (globalThis.window?.zuse ?? globalThis.window?.memoize)?.app;
-	if (bridge?.copyText !== undefined) {
-		await bridge.copyText(text);
+	if (navigator.clipboard?.writeText !== undefined) {
+		await navigator.clipboard.writeText(text);
 		return;
 	}
-	// Older desktop preloads do not expose copyText yet. Keep copy usable until
-	// the next app restart swaps in the new preload instead of misusing copyPath,
-	// which deliberately accepts existing filesystem paths only.
-	if (bridge !== undefined && copyTextWithSelection(text)) return;
-	if (navigator.clipboard?.writeText === undefined) {
-		if (copyTextWithSelection(text)) return;
-		throw new Error("Clipboard access is unavailable");
-	}
-	try {
-		await navigator.clipboard.writeText(text);
-	} catch (cause) {
-		if (!copyTextWithSelection(text)) throw cause;
-	}
+	const bridge = (globalThis.window?.zuse ?? globalThis.window?.memoize)?.app;
+	if (bridge?.copyPath !== undefined) await bridge.copyPath(text);
 };

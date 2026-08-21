@@ -4,9 +4,6 @@ import { Card } from "../ui/card.tsx";
 import { Frame, FrameFooter } from "../ui/frame.tsx";
 import { RemoteAccessSectionHeader } from "./remote-access/section-header.tsx";
 
-export const COMPACT_CLOUD_ACTION =
-	"h-7 pointer-coarse:after:min-h-7 pointer-coarse:after:min-w-7";
-
 export function CloudSettingsGroup({
 	title,
 	description,

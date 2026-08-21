@@ -10,9 +10,7 @@ import { describe, expect, test } from "vitest";
 import { WorkspaceGateway } from "../../src/workspace-gateway.ts";
 import {
 	decodeGatewayMessage,
-	LEGACY_WORKSPACE_GATEWAY_PROTOCOL,
 	WORKSPACE_GATEWAY_BACKPRESSURE_CLOSE,
-	WORKSPACE_GATEWAY_PROTOCOL,
 	WORKSPACE_GATEWAY_RUNTIME_UNAVAILABLE_CLOSE,
 	WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE,
 } from "../../src/workspace-gateway-protocol.ts";
@@ -23,9 +21,6 @@ type Attachment =
 			readonly workspaceId: string;
 			readonly generation: number;
 			readonly gatewayEpoch: number;
-			readonly protocol?:
-				| typeof WORKSPACE_GATEWAY_PROTOCOL
-				| typeof LEGACY_WORKSPACE_GATEWAY_PROTOCOL;
 	  }
 	| {
 			readonly role: "client";
@@ -33,9 +28,6 @@ type Attachment =
 			readonly workspaceId: string;
 			readonly generation: number;
 			readonly gatewayEpoch: number;
-			readonly protocol?:
-				| typeof WORKSPACE_GATEWAY_PROTOCOL
-				| typeof LEGACY_WORKSPACE_GATEWAY_PROTOCOL;
 	  };
 
 const fence = {
@@ -136,40 +128,6 @@ describe("workspace gateway", () => {
 				payload: "rpc-frame",
 			},
 		);
-	});
-
-	test("translates frames for a legacy runtime without downgrading clients", async () => {
-		const client = new FakeSocket({
-			role: "client",
-			connectionId: "client-1",
-			protocol: WORKSPACE_GATEWAY_PROTOCOL,
-			...fence,
-		});
-		const runtime = new FakeSocket({
-			role: "runtime",
-			protocol: LEGACY_WORKSPACE_GATEWAY_PROTOCOL,
-			...fence,
-		});
-		const { gateway } = makeGateway({ runtimes: [runtime], clients: [client] });
-
-		await gateway.webSocketMessage(asCloudflareSocket(client), "request");
-		expect(JSON.parse(runtime.sent[0] as string)).toEqual({
-			type: "client.frame",
-			connectionId: "client-1",
-			encoding: "text",
-			payload: "request",
-		});
-
-		await gateway.webSocketMessage(
-			asCloudflareSocket(runtime),
-			JSON.stringify({
-				type: "runtime.frame",
-				connectionId: "client-1",
-				encoding: "text",
-				payload: "response",
-			}),
-		);
-		expect(client.sent).toEqual(["response"]);
 	});
 
 	test("closes a stale client when only another runtime generation exists", async () => {
@@ -325,7 +283,6 @@ describe("workspace gateway", () => {
 					headers: {
 						upgrade: "websocket",
 						"x-zuse-gateway-role": "runtime",
-						"x-zuse-gateway-protocol": WORKSPACE_GATEWAY_PROTOCOL,
 						"x-zuse-gateway-workspace": fence.workspaceId,
 						"x-zuse-gateway-generation": String(fence.generation),
 						"x-zuse-gateway-epoch": String(fence.gatewayEpoch),
@@ -388,7 +345,6 @@ describe("workspace gateway", () => {
 					headers: {
 						upgrade: "websocket",
 						"x-zuse-gateway-role": "runtime",
-						"x-zuse-gateway-protocol": WORKSPACE_GATEWAY_PROTOCOL,
 						"x-zuse-gateway-workspace": fence.workspaceId,
 						"x-zuse-gateway-generation": String(fence.generation),
 						"x-zuse-gateway-epoch": String(fence.gatewayEpoch),

@@ -13,8 +13,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { cloudSshConfigPath } from "../ssh/cloud-ssh-service.ts";
-
 /**
  * One-way cloud→local file sync for cloud workspaces.
  *
@@ -105,6 +103,7 @@ interface SyncEntry {
 	timer: NodeJS.Timeout | null;
 }
 
+const sshConfigPath = (): string => join(homedir(), ".zuse", "ssh", "config");
 const ticketPath = (workspaceId: string): string =>
 	join(homedir(), ".zuse", "ssh", "tickets", `${workspaceId}.json`);
 
@@ -278,7 +277,7 @@ export class CloudSyncManager {
 				hostAlias: entry.config.hostAlias,
 				remotePath: entry.config.remotePath,
 				localPath: entry.config.localPath,
-				sshConfigPath: cloudSshConfigPath(),
+				sshConfigPath: sshConfigPath(),
 				gitignoreFilter: await this.resolveGitignoreFilter(),
 			});
 			let result = await this.runRsync(args);
@@ -360,7 +359,7 @@ const streamTarArchive = (
 			"ssh",
 			[
 				"-F",
-				cloudSshConfigPath(),
+				sshConfigPath(),
 				input.hostAlias,
 				"tar",
 				"-C",

@@ -2,8 +2,10 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
-	AccountAccessCustomConfigRequest,
-	AccountAccessSetCredentialRequest,
+	AccountAccessClaudeTransferContinuation,
+	AccountAccessCreateClaudeTransferRequest,
+	AccountAccessImportRequest,
+	AccountAccessPreparedImport,
 	AccountAccessStatus,
 	AccountAccessTransferEvent,
 	BillingCheckoutRequest,
@@ -154,17 +156,17 @@ describe("managed machine contracts", () => {
 		const status = Schema.decodeUnknownSync(AccountAccessStatus)({
 			providers: [
 				{
-					providerId: "codex",
+					providerId: "github",
 					state: "connected",
 					installed: true,
-					accountLabel: "ChatGPT Plus",
-					authMethod: "subscription",
-					verifiedAt: 1_800_000_000_000,
+					accountLabel: "octocat",
+					authKind: "device",
+					lastSyncedAt: 1_800_000_000_000,
 				},
 			],
 		});
 
-		expect(status.providers[0]?.providerId).toBe("codex");
+		expect(status.providers[0]?.providerId).toBe("github");
 		expect(JSON.stringify(status)).not.toContain("token");
 	});
 
@@ -184,26 +186,39 @@ describe("managed machine contracts", () => {
 		expect(status.progressPercent).toBe(85);
 	});
 
-	it("accepts target-owned credentials and custom provider metadata", () => {
-		const credential = Schema.decodeUnknownSync(
-			AccountAccessSetCredentialRequest,
-		)({
-			providerId: "claude",
-			method: "subscription",
-			secret: "sk-ant-oat01-machine-token",
+	it("binds sealed Claude transfers to a prepared environment import", () => {
+		const prepared = Schema.decodeUnknownSync(AccountAccessPreparedImport)({
+			transferId: "access_01JZUSE0000000000000000000",
+			accountId: "user_01JZUSE0000000000000000000",
+			environmentId: "01JZUSE0000000000000000000",
+			recipientPublicKey: "recipient-public-key",
+			expiresAt: 1_800_000_300_000,
+			environmentProof: "signed-environment-proof",
 		});
-		const custom = Schema.decodeUnknownSync(AccountAccessCustomConfigRequest)({
-			providerId: "codex",
-			baseUrl: "https://gateway.example/v1",
-			secret: "provider-secret",
-			modelProvider: "company-gateway",
+		const request = Schema.decodeUnknownSync(
+			AccountAccessCreateClaudeTransferRequest,
+		)({ prepared });
+		const imported = Schema.decodeUnknownSync(AccountAccessImportRequest)({
+			transferId: prepared.transferId,
+			sealed: {
+				ephemeralPublicKey: "ephemeral-public-key",
+				nonce: "nonce",
+				ciphertext: "ciphertext",
+			},
 		});
 
-		expect(credential.method).toBe("subscription");
-		expect(custom.modelProvider).toBe("company-gateway");
+		expect(request.prepared.environmentId).toBe(prepared.environmentId);
+		expect(imported.transferId).toBe(prepared.transferId);
+		expect(
+			Schema.decodeUnknownSync(AccountAccessClaudeTransferContinuation)({
+				_tag: "code",
+				transferId: prepared.transferId,
+				code: "one-time-code",
+			}),
+		).toMatchObject({ _tag: "code", transferId: prepared.transferId });
 	});
 
-	it("allows only safe progress events during browser authorization", () => {
+	it("allows only safe progress and ciphertext events during token transfer", () => {
 		expect(
 			Schema.decodeUnknownSync(AccountAccessTransferEvent)({
 				_tag: "verification",
@@ -211,11 +226,19 @@ describe("managed machine contracts", () => {
 				code: "ABCD-EFGH",
 			}),
 		).toMatchObject({ _tag: "verification", code: "ABCD-EFGH" });
-		expect(() =>
+		expect(
 			Schema.decodeUnknownSync(AccountAccessTransferEvent)({
-				_tag: "sealed",
-				secret: "must-not-cross-the-wire",
+				_tag: "input-ready",
 			}),
-		).toThrow();
+		).toEqual({ _tag: "input-ready" });
+		const sealed = Schema.decodeUnknownSync(AccountAccessTransferEvent)({
+			_tag: "sealed",
+			sealed: {
+				ephemeralPublicKey: "ephemeral-public-key",
+				nonce: "nonce",
+				ciphertext: "ciphertext",
+			},
+		});
+		expect(sealed._tag).toBe("sealed");
 	});
 });

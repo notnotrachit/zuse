@@ -13,7 +13,7 @@ const config = Config.layer({
 	workosIssuer: "https://unused.test",
 	mintPrivateKey: Redacted.make("{}"),
 	mintPublicKey: "{}",
-	cloudDataEncryptionKey: Redacted.make(
+	cloudCredentialVaultKey: Redacted.make(
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	),
 });

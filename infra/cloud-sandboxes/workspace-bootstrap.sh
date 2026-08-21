@@ -2,7 +2,8 @@
 set -euo pipefail
 
 status_dir=/var/lib/zuse/workspace
-workspace="${ZUSE_CLOUD_WORKSPACE_ROOT:?}"
+workspace=/home/zuse/workspace
+mirror="/var/cache/zuse/repositories/${ZUSE_PROJECT_CACHE_ID:?}.git"
 mkdir -p "$status_dir"
 rm -f \
   "$status_dir/ready" \
@@ -21,9 +22,8 @@ fail() {
 }
 trap fail ERR
 
-# Runtime and GitHub identity must never survive a fork. Provider-owned agent
-# authentication intentionally belongs to the private account image.
-rm -rf /home/zuse/.zuse-data /home/zuse/.config/gh
+# Snapshot identity must never survive a fork.
+rm -rf /home/zuse/.zuse-data /home/zuse/.config/gh /home/zuse/.claude /home/zuse/.codex
 mkdir -p /home/zuse/.zuse-data
 chmod 700 /home/zuse/.zuse-data
 
@@ -50,8 +50,16 @@ export ZUSE_USER_DATA=/home/zuse/.zuse-data
 credentials_event="$status_dir/credentials-ready-event"
 rm -f "$credentials_event"
 mkfifo -m 600 "$credentials_event"
-runtime_command=(node /opt/zuse/current/bin.mjs serve)
-[[ -f /opt/zuse/current/bin.mjs ]] || runtime_command=(zuse serve --foreground)
+runtime_command=(zuse serve --foreground)
+if [[ -n "${ZUSE_RUNTIME_MANIFEST_URL:-}" && -f "${ZUSE_RUNTIME_PUBLIC_KEY_FILE:-}" ]]; then
+  phase=updating-runtime
+  ZUSE_RUNTIME_INSTALL_ONLY=1 \
+    ZUSE_RUNTIME_SKIP_TOOLCHAIN=1 \
+    ZUSE_RUNTIME_WIRE_PROTOCOL="${ZUSE_RUNTIME_WIRE_PROTOCOL:?}" \
+    node /usr/local/lib/zuse/runtime-updater.mjs \
+    >"$status_dir/runtime-update.log" 2>&1
+  runtime_command=(node /opt/zuse/current/bin.mjs serve)
+fi
 phase=starting-runtime
 (
   set +e
@@ -66,22 +74,6 @@ phase=starting-runtime
 runtime_pid=$!
 (IFS= read -r _ <"$credentials_event") &
 credentials_wait_pid=$!
-
-# The sandbox fork already isolates this normal checkout from every other chat.
-# Reset the requested branch locally; repository freshness belongs to image
-# updates, never this launch path.
-(
-  [[ -d "$workspace/.git" ]] || exit 73
-  target_ref="$ZUSE_BASE_REF"
-  git -C "$workspace" rev-parse --verify "$target_ref^{commit}" >/dev/null 2>&1 || \
-    target_ref="origin/${ZUSE_BASE_REF#origin/}"
-  git -C "$workspace" reset --hard
-  git -C "$workspace" clean -ffd
-  git -C "$workspace" checkout --force -B "$ZUSE_BRANCH" "$target_ref"
-  git -C "$workspace" remote set-url origin "${ZUSE_REPOSITORY_URL:?}"
-) &
-repository_pid=$!
-
 set +e
 wait -n "$runtime_pid" "$credentials_wait_pid"
 set -e
@@ -93,7 +85,17 @@ fi
 rm -f "$credentials_event"
 
 phase=syncing-repository
-wait "$repository_pid"
+rm -rf "$workspace"
+if [[ -d "$mirror" ]]; then
+  git clone --no-hardlinks "$mirror" "$workspace"
+else
+  git clone "${ZUSE_REPOSITORY_URL:?}" "$workspace"
+fi
+cd "$workspace"
+git remote set-url origin "${ZUSE_REPOSITORY_URL:?}"
+remote_ref="${ZUSE_BASE_REF#origin/}"
+git fetch --prune origin "$remote_ref"
+git checkout -B "$ZUSE_BRANCH" FETCH_HEAD
 phase=ready
 touch "$status_dir/ready"
 touch "$status_dir/repository-ready"
