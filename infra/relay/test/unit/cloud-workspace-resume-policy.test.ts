@@ -2,10 +2,43 @@ import { describe, expect, test } from "vitest";
 import {
 	cloudWorkspaceResumeIsAlreadyRequested,
 	failedWorkspaceResumeTarget,
+	recoveredWorkspaceLaunchIntent,
 	runtimeUnavailableResumeTarget,
 } from "../../src/cloud-workspace-routes.ts";
 
 describe("failed cloud workspace resume policy", () => {
+	test("replays stable launch metadata when a resumed runtime lost its session", () => {
+		expect(
+			recoveredWorkspaceLaunchIntent({
+				workspaceId: "workspace-recover",
+				requestConfig: {
+					sessionHeadVersion: 5,
+					title: "yo",
+					agent: "codex",
+					model: "gpt-5.6-sol",
+					permissions: [],
+				},
+			}),
+		).toEqual({
+			commandId: "launch:workspace-recover",
+			turnId: "turn:workspace-recover",
+			title: "yo",
+			agent: "codex",
+			model: "gpt-5.6-sol",
+			permissions: [],
+		});
+		expect(
+			recoveredWorkspaceLaunchIntent({
+				workspaceId: "workspace-new",
+				requestConfig: {
+					title: "new",
+					agent: "codex",
+					model: "gpt-5.6-sol",
+					permissions: [],
+				},
+			}),
+		).toBeUndefined();
+	});
 	test("does not rewrite a workspace whose resume is already in flight", () => {
 		for (const state of [
 			"paused",
@@ -35,13 +68,13 @@ describe("failed cloud workspace resume policy", () => {
 		).toBe(false);
 	});
 
-	test("replaces an incomplete sandbox after a connection timeout", () => {
+	test("restarts the same sandbox after a connection timeout", () => {
 		expect(
 			failedWorkspaceResumeTarget({
 				providerSandboxId: "sandbox-preserve",
 				statusCode: "runtime-connection-timeout",
 			}),
-		).toEqual({ state: "queued", providerSandboxId: "sandbox-preserve" });
+		).toEqual({ state: "resuming", providerSandboxId: "sandbox-preserve" });
 	});
 
 	test("forces a fenced runtime restart when the gateway has no runtime socket", () => {

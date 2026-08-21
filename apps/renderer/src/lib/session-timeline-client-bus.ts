@@ -41,8 +41,10 @@ import {
 import {
 	acquireRendererRpcSession,
 	isAuthCodedConnectionError,
+	isCloudWorkspaceEnvironment,
 	isRpcClientTransportError,
 	type MemoizeClient,
+	markCloudWorkspaceConnectionHealthy,
 	type RendererRpcSession,
 } from "./rpc-client.ts";
 import { sessionTimelineCache } from "./session-timeline-cache.ts";
@@ -1077,7 +1079,11 @@ const environmentResolver: EnvironmentResolver<MemoizeClient> = {
 					...session,
 					onActivated: (activeGeneration: number) => {
 						generation = activeGeneration;
-						if (pendingFault === null) return;
+						if (pendingFault === null) {
+							if (isCloudWorkspaceEnvironment(environmentId))
+								markCloudWorkspaceConnectionHealthy(environmentId);
+							return;
+						}
 						const fault = pendingFault;
 						pendingFault = null;
 						queueMicrotask(() => {

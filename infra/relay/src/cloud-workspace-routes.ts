@@ -93,7 +93,11 @@ import { MachineControlConfiguration } from "./machine-config.ts";
 import { MachineStore } from "./machine-store.ts";
 import { SandboxOfferConfiguration } from "./sandbox-provider-module.ts";
 import type { WorkosVerifier } from "./workos.ts";
-import { WORKSPACE_GATEWAY_PROTOCOL } from "./workspace-gateway-protocol.ts";
+import {
+	WORKSPACE_GATEWAY_PROTOCOL,
+	type WorkspaceGatewayProtocol,
+	workspaceGatewayProtocol,
+} from "./workspace-gateway-protocol.ts";
 
 export type CloudWorkspaceRouteContext =
 	| CloudWorkspaceStore
@@ -208,13 +212,24 @@ const bearer = (request: Request): string | undefined => {
 		: undefined;
 };
 
-const gatewayCredential = (request: Request): string | undefined => {
+const gatewayCredential = (
+	request: Request,
+):
+	| {
+			readonly protocol: WorkspaceGatewayProtocol;
+			readonly credential: string;
+	  }
+	| undefined => {
 	const values = request.headers
 		.get("sec-websocket-protocol")
 		?.split(",")
 		.map((value) => value.trim())
 		.filter(Boolean);
-	return values?.[0] === WORKSPACE_GATEWAY_PROTOCOL ? values[1] : undefined;
+	const protocol = workspaceGatewayProtocol(values?.[0]);
+	const credential = values?.[1];
+	return protocol !== undefined && credential !== undefined
+		? { protocol, credential }
+		: undefined;
 };
 
 const gatewayUrl = (relayIssuer: string, workspaceId: string): string => {
@@ -593,7 +608,6 @@ export const failedWorkspaceResumeTarget = (
 	)
 		return { state: "queued", providerSandboxId: undefined } as const;
 	if (
-		workspace.statusCode === "runtime-connection-timeout" ||
 		/^(?:initializing|updating-runtime|starting-runtime|syncing-repository|setup)-failed$/u.test(
 			workspace.statusCode,
 		)
@@ -826,6 +840,36 @@ const RuntimeCredentialRenewRequest = Schema.Struct({
 	requestId: Schema.String,
 	proof: Schema.String,
 });
+
+/**
+ * Stable metadata-only replay used to prove that a resumed runtime still owns
+ * the workspace chat/session. Replaying it is idempotent. If E2B has lost the
+ * original filesystem, it recreates an empty runnable session instead of
+ * advertising a healthy runtime that rejects queued messages as not found.
+ */
+export const recoveredWorkspaceLaunchIntent = (
+	workspace: Pick<CloudWorkspaceRecord, "workspaceId" | "requestConfig">,
+) => {
+	if (typeof workspace.requestConfig.sessionHeadVersion !== "number")
+		return undefined;
+	const { agent, model, permissions, title } = workspace.requestConfig;
+	if (
+		typeof agent !== "string" ||
+		typeof model !== "string" ||
+		typeof title !== "string" ||
+		!Array.isArray(permissions) ||
+		!permissions.every((permission) => typeof permission === "string")
+	)
+		return undefined;
+	return {
+		commandId: `launch:${workspace.workspaceId}`,
+		turnId: `turn:${workspace.workspaceId}`,
+		title,
+		agent,
+		model,
+		permissions: permissions as ReadonlyArray<string>,
+	};
+};
 
 const runtimeGeneration = (workspace: CloudWorkspaceRecord): number =>
 	typeof workspace.requestConfig.runtimeGeneration === "number"
@@ -1062,7 +1106,7 @@ export const routeCloudWorkspaceRequest = (
 				return yield* Effect.fail(conflict("cloud_workspace_launch_failed"));
 			const launchIntent =
 				launchIntentRecord === null
-					? undefined
+					? recoveredWorkspaceLaunchIntent(enrolled.workspace)
 					: yield* launchIntentCipher
 							.decrypt(
 								launchIntentRecord.accountId,
@@ -1439,9 +1483,10 @@ export const routeCloudWorkspaceRequest = (
 			if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
 				return yield* Effect.fail(badRequest("websocket_upgrade_required"));
 			const workspaceId = decodeURIComponent(gatewayMatch[1] ?? "");
-			const credential = gatewayCredential(request);
-			if (credential === undefined)
+			const gateway = gatewayCredential(request);
+			if (gateway === undefined)
 				return yield* Effect.fail(unauthorized("workspace_gateway_rejected"));
+			const { credential, protocol } = gateway;
 			const relay = yield* RelayConfiguration;
 			const mintPublicJwk = yield* parseJwk(relay.mintPublicKey);
 			const runtimeTicket = yield* verifyWorkspaceRuntimeTicket({
@@ -1449,7 +1494,7 @@ export const routeCloudWorkspaceRequest = (
 				mintPublicJwk,
 				issuer: relay.relayIssuer,
 				expectedWorkspaceId: workspaceId,
-				expectedProtocol: WORKSPACE_GATEWAY_PROTOCOL,
+				expectedProtocol: protocol,
 				nowMs,
 			}).pipe(Effect.result);
 			if (runtimeTicket._tag === "Success") {
@@ -1464,6 +1509,7 @@ export const routeCloudWorkspaceRequest = (
 					String(runtimeTicket.success.gatewayEpoch),
 				);
 				response.headers.set("x-zuse-gateway-role", "runtime");
+				response.headers.set("x-zuse-gateway-protocol", protocol);
 				return response;
 			}
 			const workspace = yield* store.getWorkspace(workspaceId);
@@ -1483,7 +1529,7 @@ export const routeCloudWorkspaceRequest = (
 						issuer: relay.relayIssuer,
 						expectedAccountId: workspace.accountId,
 						expectedWorkspaceId: workspaceId,
-						expectedProtocol: WORKSPACE_GATEWAY_PROTOCOL,
+						expectedProtocol: protocol,
 						expectedGeneration: runtimeGeneration(workspace),
 						expectedGatewayEpoch: gatewayEpoch(workspace),
 						nowMs,
@@ -1499,8 +1545,20 @@ export const routeCloudWorkspaceRequest = (
 							),
 						),
 					);
-			if (!runtime && !client)
+			if (!runtime && !client) {
+				console.warn("[cloud-workspace] gateway upgrade rejected", {
+					workspaceId,
+					phase: "credential",
+					runtimeTicketCode: runtimeTicket.failure.code,
+					runtimeCredentialPresent:
+						workspace.runtimeCredentialHash !== undefined,
+					runtimeCredentialLive:
+						typeof workspace.requestConfig.runtimeCredentialExpiresAtMs ===
+							"number" &&
+						workspace.requestConfig.runtimeCredentialExpiresAtMs > nowMs,
+				});
 				return yield* Effect.fail(unauthorized("workspace_gateway_rejected"));
+			}
 			if (
 				client &&
 				(workspace.state !== "ready" || workspace.runtimeState !== "online")
@@ -1508,7 +1566,7 @@ export const routeCloudWorkspaceRequest = (
 				return yield* Effect.fail(conflict("cloud_workspace_unavailable"));
 			console.info("[cloud-workspace] gateway upgrade accepted", {
 				workspaceId,
-				protocol: WORKSPACE_GATEWAY_PROTOCOL,
+				protocol,
 				generation: runtimeGeneration(workspace),
 				gatewayEpoch: gatewayEpoch(workspace),
 				role: runtime ? "runtime" : "client",
@@ -1527,6 +1585,7 @@ export const routeCloudWorkspaceRequest = (
 				"x-zuse-gateway-role",
 				runtime ? "runtime" : "client",
 			);
+			response.headers.set("x-zuse-gateway-protocol", protocol);
 			if (client)
 				response.headers.set(
 					"x-zuse-gateway-connection",
@@ -2446,6 +2505,19 @@ export const routeCloudWorkspaceRequest = (
 				action === "resume" &&
 				"recoverRuntime" in actionRequest &&
 				actionRequest.recoverRuntime === true;
+			let runtimeRecoveryBuild: CloudProjectBuildRecord | null = null;
+			if (recoverRuntime && workspace.providerSandboxId === undefined) {
+				const provider = yield* selectedProvider(workspace.provider);
+				runtimeRecoveryBuild = yield* store.getActiveAccountBuild(
+					principal.accountId,
+					provider.providerId,
+				);
+				if (
+					runtimeRecoveryBuild?.snapshotId === undefined ||
+					runtimeRecoveryBuild.templateVersion !== provider.templateVersion
+				)
+					return yield* Effect.fail(conflict("cloud_image_rebuild_required"));
+			}
 			let failedRetryBuild: CloudProjectBuildRecord | null = null;
 			if (
 				action === "resume" &&
@@ -2505,6 +2577,9 @@ export const routeCloudWorkspaceRequest = (
 								: "paused";
 			const updated: CloudWorkspaceRecord = {
 				...workspace,
+				...(runtimeRecoveryBuild === null
+					? {}
+					: { buildId: runtimeRecoveryBuild.buildId }),
 				...(failedRetryBuild === null
 					? {}
 					: { buildId: failedRetryBuild.buildId }),
@@ -2514,6 +2589,7 @@ export const routeCloudWorkspaceRequest = (
 							runtimeState: "offline" as const,
 							requestConfig: {
 								...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
+								runtimeSessionRecoveryPending: true,
 								startupTimings: {
 									requestedAt: nowMs,
 									resumeRequestedAt: nowMs,
@@ -2527,6 +2603,7 @@ export const routeCloudWorkspaceRequest = (
 							runtimeState: "offline" as const,
 							requestConfig: {
 								...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
+								runtimeSessionRecoveryPending: true,
 								startupTimings: {
 									requestedAt: nowMs,
 									resumeRequestedAt: nowMs,
@@ -2553,6 +2630,10 @@ export const routeCloudWorkspaceRequest = (
 							runtimeState: "offline" as const,
 							requestConfig: {
 								...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
+								...(typeof workspace.requestConfig.sessionHeadVersion ===
+								"number"
+									? { runtimeSessionRecoveryPending: true }
+									: {}),
 								startupTimings: { requestedAt: nowMs },
 							},
 						}

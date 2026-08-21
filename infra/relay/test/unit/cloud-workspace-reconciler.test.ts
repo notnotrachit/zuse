@@ -9,6 +9,7 @@ import { cloudRepositoryWorkspacePath } from "../../src/cloud-workspace-paths.ts
 import {
 	ARCHIVED_WORKSPACE_RETENTION_MS,
 	cloudWorkspaceStartupNeedsObservation,
+	RUNTIME_CONNECTION_TIMEOUT_MS,
 	reconcileCloudWorkspace,
 	reusableAccountBuildSnapshot,
 	sanitizeProjectBuildDiagnostic,
@@ -151,12 +152,22 @@ describe("cloud workspace reconciler", () => {
 		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).toContain(
 			"/opt/zuse/current/bin.mjs",
 		);
+		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).toContain("serve --foreground");
+		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).not.toContain("nohup");
+		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).not.toContain("</dev/null &");
 		expect(WORKSPACE_RUNTIME_RESUME_SCRIPT).not.toContain(
 			"runtime-updater.mjs",
 		);
 	});
 
-	test("actively observes only the pre-enrollment startup window", () => {
+	test("actively observes startup and the bounded warm-resume window", () => {
+		expect(RUNTIME_CONNECTION_TIMEOUT_MS).toBe(10_000);
+		expect(
+			cloudWorkspaceStartupNeedsObservation({
+				state: "resuming",
+				runtimeState: "connecting",
+			}),
+		).toBe(true);
 		expect(
 			cloudWorkspaceStartupNeedsObservation({
 				state: "provisioning",

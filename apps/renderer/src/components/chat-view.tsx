@@ -33,6 +33,7 @@ import {
 } from "../lib/chat-timeline-rows.ts";
 import {
 	cloudChatShowsWorking,
+	cloudWorkspaceIsStarting,
 	deriveCloudChatActivity,
 } from "../lib/cloud-chat-activity.ts";
 import { cloudTranscriptActivation } from "../lib/cloud-workspace-lifecycle.ts";
@@ -210,6 +211,8 @@ export function ChatView({
 			? null
 			: (state.pendingCreationByChat[session.chatId] ?? null),
 	);
+	const cloudSetupActive =
+		cloudSummary !== null && cloudWorkspaceIsStarting(cloudSummary);
 	const agentStarting = resolveAgentStarting({
 		providerOutputStarted,
 		creationPhase: pendingCreation?.phase ?? null,
@@ -225,11 +228,17 @@ export function ChatView({
 				// in-flight UI resumes only after that lifecycle projection is gone.
 				inFlight: shouldRenderGenericAgentStartup({
 					inFlight,
-					hasPendingCreation: pendingCreation !== null,
+					hasPendingCreation: pendingCreation !== null || cloudSetupActive,
 				}),
 				awaitingPlanApproval,
 			}),
-		[awaitingPlanApproval, inFlight, messages, pendingCreation],
+		[
+			awaitingPlanApproval,
+			cloudSetupActive,
+			inFlight,
+			messages,
+			pendingCreation,
+		],
 	);
 	const timelineFooter = useMemo(
 		() => (

@@ -12,7 +12,7 @@ Staging and production are isolated deployments:
 
 | Resource | Staging | Production |
 | --- | --- | --- |
-| Relay | `zuse-relay-staging`, `relay-staging.zuse.sh` | guarded production Worker, `relay.stuff.md` |
+| Relay | `zuse-relay-staging`, `relay-staging.stuff.md` | guarded production Worker, `relay.stuff.md` |
 | Wrangler config | default `infra/relay/wrangler.jsonc` | `infra/relay/wrangler.production.jsonc` |
 | Database | approved staging Neon identity | separately approved production identity |
 | Runtime channel | `cloud-runtime-staging` | signed `cloud-runtime-production` |
@@ -43,9 +43,13 @@ For a release:
 
 Existing sandboxes keep their filesystem and durable SQLite state. When a
 runtime update is supported, the signed runtime channel and lifecycle
-reconciler perform it under generation fencing. Incompatible protocol versions
-fail explicitly with `update-required`; the client must not invent a fallback
-or deploy code directly into a workspace.
+reconciler perform it transactionally under generation fencing, retain the
+previous binary, and roll back if enrollment or health verification fails.
+Relay supports the current and immediately preceding gateway protocol while
+retained sandboxes are updated. Incompatible protocol versions fail once with
+`update-required`; they are never rebuilt from the current account image or
+placed in a reconnect loop. See
+[ADR 0002](../adr/0002-cloud-runtime-compatibility.md).
 
 ## Database changes
 

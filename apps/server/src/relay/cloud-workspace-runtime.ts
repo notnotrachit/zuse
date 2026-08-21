@@ -19,6 +19,9 @@ import {
 	RelayPaths,
 	SessionId,
 	WIRE_PROTOCOL_VERSION,
+	WORKSPACE_GATEWAY_AUTH_EXPIRED_CLOSE,
+	WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE,
+	WORKSPACE_GATEWAY_UPDATE_REQUIRED_CLOSE,
 	workspaceGatewayArrayBuffer,
 } from "@zuse/contracts";
 import { SessionDomain } from "@zuse/domain/engine/session-domain";
@@ -853,6 +856,22 @@ export const startCloudWorkspaceLaunchIntent = (input: {
 			.pipe(Effect.mapError(() => fail("workspace_agent_start_failed")));
 	});
 
+export const cloudGatewayCloseReason = (code: number): string => {
+	if (code === WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE.code)
+		return "workspace_gateway_generation_changed";
+	if (code === WORKSPACE_GATEWAY_AUTH_EXPIRED_CLOSE.code)
+		return "workspace_gateway_authorization_expired";
+	if (code === WORKSPACE_GATEWAY_UPDATE_REQUIRED_CLOSE.code)
+		return "workspace_gateway_update_required";
+	return "workspace_gateway_disconnected";
+};
+
+const retryableCloudGatewayFailure = (
+	error: CloudWorkspaceRuntimeError,
+): boolean =>
+	error.reason === "workspace_gateway_unreachable" ||
+	error.reason === "workspace_gateway_disconnected";
+
 const websocketClosed = (
 	url: string,
 	protocols: () => ReadonlyArray<string>,
@@ -877,7 +896,7 @@ const websocketClosed = (
 		);
 		socket.addEventListener(
 			"close",
-			() => finish(Effect.fail(fail("workspace_gateway_disconnected"))),
+			(event) => finish(Effect.fail(fail(cloudGatewayCloseReason(event.code)))),
 			{ once: true },
 		);
 		return Effect.sync(() => socket.close());
@@ -1305,7 +1324,10 @@ export const makeCloudWorkspaceRuntimeLayer = (
 							});
 						},
 					).pipe(
-						Effect.retry(cloudRuntimeRetrySchedule),
+						Effect.retry({
+							while: retryableCloudGatewayFailure,
+							schedule: cloudRuntimeRetrySchedule,
+						}),
 						Effect.ensuring(
 							Effect.sync(() => {
 								gateway = null;

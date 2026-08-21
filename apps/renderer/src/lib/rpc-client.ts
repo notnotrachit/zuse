@@ -85,12 +85,39 @@ const cloudWorkspaceRegistrations = new Map<
 	CloudWorkspaceRegistration
 >();
 const cloudWorkspaceRuntimeRecoveryCommands = new Map<string, string>();
+const cloudWorkspaceAbnormalCloseCounts = new Map<string, number>();
+const cloudWorkspaceHealthyConnections = new Set<string>();
+
+const invalidateCloudWorkspaceTicket = (workspaceId: string): void => {
+	const registration = cloudWorkspaceRegistrations.get(workspaceId);
+	if (registration !== undefined) registration.connection = null;
+};
 
 const recordCloudWorkspaceGatewayClose = (
 	workspaceId: string,
 	close: Pick<WebSocketCloseInfo, "code">,
 ): void => {
-	if (close.code === WORKSPACE_GATEWAY_RUNTIME_UNAVAILABLE_CLOSE.code) {
+	const runtimeMissing =
+		close.code === WORKSPACE_GATEWAY_RUNTIME_UNAVAILABLE_CLOSE.code;
+	const abnormalCloseCount =
+		close.code === 1006
+			? (cloudWorkspaceAbnormalCloseCounts.get(workspaceId) ?? 0) + 1
+			: 0;
+	if (abnormalCloseCount === 0)
+		cloudWorkspaceAbnormalCloseCounts.delete(workspaceId);
+	else cloudWorkspaceAbnormalCloseCounts.set(workspaceId, abnormalCloseCount);
+	// Cloudflare may surface an immediate Durable Object close as browser code
+	// 1006 instead of preserving the gateway's private 4100 code. Before the
+	// first successful handshake, recover immediately: retrying the same absent
+	// runtime only adds a full reconnect cycle. Once this registration has been
+	// healthy, retain one retry so an ordinary network flap does not restart it.
+	const missingBeforeFirstHandshake =
+		close.code === 1006 && !cloudWorkspaceHealthyConnections.has(workspaceId);
+	if (
+		runtimeMissing ||
+		missingBeforeFirstHandshake ||
+		abnormalCloseCount >= 2
+	) {
 		if (!cloudWorkspaceRuntimeRecoveryCommands.has(workspaceId)) {
 			cloudWorkspaceRuntimeRecoveryCommands.set(
 				workspaceId,
@@ -98,6 +125,13 @@ const recordCloudWorkspaceGatewayClose = (
 			);
 		}
 	}
+};
+
+export const markCloudWorkspaceConnectionHealthy = (
+	workspaceId: string,
+): void => {
+	cloudWorkspaceAbnormalCloseCounts.delete(workspaceId);
+	cloudWorkspaceHealthyConnections.add(workspaceId);
 };
 
 export const cloudWorkspaceRequiresRuntimeRecovery = (
@@ -269,25 +303,37 @@ const supervisor = createConnectionSupervisor<
 	prepareOptions: prepareRendererConnectionOptions,
 	isOnline: () => online,
 	isIgnorableFailure: isIgnorableRendererFailure,
+	maxAutomaticAttempts: 6,
 	schedule: (delayMs, reconnect) => {
 		const timer = setTimeout(reconnect, delayMs);
 		return () => clearTimeout(timer);
 	},
-	createClient: (options) =>
-		makeRendererRpcSession(options, (event) => {
+	createClient: async (options) => {
+		try {
+			return await makeRendererRpcSession(options, (event) => {
+				if (options.key.startsWith("workspace:")) {
+					const workspaceId = options.key.slice("workspace:".length);
+					invalidateCloudWorkspaceTicket(workspaceId);
+					recordCloudWorkspaceGatewayClose(workspaceId, event);
+				}
+				reportRendererEntryFailure(
+					options.key,
+					new Error(
+						`WebSocket closed (${event.code}${event.reason ? `: ${event.reason}` : ""}).`,
+					),
+				);
+			});
+		} catch (cause) {
+			// An HTTP rejection happens before WebSocket `close`, so the callback
+			// above never gets a chance to invalidate its one-time credential.
+			// Never let the supervisor retry the same rejected cloud ticket.
 			if (options.key.startsWith("workspace:")) {
 				const workspaceId = options.key.slice("workspace:".length);
-				const registration = cloudWorkspaceRegistrations.get(workspaceId);
-				if (registration !== undefined) registration.connection = null;
-				recordCloudWorkspaceGatewayClose(workspaceId, event);
+				invalidateCloudWorkspaceTicket(workspaceId);
 			}
-			reportRendererEntryFailure(
-				options.key,
-				new Error(
-					`WebSocket closed (${event.code}${event.reason ? `: ${event.reason}` : ""}).`,
-				),
-			);
-		}),
+			throw cause;
+		}
+	},
 	isRetryableCommandError: isRpcClientTransportError,
 	classifyError: (cause) =>
 		isAuthCodedConnectionError(cause) ? "auth" : defaultClassifyError(cause),
@@ -396,10 +442,7 @@ export const acquireRendererRpcSession = async (
 					create: (onClose) => makeRendererRpcSession(prepared, onClose),
 				};
 			},
-			invalidateCloudTicket: (workspaceId) => {
-				const registration = cloudWorkspaceRegistrations.get(workspaceId);
-				if (registration !== undefined) registration.connection = null;
-			},
+			invalidateCloudTicket: invalidateCloudWorkspaceTicket,
 		} satisfies PassiveRendererSessionHooks);
 	const prepared = await hooks.prepare(environmentId);
 	let active = true;
@@ -416,6 +459,15 @@ export const acquireRendererRpcSession = async (
 					`WebSocket closed (${close.code}${close.reason ? `: ${close.reason}` : ""}).`,
 				),
 			);
+		})
+		.catch((cause) => {
+			// HTTP 401/403 rejects the upgrade before `close` is observable. Clear
+			// the cached ticket here so EnvironmentRuntime's next acquisition mints
+			// a new credential instead of looping on the rejected one.
+			if (active && prepared.key.startsWith("workspace:")) {
+				hooks.invalidateCloudTicket(prepared.key.slice("workspace:".length));
+			}
+			throw cause;
 		})
 		.then((session) => {
 			let disposed = false;
@@ -589,6 +641,9 @@ export const removeRendererEnvironment = async (
 ): Promise<void> => {
 	environmentConnections.delete(environmentId);
 	cloudWorkspaceRegistrations.delete(environmentId);
+	cloudWorkspaceAbnormalCloseCounts.delete(environmentId);
+	cloudWorkspaceHealthyConnections.delete(environmentId);
+	cloudWorkspaceRuntimeRecoveryCommands.delete(environmentId);
 	const entry = rendererEntries.get(environmentId);
 	rendererEntries.delete(environmentId);
 	if (activeEnvironmentId === environmentId)
@@ -640,6 +695,8 @@ export const disposeRpcClient = async (): Promise<void> => {
 	environmentConnections.clear();
 	cloudWorkspaceRegistrations.clear();
 	cloudWorkspaceRuntimeRecoveryCommands.clear();
+	cloudWorkspaceAbnormalCloseCounts.clear();
+	cloudWorkspaceHealthyConnections.clear();
 	localEnvironmentId = LOCAL_ENVIRONMENT_KEY;
 	setActiveEnvironmentStorageScope(LOCAL_RENDERER_STORAGE_SCOPE);
 	await supervisor.dispose();

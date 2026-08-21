@@ -5,17 +5,18 @@ intent; a leased reconciler performs provider operations and commits observed
 state with compare-and-set protection. Retrying a request cannot create a
 second workspace transition.
 
-## Project and workspace are different resources
+## Account image, project, and workspace are different resources
 
-A cloud project describes repository access and optional prepared build state.
-A cloud workspace is one interactive, isolated checkout created for a chat or
-task. Preparing a project can improve startup time, but a workspace can still
-start by cloning normally when no compatible prepared snapshot exists.
+An account has one active private image generation containing the runtime,
+toolchains, selected repository checkouts, and configured agent authentication.
+A cloud project is repository metadata selecting one checkout from that image.
+A cloud workspace is one isolated E2B sandbox created for a chat or task from
+the active account image.
 
-The provider's sandbox is an implementation detail of the workspace placement.
-“Builder” means a temporary sandbox used to prepare a sanitized project
-snapshot. It is not the user's workspace and contains no agent credential or
-chat history.
+An explicit image update/rebuild happens outside workspace launch. A repository
+absent from the active image cannot use a slow launch-time clone fallback. An
+existing workspace remains on its original image generation and sandbox ID;
+image promotion changes only future workspaces.
 
 ## State vocabulary
 
@@ -50,10 +51,12 @@ running agent does not change a healthy cloud icon from online to reconnecting.
 1. Relay authenticates the WorkOS account and checks private-beta access.
 2. The client sends a stable workspace and command identity.
 3. Relay records the workspace request and encrypted launch intent atomically.
-4. The reconciler chooses the provider adapter and compatible project snapshot.
-5. E2B allocates the sandbox and starts bootstrap with a one-time token.
-6. The runtime registers its signing and encryption keys, receives scoped
-   credentials, prepares the worktree, and consumes the launch command.
+4. The reconciler claims a prewarmed sandbox or forks the active account image.
+5. The runtime starts with a one-time token and registers its signing and
+   encryption keys.
+6. The runtime selects the included repository checkout, resets it to the
+   requested branch, and consumes the launch command. It does not clone, fetch,
+   move the repository, create a worktree, or download a runtime on this path.
 7. The runtime records the command receipt in SQLite and reports a monotonic
    summary to Relay.
 
@@ -83,6 +86,10 @@ marked stale and retried when the runtime next runs.
 Resume reuses the same sandbox ID. Relay fences the prior connection generation,
 issues fresh short-lived credentials, and waits for runtime enrollment. The
 client keeps cached data visible throughout.
+
+Account-image and runtime releases follow
+[ADR 0002](../adr/0002-cloud-runtime-compatibility.md). A generation mismatch,
+runtime timeout, or stale gateway socket never replaces a retained sandbox.
 
 ## Archive is 30-day trash
 

@@ -111,7 +111,10 @@ import {
 	type CreateFromSelection,
 } from "./composer/create-from-menu.tsx";
 import { ProviderIcon } from "./provider-icons";
-import { SetupCardView } from "./worktree-setup-card.tsx";
+import {
+	CloudWorkspaceSetupView,
+	SetupCardView,
+} from "./worktree-setup-card.tsx";
 
 const ChatComposer = lazy(() =>
 	import("./chat-composer.tsx").then((module) => ({
@@ -1209,15 +1212,7 @@ export function ChatLanding() {
 			<div className="flex min-h-0 flex-1 flex-col">
 				<div className="min-h-0 flex-1 overflow-y-auto">
 					{progress.kind === "cloud" ? (
-						<div className="mx-auto mt-8 flex w-full max-w-2xl items-center gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-							<Spinner className="size-4" />
-							<div className="min-w-0">
-								<p className="text-sm font-medium">Starting Cloud Sandbox</p>
-								<p className="text-xs text-muted-foreground">
-									{progress.status}
-								</p>
-							</div>
-						</div>
+						<CloudWorkspaceSetupView phase="allocating" />
 					) : null}
 					{progress.kind === "worktree" ? (
 						<SetupCardView
@@ -1237,7 +1232,10 @@ export function ChatLanding() {
 					) : null}
 				</div>
 				<div className="px-4 pb-4">
-					<QueuedComposerPill prompt={pendingPrompt} count={1} />
+					<QueuedComposerPreview
+						prompt={pendingPrompt}
+						waitingForSandbox={progress.kind === "cloud"}
+					/>
 				</div>
 			</div>
 		);
@@ -1662,28 +1660,19 @@ function providerThreadLabel(providerId: ProviderId): string {
 	return PROVIDER_LABEL[providerId] ?? providerId;
 }
 
-/**
- * Compact "queued first message" indicator shown in the landing bridge while
- * the worktree/chat is being created. Mirrors the queue chips the real
- * composer's `QueueTray` shows once the session exists, so the message reads
- * as held-not-sent throughout.
- */
-function QueuedComposerPill({
+function QueuedComposerPreview({
 	prompt,
-	count,
+	waitingForSandbox,
 }: {
-	prompt: string;
-	count: number;
+	readonly prompt: string;
+	readonly waitingForSandbox: boolean;
 }) {
 	return (
-		<div className="mx-auto w-full max-w-3xl">
-			<div className="flex items-center gap-2 rounded-xl border border-border/50 bg-muted/15 px-3.5 py-2.5 text-[13px]">
-				<Spinner className="size-3.5 shrink-0 text-muted-foreground" />
-				<span className="flex-1 truncate text-foreground/80">{prompt}</span>
-				<span className="shrink-0 text-[11px] text-muted-foreground">
-					{count} queued
-				</span>
+		<div className="mx-auto w-full max-w-3xl overflow-hidden rounded-md border border-border/50 bg-muted/20 text-[11px]">
+			<div className="border-b border-border/40 px-3 py-1.5 font-medium text-muted-foreground">
+				{waitingForSandbox ? "Waiting for sandbox" : "Queued"}
 			</div>
+			<div className="px-3 py-2 text-foreground/80">{prompt}</div>
 		</div>
 	);
 }

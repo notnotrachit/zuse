@@ -500,10 +500,12 @@ export default {
 		const gatewayRole = response.headers.get("x-zuse-gateway-role");
 		const gatewayGeneration = response.headers.get("x-zuse-gateway-generation");
 		const gatewayEpoch = response.headers.get("x-zuse-gateway-epoch");
+		const gatewayProtocol = response.headers.get("x-zuse-gateway-protocol");
 		if (
 			gatewayWorkspaceId !== null &&
 			gatewayGeneration !== null &&
 			gatewayEpoch !== null &&
+			gatewayProtocol !== null &&
 			(gatewayRole === "runtime" || gatewayRole === "client") &&
 			request.headers.get("upgrade")?.toLowerCase() === "websocket"
 		) {
@@ -514,6 +516,7 @@ export default {
 			headers.set("x-zuse-gateway-role", gatewayRole);
 			headers.set("x-zuse-gateway-generation", gatewayGeneration);
 			headers.set("x-zuse-gateway-epoch", gatewayEpoch);
+			headers.set("x-zuse-gateway-protocol", gatewayProtocol);
 			if (connectionId !== null)
 				headers.set("x-zuse-gateway-connection", connectionId);
 			await relay.dispose();

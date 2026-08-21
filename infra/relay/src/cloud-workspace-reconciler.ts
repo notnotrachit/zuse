@@ -23,7 +23,10 @@ import { SandboxOfferConfiguration } from "./sandbox-provider-module.ts";
 
 const RETRY_MS = 5_000;
 const ACCOUNT_POOL_SIZE = 2;
-const WORKSPACE_START_TIMEOUT_MS = 5 * 60 * 1_000;
+// Provider allocation happens before `allocatedAt`. Once compute exists, the
+// baked runtime must enroll promptly; leaving this at minutes turns a broken
+// runtime into a permanently spinning composer until the recovery cron runs.
+export const RUNTIME_CONNECTION_TIMEOUT_MS = 10_000;
 const RECONCILE_LEASE_MS = 2 * 60 * 1_000;
 const PROJECT_BUILD_TIMEOUT_MS = 15 * 60 * 1_000;
 export const ARCHIVED_WORKSPACE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -187,10 +190,12 @@ export const cloudWorkspaceStartupNeedsObservation = (
 	workspace: Pick<CloudWorkspaceRecord, "state" | "runtimeState"> | null,
 ): boolean =>
 	workspace !== null &&
-	(workspace.state === "queued" ||
-		workspace.state === "provisioning" ||
-		workspace.state === "setup") &&
-	workspace.runtimeState === "offline";
+	((workspace.runtimeState === "offline" &&
+		(workspace.state === "queued" ||
+			workspace.state === "provisioning" ||
+			workspace.state === "setup")) ||
+		(workspace.state === "resuming" &&
+			workspace.runtimeState === "connecting"));
 
 class CloudWorkspaceLeaseLostError extends Data.TaggedError(
 	"CloudWorkspaceLeaseLostError",
@@ -213,7 +218,7 @@ const workspaceRuntimeProcessSelector = (workspace: CloudWorkspaceRecord) => ({
 		? {}
 		: { legacyCleanup: "matching-command" as const }),
 });
-export const WORKSPACE_RUNTIME_RESUME_SCRIPT = `set -e; runtime=/opt/zuse/current/bin.mjs; fallback=/usr/local/bin/zuse; rm -f /var/lib/zuse/workspace/failed; if [ -f "$runtime" ]; then exec node "$runtime" serve; else exec "$fallback" serve; fi`;
+export const WORKSPACE_RUNTIME_RESUME_SCRIPT = `set -e; runtime=/opt/zuse/current/bin.mjs; fallback=/usr/local/bin/zuse; log=/var/lib/zuse/workspace/runtime.log; rm -f /var/lib/zuse/workspace/failed; if [ -f "$runtime" ]; then exec node "$runtime" serve; else exec "$fallback" serve --foreground >> "$log" 2>&1 </dev/null; fi`;
 const providerLabel = (kind: "build" | "workspace", id: string): string =>
 	`zuse-cloud-${kind}-${id.replace(/[^A-Za-z0-9-]/gu, "-")}`.slice(0, 63);
 
@@ -256,7 +261,7 @@ const workspaceStartupTimedOut = (
 		(workspace.state === "queued" ||
 			workspace.state === "provisioning" ||
 			workspace.state === "setup") &&
-		nowMs - allocatedAt >= WORKSPACE_START_TIMEOUT_MS
+		nowMs - allocatedAt >= RUNTIME_CONNECTION_TIMEOUT_MS
 	);
 };
 
@@ -982,6 +987,7 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 			requestConfig: {
 				...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
 				...runtimeFence,
+				runtimeSessionRecoveryPending: true,
 				startupTimings: { ...timings, allocatedAt: nowMs },
 			},
 			nextActionAtMs: nowMs + 30_000,
@@ -1169,7 +1175,8 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 				project.repositoryIdentity,
 			);
 			const replacingFailedSandbox =
-				workspace.statusCode === "resume-queued" &&
+				(workspace.statusCode === "resume-queued" ||
+					workspace.statusCode === "resume-runtime-recovery-queued") &&
 				workspace.providerSandboxId !== undefined;
 			if (replacingFailedSandbox && workspace.providerSandboxId !== undefined)
 				yield* provider.kill(workspace.providerSandboxId);
@@ -1264,6 +1271,9 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 				requestConfig: {
 					...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
 					...runtimeFence,
+					...(typeof workspace.requestConfig.sessionHeadVersion === "number"
+						? { runtimeSessionRecoveryPending: true }
+						: {}),
 					...(replacementPool === null ? {} : { poolClaimedAt: allocatedAtMs }),
 					startupTimings: {
 						...timings,

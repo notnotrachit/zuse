@@ -489,6 +489,8 @@ const completeLaunchWorkspace = (
 	input: CompleteLaunchIntentInput,
 ): CloudWorkspaceRecord => {
 	const startupTimings = recordOrEmpty(workspace.requestConfig.startupTimings);
+	const { runtimeSessionRecoveryPending: _, ...requestConfig } =
+		workspace.requestConfig;
 	const requestedAt =
 		typeof startupTimings.requestedAt === "number"
 			? startupTimings.requestedAt
@@ -499,7 +501,7 @@ const completeLaunchWorkspace = (
 		state: "ready",
 		statusCode: "agent-running",
 		requestConfig: {
-			...workspace.requestConfig,
+			...requestConfig,
 			sessionHeadVersion: Math.max(
 				typeof workspace.requestConfig.sessionHeadVersion === "number"
 					? workspace.requestConfig.sessionHeadVersion
@@ -1072,7 +1074,8 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 							| Readonly<Record<string, number>>
 							| undefined) ?? {};
 					const launchPending =
-						typeof workspace.requestConfig.sessionHeadVersion !== "number";
+						typeof workspace.requestConfig.sessionHeadVersion !== "number" ||
+						workspace.requestConfig.runtimeSessionRecoveryPending === true;
 					const updated: CloudWorkspaceRecord = {
 						...workspace,
 						runtimeState: "online",
@@ -2104,8 +2107,8 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 				orDie(
 					sql`UPDATE relay_cloud_workspaces
 					SET runtime_state='online',
-						state=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' THEN 'ready' ELSE 'setup' END,
-						status_code=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' THEN 'agent-running' ELSE 'agent-starting' END,
+						state=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' AND COALESCE((request_config->>'runtimeSessionRecoveryPending')::boolean, false)=false THEN 'ready' ELSE 'setup' END,
+						status_code=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' AND COALESCE((request_config->>'runtimeSessionRecoveryPending')::boolean, false)=false THEN 'agent-running' ELSE 'agent-starting' END,
 						request_config=request_config || jsonb_build_object(
 							'runtimeProcessManaged', true,
 							'startupTimings', COALESCE(request_config->'startupTimings', '{}'::jsonb) || jsonb_build_object(
@@ -2113,7 +2116,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 								'repositoryReadyAt', COALESCE(request_config #> '{startupTimings,repositoryReadyAt}', to_jsonb(${input.nowMs}::bigint))
 							)
 						),
-						next_action_at=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' THEN ${input.nextIdleAtMs}::bigint ELSE ${input.nowMs + 30_000}::bigint END,
+						next_action_at=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' AND COALESCE((request_config->>'runtimeSessionRecoveryPending')::boolean, false)=false THEN ${input.nextIdleAtMs}::bigint ELSE ${input.nowMs + 30_000}::bigint END,
 						running_since=COALESCE(running_since, ${input.nowMs}),
 						revision=revision+1,
 						updated_at=${input.nowMs},
@@ -2240,7 +2243,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							SELECT ${input.workspaceId}, ${input.runtimeGeneration}, ${input.summaryRevision}, ${input.title}, ${input.lastActivityAtMs}, ${input.sessionHeadVersion}, ${input.updatedAtMs}
 							FROM relay_cloud_workspaces AS workspace
 							WHERE workspace.workspace_id=${input.workspaceId}
-								AND COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, GREATEST(1, workspace.credential_epoch + 1))=${input.runtimeGeneration}
+								AND COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, 1)=${input.runtimeGeneration}
 							ON CONFLICT (workspace_id) DO UPDATE SET
 								runtime_generation=EXCLUDED.runtime_generation,
 								summary_revision=EXCLUDED.summary_revision,
@@ -2270,7 +2273,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							};
 						const existingRows = yield* sql`
 							SELECT summary.*,
-								COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, GREATEST(1, workspace.credential_epoch + 1)) AS current_runtime_generation
+								COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, 1) AS current_runtime_generation
 							FROM relay_cloud_workspaces AS workspace
 							LEFT JOIN relay_cloud_workspace_runtime_summaries AS summary USING (workspace_id)
 							WHERE workspace.workspace_id=${input.workspaceId}
@@ -2312,7 +2315,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 						FROM relay_cloud_workspaces AS workspace
 						WHERE workspace.workspace_id=${checkpoint.workspaceId}
 							AND COALESCE((workspace.request_config->>'runtimeGeneration')::bigint,
-								GREATEST(1, workspace.credential_epoch + 1))=${checkpoint.runtimeGeneration}
+								1)=${checkpoint.runtimeGeneration}
 						ON CONFLICT (workspace_id, session_id) DO UPDATE SET
 							runtime_generation=EXCLUDED.runtime_generation,
 							stream_epoch=EXCLUDED.stream_epoch,

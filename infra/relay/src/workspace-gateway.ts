@@ -9,10 +9,13 @@ import {
 import {
 	decodeGatewayMessage,
 	encodeGatewayMessage,
+	LEGACY_WORKSPACE_GATEWAY_PROTOCOL,
 	WORKSPACE_GATEWAY_BACKPRESSURE_CLOSE,
 	WORKSPACE_GATEWAY_PROTOCOL,
 	WORKSPACE_GATEWAY_RUNTIME_UNAVAILABLE_CLOSE,
 	WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE,
+	type WorkspaceGatewayProtocol,
+	workspaceGatewayProtocol,
 } from "./workspace-gateway-protocol.ts";
 
 type GatewayFence = {
@@ -22,10 +25,14 @@ type GatewayFence = {
 };
 
 type GatewaySocketAttachment =
-	| ({ readonly role: "runtime" } & GatewayFence)
+	| ({
+			readonly role: "runtime";
+			readonly protocol: WorkspaceGatewayProtocol;
+	  } & GatewayFence)
 	| ({
 			readonly role: "client";
 			readonly connectionId: string;
+			readonly protocol: WorkspaceGatewayProtocol;
 	  } & GatewayFence);
 
 type WebSocketPairValue = {
@@ -78,6 +85,55 @@ const sendControl = (
 	}
 };
 
+const base64 = (value: ArrayBuffer): string => {
+	const bytes = new Uint8Array(value);
+	let binary = "";
+	for (let offset = 0; offset < bytes.length; offset += 0x8000)
+		binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+	return btoa(binary);
+};
+
+const legacyClientFrame = (
+	connectionId: string,
+	payload: string | ArrayBuffer,
+): string =>
+	JSON.stringify({
+		type: "client.frame",
+		connectionId,
+		encoding: typeof payload === "string" ? "text" : "base64",
+		payload: typeof payload === "string" ? payload : base64(payload),
+	});
+
+const legacyRuntimeFrame = (
+	value: string,
+):
+	| {
+			readonly connectionId: string;
+			readonly payload: string | ArrayBuffer;
+	  }
+	| undefined => {
+	let candidate: unknown;
+	try {
+		candidate = JSON.parse(value);
+	} catch {
+		return undefined;
+	}
+	if (candidate === null || typeof candidate !== "object") return undefined;
+	const frame = candidate as Record<string, unknown>;
+	if (
+		frame.type !== "runtime.frame" ||
+		typeof frame.connectionId !== "string" ||
+		typeof frame.payload !== "string" ||
+		(frame.encoding !== "text" && frame.encoding !== "base64")
+	)
+		return undefined;
+	if (frame.encoding === "text")
+		return { connectionId: frame.connectionId, payload: frame.payload };
+	const binary = atob(frame.payload);
+	const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+	return { connectionId: frame.connectionId, payload: bytes.buffer };
+};
+
 const attachment = (
 	socket: CloudflareWebSocket,
 ): GatewaySocketAttachment | null => {
@@ -87,6 +143,9 @@ const attachment = (
 	const workspaceId = candidate.workspaceId;
 	const generation = candidate.generation;
 	const gatewayEpoch = candidate.gatewayEpoch;
+	const protocol = workspaceGatewayProtocol(
+		typeof candidate.protocol === "string" ? candidate.protocol : undefined,
+	);
 	if (
 		typeof workspaceId !== "string" ||
 		typeof generation !== "number" ||
@@ -94,11 +153,15 @@ const attachment = (
 	)
 		return null;
 	const fence = { workspaceId, generation, gatewayEpoch };
-	if (candidate.role === "runtime") return { role: "runtime", ...fence };
+	// Attachments created before protocol negotiation was persisted are v2.
+	const negotiatedProtocol = protocol ?? WORKSPACE_GATEWAY_PROTOCOL;
+	if (candidate.role === "runtime")
+		return { role: "runtime", protocol: negotiatedProtocol, ...fence };
 	if (candidate.role === "client" && typeof candidate.connectionId === "string")
 		return {
 			role: "client",
 			connectionId: candidate.connectionId,
+			protocol: negotiatedProtocol,
 			...fence,
 		};
 	return null;
@@ -137,11 +200,14 @@ const detachSocket = (socket: CloudflareWebSocket): void => {
 	}
 };
 
-const websocketResponse = (client: CloudflareWebSocket): Response =>
+const websocketResponse = (
+	client: CloudflareWebSocket,
+	protocol: WorkspaceGatewayProtocol,
+): Response =>
 	new Response(null, {
 		status: 101,
 		webSocket: client,
-		headers: { "sec-websocket-protocol": WORKSPACE_GATEWAY_PROTOCOL },
+		headers: { "sec-websocket-protocol": protocol },
 	} as ResponseInit & { readonly webSocket: CloudflareWebSocket });
 
 /**
@@ -168,8 +234,15 @@ export class WorkspaceGateway {
 			return new Response("websocket upgrade required", { status: 426 });
 
 		const role = request.headers.get("x-zuse-gateway-role");
+		const protocol = workspaceGatewayProtocol(
+			request.headers.get("x-zuse-gateway-protocol") ?? undefined,
+		);
 		const fence = readFence(request.headers);
-		if (fence === null || (role !== "runtime" && role !== "client"))
+		if (
+			fence === null ||
+			protocol === undefined ||
+			(role !== "runtime" && role !== "client")
+		)
 			return new Response("unauthorized", { status: 401 });
 
 		const pair = new WebSocketPair();
@@ -187,6 +260,7 @@ export class WorkspaceGateway {
 			});
 			server.serializeAttachment({
 				role: "runtime",
+				protocol,
 				...fence,
 			} satisfies GatewaySocketAttachment);
 			this.state.acceptWebSocket(server, ["runtime"]);
@@ -197,7 +271,7 @@ export class WorkspaceGateway {
 					WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE.code,
 					WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE.reason,
 				);
-				return websocketResponse(client);
+				return websocketResponse(client, protocol);
 			}
 			for (const existing of existingRuntimes) {
 				const metadata = attachment(existing);
@@ -239,7 +313,7 @@ export class WorkspaceGateway {
 					);
 				}
 			}
-			return websocketResponse(client);
+			return websocketResponse(client, protocol);
 		}
 
 		const connectionId = request.headers.get("x-zuse-gateway-connection");
@@ -248,6 +322,7 @@ export class WorkspaceGateway {
 		server.serializeAttachment({
 			role: "client",
 			connectionId,
+			protocol,
 			...fence,
 		} satisfies GatewaySocketAttachment);
 		this.state.acceptWebSocket(server, ["client"]);
@@ -258,7 +333,7 @@ export class WorkspaceGateway {
 				WORKSPACE_GATEWAY_RUNTIME_UNAVAILABLE_CLOSE.code,
 				WORKSPACE_GATEWAY_RUNTIME_UNAVAILABLE_CLOSE.reason,
 			);
-			return websocketResponse(client);
+			return websocketResponse(client, protocol);
 		}
 		const currentRuntime = runtimes.find((runtime) => {
 			const metadata = attachment(runtime);
@@ -270,7 +345,7 @@ export class WorkspaceGateway {
 				WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE.code,
 				WORKSPACE_GATEWAY_STALE_GENERATION_CLOSE.reason,
 			);
-			return websocketResponse(client);
+			return websocketResponse(client, protocol);
 		}
 		if (
 			!send(
@@ -283,7 +358,7 @@ export class WorkspaceGateway {
 				WORKSPACE_GATEWAY_BACKPRESSURE_CLOSE.code,
 				WORKSPACE_GATEWAY_BACKPRESSURE_CLOSE.reason,
 			);
-		return websocketResponse(client);
+		return websocketResponse(client, protocol);
 	}
 
 	async webSocketMessage(
@@ -316,13 +391,18 @@ export class WorkspaceGateway {
 				);
 				return;
 			}
-			let encoded: ArrayBuffer;
+			const runtimeMetadata = attachment(runtime);
+			if (runtimeMetadata?.role !== "runtime") return;
+			let encoded: string | ArrayBuffer;
 			try {
-				encoded = encodeWorkspaceGatewayFrame({
-					direction: "client",
-					connectionId: metadata.connectionId,
-					payload: message,
-				});
+				encoded =
+					runtimeMetadata.protocol === LEGACY_WORKSPACE_GATEWAY_PROTOCOL
+						? legacyClientFrame(metadata.connectionId, message)
+						: encodeWorkspaceGatewayFrame({
+								direction: "client",
+								connectionId: metadata.connectionId,
+								payload: message,
+							});
 			} catch {
 				closeSocket(
 					socket,
@@ -341,11 +421,18 @@ export class WorkspaceGateway {
 		}
 		if (metadata?.role !== "runtime") return;
 		const decoded =
+			metadata.protocol === LEGACY_WORKSPACE_GATEWAY_PROTOCOL &&
 			typeof message === "string"
-				? decodeGatewayMessage(message)
-				: decodeWorkspaceGatewayFrame(message);
+				? (legacyRuntimeFrame(message) ?? decodeGatewayMessage(message))
+				: typeof message === "string"
+					? decodeGatewayMessage(message)
+					: decodeWorkspaceGatewayFrame(message);
 		if (decoded === null) return;
-		if ("direction" in decoded && decoded.direction === "runtime") {
+		if (
+			"payload" in decoded &&
+			!("type" in decoded) &&
+			(!("direction" in decoded) || decoded.direction === "runtime")
+		) {
 			let delivered = false;
 			for (const client of this.clientSockets()) {
 				const clientMetadata = attachment(client);

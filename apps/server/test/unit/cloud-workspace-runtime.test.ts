@@ -12,6 +12,7 @@ import { generateKeyPair, jwtVerify } from "jose";
 import { describe, expect, it, vi } from "vitest";
 import {
 	bufferWorkspaceLocalFrame,
+	cloudGatewayCloseReason,
 	decodeImageProviderSecrets,
 	makeCloudRuntimeCheckpointPublisher,
 	makeCloudRuntimeSummaryPublisher,
@@ -187,6 +188,21 @@ describe("cloud workspace bootstrap", () => {
 	it("announces readiness when a preserved runtime reconnects", () => {
 		expect(runtimeReadyPhaseOnGatewayOpen(false)).toBeNull();
 		expect(runtimeReadyPhaseOnGatewayOpen(true)).toBe("repository-ready");
+	});
+
+	it("does not retry a gateway fence or authorization rejection", () => {
+		expect(cloudGatewayCloseReason(4101)).toBe(
+			"workspace_gateway_generation_changed",
+		);
+		expect(cloudGatewayCloseReason(4102)).toBe(
+			"workspace_gateway_authorization_expired",
+		);
+		expect(cloudGatewayCloseReason(4103)).toBe(
+			"workspace_gateway_update_required",
+		);
+		expect(cloudGatewayCloseReason(1006)).toBe(
+			"workspace_gateway_disconnected",
+		);
 	});
 
 	it("buffers the localhost RPC handshake only within a bounded handoff", () => {

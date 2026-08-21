@@ -1,7 +1,8 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { CloudChatSummary } from "@zuse/contracts";
-import { Alert01Icon, CloudIcon, Tick01Icon } from "@zuse/icons/solid-rounded";
-import { useState } from "react";
+import { Alert01Icon, Tick01Icon } from "@zuse/icons/solid-rounded";
+import { type ReactNode, useState } from "react";
+import { cloudWorkspaceIsStarting } from "../lib/cloud-chat-activity.ts";
 import {
 	refreshCloudChatCatalog,
 	useCloudChatCatalogStore,
@@ -15,7 +16,6 @@ import { useChatsStore } from "../store/chats.ts";
 import { useSessionsStore } from "../store/sessions.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
 import { EMPTY_WORKTREES, useWorktreesStore } from "../store/worktrees.ts";
-import { AgentActivityOrb } from "./ui/agent-activity-orb.tsx";
 import { Button } from "./ui/button.tsx";
 import { ShimmerText } from "./ui/shimmer-text.tsx";
 import { Spinner } from "./ui/spinner";
@@ -141,7 +141,7 @@ export function WorktreeSetupCard({
 	if (
 		cloudSummary !== null &&
 		!providerOutputStarted &&
-		cloudSummary.startupPhase !== "running" &&
+		cloudWorkspaceIsStarting(cloudSummary) &&
 		cloudSummary.state !== "paused" &&
 		cloudSummary.state !== "resuming" &&
 		!cloudSummary.statusCode.includes("resume")
@@ -243,66 +243,14 @@ export function CloudWorkspaceSetupCard({
 			setBusy(null);
 		}
 	};
-	const failed = summary.startupPhase === "failed";
-	const rank = failed
-		? cloudFailureRank(summary.statusCode)
-		: cloudPhaseRank[summary.startupPhase];
-	const step = (index: number): StepState =>
-		failed && index === rank
-			? "failed"
-			: rank > index
-				? "done"
-				: rank === index
-					? "active"
-					: "pending";
 	return (
-		<div className="mx-auto w-full max-w-3xl px-4 pt-4" role="status">
-			<div className="overflow-hidden rounded-xl border border-border/60 bg-muted/15">
-				<header className="flex items-center gap-2 border-b border-border/40 px-3.5 py-2.5">
-					<HugeiconsIcon
-						icon={CloudIcon}
-						className="size-4 shrink-0 text-muted-foreground"
-					/>
-					<span className="flex-1 text-[13px] font-medium text-foreground/90">
-						{failed ? (
-							"Cloud workspace needs attention"
-						) : (
-							<ShimmerText tone="lime">Cloud starting</ShimmerText>
-						)}
-					</span>
-					{failed ? (
-						<HugeiconsIcon
-							icon={Alert01Icon}
-							className="size-4 text-[var(--accent-red)]"
-						/>
-					) : (
-						<AgentActivityOrb state="shaping" label="Cloud starting" />
-					)}
-				</header>
-				<div className="flex flex-col gap-1.5 px-3.5 py-2.5 text-[12px]">
-					<StepRow state={step(0)} label="Starting cloud workspace" />
-					<StepRow state={step(1)} label="Starting secure cloud runtime" />
-					<StepRow state={step(2)} label="Fetching the latest Git changes" />
-					<StepRow
-						state={step(3)}
-						label="Checking out branch and starting agent"
-					/>
-				</div>
-				{failed ? (
-					<div className="flex items-center gap-2 border-t border-border/40 px-3.5 py-2">
-						<div className="min-w-0 flex-1 text-[11px]">
-							<p className="text-[var(--accent-red)]">
-								{cloudFailureMessage(summary.statusCode)}
-							</p>
-							{summary.failureDiagnostic === undefined ? null : (
-								<p
-									className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground"
-									title={summary.failureDiagnostic}
-								>
-									{summary.failureDiagnostic.split("\n").at(-1)}
-								</p>
-							)}
-						</div>
+		<CloudWorkspaceSetupView
+			phase={summary.startupPhase}
+			statusCode={summary.statusCode}
+			failureDiagnostic={summary.failureDiagnostic}
+			actions={
+				summary.startupPhase === "failed" ? (
+					<>
 						<Button
 							size="xs"
 							loading={busy === "retry"}
@@ -318,10 +266,111 @@ export function CloudWorkspaceSetupCard({
 						>
 							Delete workspace
 						</Button>
-					</div>
-				) : null}
+					</>
+				) : undefined
+			}
+		/>
+	);
+}
+
+type CloudSetupPhase = CloudChatSummary["startupPhase"];
+
+const cloudPhaseLabel = (
+	phase: CloudSetupPhase,
+	statusCode: string,
+): string => {
+	if (phase === "failed") return cloudFailureMessage(statusCode);
+	switch (phase) {
+		case "allocating":
+			return "Preparing cloud workspace…";
+		case "booting":
+		case "authenticating-runtime":
+			return "Starting secure cloud runtime…";
+		case "syncing-repository":
+			return "Preparing repository…";
+		case "starting-agent":
+			return "Starting agent…";
+		case "running":
+			return "Cloud workspace ready";
+	}
+};
+
+/** Shared cloud lifecycle surface for the optimistic bridge and live chat. */
+export function CloudWorkspaceSetupView({
+	phase,
+	statusCode = "provisioning-queued",
+	failureDiagnostic,
+	actions,
+}: {
+	readonly phase: CloudSetupPhase;
+	readonly statusCode?: string;
+	readonly failureDiagnostic?: string;
+	readonly actions?: ReactNode;
+}) {
+	const failed = phase === "failed";
+	const rank = failed ? cloudFailureRank(statusCode) : cloudPhaseRank[phase];
+	const step = (index: number): StepState =>
+		failed && index === rank
+			? "failed"
+			: rank > index
+				? "done"
+				: rank === index
+					? "active"
+					: "pending";
+	const label = cloudPhaseLabel(phase, statusCode);
+
+	return (
+		<details
+			className="group mx-auto w-full max-w-3xl px-4 pt-3 text-[12px]"
+			role="status"
+		>
+			<summary className="flex cursor-pointer list-none items-center gap-2 py-1.5 text-foreground/80 select-none marker:content-none">
+				<span className="inline-flex min-w-0 flex-1 items-center gap-2">
+					{failed ? (
+						<HugeiconsIcon
+							icon={Alert01Icon}
+							className="size-3.5 shrink-0 text-[var(--accent-red)]"
+						/>
+					) : phase === "running" ? (
+						<HugeiconsIcon
+							icon={Tick01Icon}
+							className="size-3.5 shrink-0 text-foreground/60"
+						/>
+					) : (
+						<Spinner className="size-3 shrink-0 text-muted-foreground" />
+					)}
+					<span className={failed ? "text-[var(--accent-red)]" : ""}>
+						{!failed && phase !== "running" ? (
+							<ShimmerText tone="lime">{label}</ShimmerText>
+						) : (
+							label
+						)}
+					</span>
+				</span>
+				<span
+					aria-hidden="true"
+					className="text-sm text-muted-foreground transition-transform group-open:rotate-90"
+				>
+					›
+				</span>
+			</summary>
+			<div className="ml-1.5 border-l border-border/50 py-1.5 pl-4">
+				<div className="flex flex-col gap-1.5">
+					<StepRow state={step(0)} label="Preparing cloud workspace" />
+					<StepRow state={step(1)} label="Starting secure cloud runtime" />
+					<StepRow state={step(2)} label="Preparing repository" />
+					<StepRow state={step(3)} label="Starting agent" />
+				</div>
+				{failureDiagnostic === undefined ? null : (
+					<p className="mt-2 font-mono text-[10px] text-muted-foreground">
+						{failureDiagnostic.split("\n").at(-1)}
+					</p>
+				)}
+				{actions === undefined ? null : (
+					<div className="mt-2 flex justify-end gap-2">{actions}</div>
+				)}
 			</div>
-		</div>
+		</details>
 	);
 }
 
