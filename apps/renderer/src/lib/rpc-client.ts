@@ -7,6 +7,7 @@ import {
 	type ConnectionSnapshot,
 	type ConnectionSupervisorEntry,
 	createConnectionSupervisor,
+	defaultClassifyError,
 } from "@zuse/client-runtime/supervisor";
 import type { WebSocketCloseInfo } from "@zuse/client-runtime/ws-protocol";
 import {
@@ -112,6 +113,25 @@ export const clearCloudWorkspaceRuntimeRecovery = (
 ): void => {
 	cloudWorkspaceRuntimeRecoveryCommands.delete(workspaceId);
 };
+
+/** Consume a missing-runtime signal before issuing the next one-time gateway
+ * ticket. Recovery and ticket minting stay ordered inside the same retry so a
+ * healthy-looking but detached relay record cannot cause a reconnect loop. */
+export const refreshCloudWorkspaceConnectionWithRecovery = async (
+	workspaceId: string,
+	recover: (commandId: string) => Promise<void>,
+	connect: () => Promise<CloudWorkspaceConnection>,
+): Promise<CloudWorkspaceConnection> => {
+	const recoveryCommandId = cloudWorkspaceRuntimeRecoveryCommandId(workspaceId);
+	if (recoveryCommandId !== undefined) await recover(recoveryCommandId);
+	const connection = await connect();
+	if (
+		recoveryCommandId !== undefined &&
+		cloudWorkspaceRuntimeRecoveryCommandId(workspaceId) === recoveryCommandId
+	)
+		clearCloudWorkspaceRuntimeRecovery(workspaceId);
+	return connection;
+};
 // Tickets last roughly a minute. Keep only a short safety margin so one live
 // activation can reuse its freshly issued ticket without minting a second one.
 const CLOUD_TICKET_REUSE_WINDOW_MS = 10_000;
@@ -195,6 +215,18 @@ export const isIgnorableRendererFailure = (cause: unknown): boolean =>
 	cause instanceof Error &&
 	cause.message === "All fibers interrupted without error";
 
+/**
+ * Auth rejections carried as typed codes rather than message text. Tagged
+ * errors like `CloudWorkspaceOpError` and `ConnectAuthError` often have empty
+ * messages, so message-based classification alone would misread a rejected
+ * credential as a transient failure and reconnect forever.
+ */
+export const isAuthCodedConnectionError = (cause: unknown): boolean => {
+	if (typeof cause !== "object" || cause === null) return false;
+	const coded = cause as { readonly code?: unknown; readonly reason?: unknown };
+	return coded.code === "not-allowed" || coded.reason === "not-allowed";
+};
+
 const makeRendererRpcSession = async (
 	options: RendererConnectionOptions,
 	onClose: (event: WebSocketCloseInfo) => void,
@@ -257,6 +289,8 @@ const supervisor = createConnectionSupervisor<
 			);
 		}),
 	isRetryableCommandError: isRpcClientTransportError,
+	classifyError: (cause) =>
+		isAuthCodedConnectionError(cause) ? "auth" : defaultClassifyError(cause),
 	shouldReconnectOnOptionsChange: shouldReconnectRendererConnection,
 	onDiagnostic: ({ event, key, details }) => {
 		recordDiagnosticEvent({
@@ -545,6 +579,10 @@ export const getActiveEnvironment = (): string => activeEnvironmentId;
  * it is the app's immutable frame of reference for "local vs remote".
  */
 export const getLocalEnvironmentId = (): string => localEnvironmentId;
+
+/** Whether this environment id belongs to a registered cloud workspace. */
+export const isCloudWorkspaceEnvironment = (environmentId: string): boolean =>
+	cloudWorkspaceRegistrations.has(environmentId);
 
 export const removeRendererEnvironment = async (
 	environmentId: string,

@@ -312,10 +312,10 @@ export function RightPane({
 		if (LIVE_PANEL_KINDS.has(kind)) requestCloudAttachment();
 	};
 	const handleAddCloudTerminal = () => {
-		if (chatRef === null) return;
+		if (chatRef === null || executionRootPath === null) return;
 		const slot = useTerminalsStore
 			.getState()
-			.add(chatRef, chatRef.environmentId, "/home/zuse/workspace", "Cloud");
+			.add(chatRef, chatRef.environmentId, executionRootPath, "Cloud");
 		addPanelForTerminal(chatRef, slot);
 		requestCloudAttachment();
 	};

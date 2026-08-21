@@ -76,7 +76,7 @@ const MAX_BACKOFF_MS = 16_000;
 const messageOf = (cause: unknown): string =>
 	cause instanceof Error ? cause.message : String(cause);
 
-const defaultClassifyError = (cause: unknown): "auth" | "transient" => {
+export const defaultClassifyError = (cause: unknown): "auth" | "transient" => {
 	const message = messageOf(cause).toLowerCase();
 	return /_(401|403)(?::|$)/.test(message) ||
 		message.includes("invalid_dpop_proof") ||

@@ -8,10 +8,19 @@
 	"compatibility_date": "2026-06-01",
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": { "enabled": true },
+	// The staging Postgres origin is in AWS Singapore. Cloud workspace startup
+	// performs ordered writes, so run Relay beside Hyperdrive's origin pool
+	// instead of paying a cross-Pacific round trip for every query.
+	"placement": { "region": "aws:ap-southeast-1" },
 	"rules": [
 		{
 			"type": "Text",
-			"globs": ["**/*.yaml.tmpl", "**/runtime-updater.mjs"],
+			"globs": [
+				"**/*.yaml.tmpl",
+				"**/runtime-updater.mjs",
+				"**/project-builder.sh",
+				"**/workspace-bootstrap.sh"
+			],
 			"fallthrough": true
 		}
 	],
@@ -24,14 +33,17 @@
 		"RELAY_MINT_PUBLIC_JWK": "{\"crv\":\"Ed25519\",\"x\":\"rLuckqLkdtwPKtradClTam6ovMItDJZ3SNbBQXFjJWw\",\"kty\":\"OKP\"}",
 		"MAX_ENVIRONMENTS_PER_ACCOUNT": "5",
 		"ALLOWED_BROWSER_ORIGINS": "https://code.zuse.sh",
+		"GITHUB_APP_ID": "4663095",
+		"GITHUB_APP_SLUG": "zusesh",
+		"GITHUB_APP_CLIENT_ID": "Iv23liToo4tc4RcbDNpV",
 
 		"MANAGED_TUNNEL_BASE_DOMAIN": "stuff.md",
 		"MANAGED_TUNNEL_NAMESPACE": "zenv-staging",
 		"CF_ACCOUNT_ID": "40dd16663d44dc635537be6d183af841",
 		"CF_ZONE_ID": "1ebb00c5fd61050e9f48ce1c791a29da",
 
-		"MACHINE_ALPHA_ALLOWLIST": "user_01KW7R9WGJFFSKDNESE7RN00N1",
-		"MACHINE_MANUAL_ENTITLEMENTS": "false",
+		"MACHINE_ALPHA_ALLOWLIST": "user_01KW7R9WGJFFSKDNESE7RN00N1,user_01M0HA239JJ7P73AA1X5M8KDHF",
+		"MACHINE_MANUAL_ENTITLEMENTS": "true",
 		"MACHINE_LIVE_CHECKOUT_ENABLED": "true",
 		// Staging is allowlisted and uses sandbox billing, but exercises the real
 		// payment-to-provisioning path end to end.
@@ -44,11 +56,11 @@
 		"HETZNER_SERVER_TYPE_PERSISTENT_STANDARD_V1": "cx33",
 		"MACHINE_RUNTIME_MANIFEST_URL": "https://github.com/swarajbachu/zuse/releases/download/cloud-runtime-staging/stable-manifest.json",
 		"MACHINE_RUNTIME_SIGNING_PUBLIC_JWK": "{\"crv\":\"Ed25519\",\"x\":\"ODy1bBgW390GBMxIqn8wy2eO3C05kXdoPYk5JV09OZI\",\"kty\":\"OKP\"}",
-		"CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL": "https://github.com/swarajbachu/zuse/releases/download/cloud-runtime-staging/stable-manifest.json",
-		"CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK": "{\"crv\":\"Ed25519\",\"x\":\"ODy1bBgW390GBMxIqn8wy2eO3C05kXdoPYk5JV09OZI\",\"kty\":\"OKP\"}",
+		"CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL": "",
+		"CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK": "",
 		"E2B_ADAPTER_ENABLED": "true",
 		"E2B_TEMPLATE_ID": "zuse-cloud-sandbox",
-		"E2B_TEMPLATE_VERSION": "4dae42be-6c3b-4d78-ab63-cfa406d3d70d",
+		"E2B_TEMPLATE_VERSION": "e147c717-5a91-4d68-a244-f1ca65034a3d",
 		"E2B_VCPU_COUNT": "2",
 		"E2B_MEMORY_MIB": "1024",
 		"E2B_WEBHOOK_SECRET": "",

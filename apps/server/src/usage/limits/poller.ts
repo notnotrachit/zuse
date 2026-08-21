@@ -24,6 +24,11 @@ const FRESH_SESSION_WINDOW_MS = 30 * 60 * 1_000;
 const DAILY_COST_PERSIST_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 let lastDailyCostPersistAt = 0;
 
+export const usagePollInitialDelay = (
+	runtimeKind = process.env.ZUSE_RUNTIME_KIND,
+): "30 seconds" | "0 millis" =>
+	runtimeKind === "cloud-workspace" ? "30 seconds" : "0 millis";
+
 export const shouldPersistDailyCosts = (
 	now: number,
 	lastPersistedAt: number,
@@ -78,9 +83,13 @@ export const UsageLimitsPollerLive = Layer.effectDiscard(
 		const sql = yield* SqlClient.SqlClient;
 		yield* sql`DELETE FROM usage_limit_snapshots WHERE captured_hour < datetime('now', '-2 years')`;
 		yield* Effect.forkScoped(
-			Effect.repeat(
-				poll,
-				Schedule.spaced("30 minutes").pipe(Schedule.jittered),
+			Effect.sleep(usagePollInitialDelay()).pipe(
+				Effect.andThen(
+					Effect.repeat(
+						poll,
+						Schedule.spaced("30 minutes").pipe(Schedule.jittered),
+					),
+				),
 			),
 		);
 	}),

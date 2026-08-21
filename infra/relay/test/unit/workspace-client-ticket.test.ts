@@ -3,8 +3,10 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { describe, expect, test } from "vitest";
 import {
 	signWorkspaceClientTicket,
+	signWorkspaceRuntimeTicket,
 	verifyRuntimeRenewalProof,
 	verifyWorkspaceClientTicket,
+	verifyWorkspaceRuntimeTicket,
 } from "../../src/crypto.ts";
 
 const nowMs = 1_800_000_000_000;
@@ -104,6 +106,43 @@ describe("workspace client tickets", () => {
 		await expect(
 			verify({ expectedGatewayEpoch: input.gatewayEpoch + 1 }),
 		).rejects.toBeDefined();
+	});
+});
+
+describe("workspace runtime tickets", () => {
+	test("verifies gateway scope without a workspace database lookup", async () => {
+		const keys = await generateKeyPair("EdDSA", { extractable: true });
+		const mintPrivateJwk = await exportJWK(keys.privateKey);
+		const mintPublicJwk = await exportJWK(keys.publicKey);
+		const input = {
+			mintPrivateJwk,
+			issuer: "https://relay.example.test",
+			accountId: "account-1",
+			workspaceId: "workspace-1",
+			protocol: "zuse-workspace-v2",
+			generation: 3,
+			gatewayEpoch: 4,
+			ttlMs: 60_000,
+			nowMs,
+		};
+		const token = await Effect.runPromise(signWorkspaceRuntimeTicket(input));
+		await expect(
+			Effect.runPromise(
+				verifyWorkspaceRuntimeTicket({
+					token,
+					mintPublicJwk,
+					issuer: input.issuer,
+					expectedWorkspaceId: input.workspaceId,
+					expectedProtocol: input.protocol,
+					nowMs,
+				}),
+			),
+		).resolves.toMatchObject({
+			accountId: input.accountId,
+			role: "runtime",
+			generation: input.generation,
+			gatewayEpoch: input.gatewayEpoch,
+		});
 	});
 });
 

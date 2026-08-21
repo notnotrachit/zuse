@@ -35,13 +35,13 @@ describe("failed cloud workspace resume policy", () => {
 		).toBe(false);
 	});
 
-	test("restarts the runtime inside an existing sandbox after a connection timeout", () => {
+	test("replaces an incomplete sandbox after a connection timeout", () => {
 		expect(
 			failedWorkspaceResumeTarget({
 				providerSandboxId: "sandbox-preserve",
 				statusCode: "runtime-connection-timeout",
 			}),
-		).toEqual({ state: "resuming", providerSandboxId: "sandbox-preserve" });
+		).toEqual({ state: "queued", providerSandboxId: "sandbox-preserve" });
 	});
 
 	test("forces a fenced runtime restart when the gateway has no runtime socket", () => {
@@ -79,6 +79,9 @@ describe("failed cloud workspace resume policy", () => {
 					providerSandboxId: "sandbox-incomplete",
 					statusCode,
 				}),
-			).toEqual({ state: "queued", providerSandboxId: undefined });
+			).toEqual({
+				state: "queued",
+				providerSandboxId: "sandbox-incomplete",
+			});
 	});
 });

@@ -1,658 +1,212 @@
-import { generateKeyPairSync } from "node:crypto";
-import {
-	access,
-	mkdir,
-	mkdtemp,
-	readFile,
-	rm,
-	stat,
-	symlink,
-	writeFile,
-} from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-	AccountAccessPreparedImport,
-	AccountAccessSealedCredential,
-	AccountAccessStatus,
-	AuthSession,
-	AuthUser,
-	EnvironmentId,
-	LocalAccountDescriptorList,
-} from "@zuse/contracts";
-import { Effect, Layer, Schema, Stream } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { sealCredentialTransfer } from "../../src/account-access/sealed-transfer.ts";
+import { Effect, Layer, Stream } from "effect";
+import { afterEach, describe, expect, it } from "vitest";
+
 import {
 	AccountAccessProcess,
 	type AccountAccessProcessShape,
 	AccountAccessService,
 	AccountAccessServiceLive,
-	accountAccessEventFromPtyChunk,
 } from "../../src/account-access/service.ts";
 import { AppPaths } from "../../src/app-paths.ts";
-import { AuthService } from "../../src/auth/services/auth-service.ts";
-import { LanAuthService } from "../../src/lan-auth/services/lan-auth-service.ts";
-import { resolveMachineRelayUrl } from "../../src/machine/machine-control-service.ts";
 import { MachineRuntimeRole } from "../../src/machine/machine-runtime-role.ts";
 import { makeFileCredentialsService } from "../../src/provider/layers/file-credentials-service.ts";
 import { CredentialsService } from "../../src/provider/services/credentials-service.ts";
 
 const temporaryDirectories: string[] = [];
 
-describe("interactive account access output", () => {
-	it("forwards prompts and credentials even when the CLI does not print a newline", () => {
-		expect(
-			accountAccessEventFromPtyChunk("Paste code here if prompted > "),
-		).toEqual({
-			_tag: "line",
-			text: "Paste code here if prompted > ",
-		});
-		expect(accountAccessEventFromPtyChunk("")).toBeNull();
-	});
-});
-
 afterEach(async () => {
-	vi.restoreAllMocks();
 	for (const directory of temporaryDirectories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
 
-const makeIdentity = () => {
-	const identity = generateKeyPairSync("ed25519");
-	return {
-		privateJwk: JSON.stringify(identity.privateKey.export({ format: "jwk" })),
-		publicJwk: JSON.stringify(identity.publicKey.export({ format: "jwk" })),
-	};
-};
-
 const makeLayer = (
 	userData: string,
 	processOverrides: Partial<AccountAccessProcessShape> = {},
-	options: {
-		readonly role?: "control-plane" | "cloud-environment";
-		readonly signedInUserId?: string;
-		readonly accessToken?: string;
-		readonly identity?: ReturnType<typeof makeIdentity>;
-		readonly relayConfig?: "available" | "missing";
-		readonly relayUrl?: string;
-	} = {},
+	role: "control-plane" | "cloud-environment" = "cloud-environment",
 ) => {
+	const credentials = makeFileCredentialsService(userData);
 	const processRunner: AccountAccessProcessShape = {
-		capture: () =>
+		capture: (_command, args) =>
 			Effect.succeed({
-				stdout: "Claude Code 2.1.224",
+				stdout: args.includes("status") ? "signed in" : "1.0.0",
 				stderr: "",
 				code: 0,
 			}),
 		stream: () => Stream.empty,
-		write: () => Effect.void,
-		cancel: () => Effect.void,
+		input: () => Effect.succeed(0),
 		...processOverrides,
 	};
-	const environmentId = EnvironmentId.make("01JZUSE0000000000000000000");
-	const identity = options.identity ?? makeIdentity();
-	const { privateJwk, publicJwk } = identity;
-	const credentialsLayer = makeFileCredentialsService(userData);
-	return AccountAccessServiceLive.pipe(
-		Layer.provide(credentialsLayer),
+	const service = AccountAccessServiceLive.pipe(
+		Layer.provide(credentials),
 		Layer.provide(Layer.succeed(AppPaths, { userData })),
-		Layer.provide(
-			Layer.succeed(MachineRuntimeRole, options.role ?? "cloud-environment"),
-		),
-		Layer.provide(
-			Layer.succeed(
-				AuthService,
-				AuthService.of({
-					getSession: () =>
-						Effect.succeed(
-							options.signedInUserId === undefined
-								? ({ _tag: "SignedOut" } as const)
-								: ({
-										_tag: "SignedIn",
-										session: AuthSession.make({
-											user: AuthUser.make({
-												id: options.signedInUserId,
-												email: "person@example.com",
-												firstName: null,
-												lastName: null,
-												profilePictureUrl: null,
-											}),
-											organizationId: null,
-											expiresAt: Date.now() + 60_000,
-										}),
-									} as const),
-						),
-					signIn: () => Effect.die("unused"),
-					signOut: () => Effect.void,
-					sessionChanges: () => Stream.empty,
-					getAccessToken: () =>
-						Effect.succeed(options.accessToken ?? "test-token"),
-				}),
-			),
-		),
-		Layer.provide(
-			Layer.succeed(LanAuthService, {
-				environmentId: () => Effect.succeed(environmentId),
-				environmentKeys: () =>
-					Effect.succeed({
-						environmentId,
-						envId: environmentId,
-						privateJwk,
-						publicJwk,
-					}),
-				getRelayConfig: () =>
-					Effect.succeed(
-						options.relayConfig === "missing"
-							? null
-							: {
-									relayUrl: options.relayUrl ?? "https://relay.staging.example",
-									relayIssuer:
-										options.relayUrl ?? "https://relay.staging.example",
-									environmentId,
-									environmentCredential: "unused-in-test",
-									label: undefined,
-									connectorToken: undefined,
-									tunnelHostname: undefined,
-									mintPublicKey: undefined,
-								},
-					),
-			} as unknown as LanAuthService["Service"]),
-		),
+		Layer.provide(Layer.succeed(MachineRuntimeRole, role)),
 		Layer.provide(
 			Layer.succeed(
 				AccountAccessProcess,
 				AccountAccessProcess.of(processRunner),
 			),
 		),
-		Layer.merge(credentialsLayer),
+	);
+	return Layer.merge(service, credentials);
+};
+
+const withService = async <A>(
+	run: (service: AccountAccessService["Service"]) => Effect.Effect<A, unknown>,
+	processOverrides: Partial<AccountAccessProcessShape> = {},
+	role: "control-plane" | "cloud-environment" = "cloud-environment",
+) => {
+	const userData = await mkdtemp(join(tmpdir(), "zuse-account-access-"));
+	temporaryDirectories.push(userData);
+	return Effect.runPromise(
+		Effect.gen(function* () {
+			const service = yield* AccountAccessService;
+			return yield* run(service);
+		}).pipe(Effect.provide(makeLayer(userData, processOverrides, role))),
 	);
 };
 
 describe("AccountAccessService", () => {
-	it("exports an authenticated local GitHub account for one-click cloud import", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-export-"));
-		temporaryDirectories.push(userData);
-		const credential = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* AccountAccessService;
-				return yield* service.readLocalCredential("github");
-			}).pipe(
-				Effect.provide(
-					makeLayer(
-						userData,
-						{
-							capture: (command, args) =>
-								command === "gh" && args[0] === "auth" && args[1] === "token"
-									? Effect.succeed({
-											stdout: "github-test-token\n",
-											stderr: "",
-											code: 0,
-										})
-									: Effect.succeed({ stdout: "", stderr: "", code: 1 }),
-						},
-						{ role: "control-plane" },
-					),
-				),
-			),
-		);
-
-		expect(credential).toMatchObject({
-			providerId: "github",
-			credentialType: "repository-token",
-			secret: "github-test-token",
-		});
+	it("keeps the four provider states on the target machine", async () => {
+		const status = await withService((service) => service.status());
+		expect(status.providers.map((provider) => provider.providerId)).toEqual([
+			"claude",
+			"codex",
+			"cursor",
+			"grok",
+		]);
+		expect(
+			status.providers.every((provider) => provider.state === "connected"),
+		).toBe(true);
 	});
 
-	it("reads an owned private native credential store for cloud import", async () => {
-		const userData = await mkdtemp(
-			join(tmpdir(), "zuse-account-native-import-"),
-		);
-		temporaryDirectories.push(userData);
-		const accountHome = join(userData, "home");
-		await mkdir(join(accountHome, ".codex"), { recursive: true, mode: 0o700 });
-		await writeFile(
-			join(accountHome, ".codex", "auth.json"),
-			JSON.stringify({
-				auth_mode: "chatgpt",
-				tokens: { access_token: "test" },
-			}),
-			{ mode: 0o600 },
-		);
-		const previousHome = process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-		process.env.ZUSE_ACCOUNT_ACCESS_HOME = accountHome;
-		try {
-			const credential = await Effect.runPromise(
-				Effect.gen(function* () {
-					const service = yield* AccountAccessService;
-					return yield* service.readLocalCredential("codex");
-				}).pipe(
-					Effect.provide(
-						makeLayer(userData, undefined, { role: "control-plane" }),
-					),
-				),
-			);
-			expect(credential).toMatchObject({
-				providerId: "codex",
-				credentialType: "native-store",
-			});
-		} finally {
-			if (previousHome === undefined)
-				delete process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-			else process.env.ZUSE_ACCOUNT_ACCESS_HOME = previousHome;
-		}
-	});
-
-	it("rejects a symlinked native credential store", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-native-link-"));
-		temporaryDirectories.push(userData);
-		const accountHome = join(userData, "home");
-		const credentialDirectory = join(accountHome, ".codex");
-		await mkdir(credentialDirectory, { recursive: true, mode: 0o700 });
-		const target = join(userData, "auth-target.json");
-		await writeFile(
-			target,
-			JSON.stringify({ tokens: { access_token: "test" } }),
-			{
-				mode: 0o600,
-			},
-		);
-		await symlink(target, join(credentialDirectory, "auth.json"));
-		const previousHome = process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-		process.env.ZUSE_ACCOUNT_ACCESS_HOME = accountHome;
-		try {
-			const result = await Effect.runPromise(
-				Effect.gen(function* () {
-					const service = yield* AccountAccessService;
-					return yield* service
-						.readLocalCredential("codex")
-						.pipe(Effect.result);
-				}).pipe(
-					Effect.provide(
-						makeLayer(userData, undefined, { role: "control-plane" }),
-					),
-				),
-			);
-			expect(result).toMatchObject({
-				_tag: "Failure",
-				failure: { code: "credential-export-failed" },
-			});
-		} finally {
-			if (previousHome === undefined)
-				delete process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-			else process.env.ZUSE_ACCOUNT_ACCESS_HOME = previousHome;
-		}
-	});
-
-	it("returns wire-encodable account status and transfer values", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-wire-"));
-		temporaryDirectories.push(userData);
-		const cloudLayer = makeLayer(userData);
-		const { prepared, sealed, status } = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* AccountAccessService;
-				const status = yield* service.status();
-				const prepared = yield* service.prepareImport({
-					accountId: "user_01JZUSE0000000000000000000",
-					providerId: "claude",
-				});
-				const sealed = sealCredentialTransfer(prepared, {
-					providerId: "claude",
-					kind: "oauth-token",
-					secret: "remote-oauth-token",
-				});
-				return { prepared, sealed, status };
-			}).pipe(Effect.provide(cloudLayer)),
-		);
-		const local = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* AccountAccessService;
-				return yield* service.detectLocal();
-			}).pipe(
-				Effect.provide(makeLayer(userData, {}, { role: "control-plane" })),
-			),
-		);
-
-		expect(() => Schema.encodeSync(AccountAccessStatus)(status)).not.toThrow();
-		expect(() =>
-			Schema.encodeSync(LocalAccountDescriptorList)(local),
-		).not.toThrow();
-		expect(() =>
-			Schema.encodeSync(AccountAccessPreparedImport)(prepared),
-		).not.toThrow();
-		expect(() =>
-			Schema.encodeSync(AccountAccessSealedCredential)(sealed),
-		).not.toThrow();
-	});
-
-	it("imports a prepared Claude credential exactly once", async () => {
+	it("stores a newly issued Claude setup token only in the target secret store", async () => {
 		const userData = await mkdtemp(join(tmpdir(), "zuse-account-access-"));
 		temporaryDirectories.push(userData);
-		const layer = makeLayer(userData);
-
 		const result = await Effect.runPromise(
 			Effect.gen(function* () {
 				const service = yield* AccountAccessService;
-				const prepared = yield* service.prepareImport({
-					accountId: "user_01JZUSE0000000000000000000",
+				const status = yield* service.setCredential({
 					providerId: "claude",
+					method: "subscription",
+					secret: "sk-ant-oat01-new-machine-purpose-token",
 				});
-				const sealed = sealCredentialTransfer(prepared, {
-					providerId: "claude",
-					kind: "oauth-token",
-					secret: "remote-oauth-token",
-				});
-				const imported = yield* service.importCredential({
-					transferId: prepared.transferId,
-					sealed,
-				});
-				const credentials = yield* CredentialsService;
-				const stored = yield* credentials.getProviderCredential("claude");
-				const replay = yield* Effect.flip(
-					service.importCredential({
-						transferId: prepared.transferId,
-						sealed,
-					}),
-				);
-				return { imported, stored, replay };
-			}).pipe(Effect.provide(layer)),
+				const stored = yield* CredentialsService;
+				return {
+					status,
+					credential: yield* stored.getProviderCredential("claude"),
+				};
+			}).pipe(Effect.provide(makeLayer(userData))),
 		);
-
-		expect(result.imported).toMatchObject({
-			providerId: "claude",
+		expect(result.status).toMatchObject({
 			state: "connected",
-			authKind: "oauth-token",
+			authMethod: "subscription",
 		});
-		expect(result.stored).toMatchObject({
-			kind: "oauth-token",
-			secret: "remote-oauth-token",
-		});
-		expect(result.replay.code).toBe("transfer-replayed");
-	});
-
-	it("removes only known credential paths before requesting runtime stop", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-cleanup-"));
-		temporaryDirectories.push(userData);
-		const accountHome = join(userData, "home");
-		const credentialPaths = [
-			join(userData, "secrets", "credentials.json"),
-			join(accountHome, ".config", "gh", "hosts.yml"),
-			join(accountHome, ".codex", "auth.json"),
-			join(accountHome, ".claude", ".credentials.json"),
-		];
-		const unrelated = join(accountHome, ".claude", "settings.json");
-		for (const path of [...credentialPaths, unrelated]) {
-			await mkdir(join(path, ".."), { recursive: true });
-			await writeFile(path, "secret", { mode: 0o600 });
-		}
-		const previousHome = process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-		process.env.ZUSE_ACCOUNT_ACCESS_HOME = accountHome;
-		try {
-			await Effect.runPromise(
-				Effect.gen(function* () {
-					const service = yield* AccountAccessService;
-					yield* service.sanitizeCredentials();
-					yield* service.requestRuntimeStop();
-				}).pipe(Effect.provide(makeLayer(userData))),
-			);
-		} finally {
-			if (previousHome === undefined)
-				delete process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-			else process.env.ZUSE_ACCOUNT_ACCESS_HOME = previousHome;
-		}
-
-		for (const path of credentialPaths) {
-			await expect(access(path)).rejects.toThrow();
-		}
-		expect(await readFile(unrelated, "utf8")).toBe("secret");
-		const marker = join(userData, "credential-cleanup-ready");
-		expect((await stat(marker)).mode & 0o777).toBe(0o600);
-	});
-
-	it("hardens native GitHub and Codex credential stores after login", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-native-"));
-		temporaryDirectories.push(userData);
-		const accountHome = join(userData, "home");
-		const githubDirectory = join(accountHome, ".config", "gh");
-		const codexDirectory = join(accountHome, ".codex");
-		const loginEnvironments: Array<
-			Readonly<Record<string, string>> | undefined
-		> = [];
-		const githubFile = join(githubDirectory, "hosts.yml");
-		const codexFile = join(codexDirectory, "auth.json");
-		for (const [directory, file] of [
-			[githubDirectory, githubFile],
-			[codexDirectory, codexFile],
-		] as const) {
-			await mkdir(directory, { recursive: true, mode: 0o755 });
-			await writeFile(file, "credential", { mode: 0o644 });
-		}
-		const previousHome = process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-		process.env.ZUSE_ACCOUNT_ACCESS_HOME = accountHome;
-		try {
-			await Effect.runPromise(
-				Effect.gen(function* () {
-					const service = yield* AccountAccessService;
-					yield* Stream.runDrain(service.startLogin("github"));
-					yield* Stream.runDrain(service.startLogin("codex"));
-				}).pipe(
-					Effect.provide(
-						makeLayer(userData, {
-							capture: () =>
-								Effect.succeed({ stdout: "account", stderr: "", code: 0 }),
-							stream: (_command, _args, environment) => {
-								loginEnvironments.push(environment);
-								return Stream.make({ _tag: "exit", code: 0 });
-							},
-						}),
-					),
-				),
-			);
-		} finally {
-			if (previousHome === undefined)
-				delete process.env.ZUSE_ACCOUNT_ACCESS_HOME;
-			else process.env.ZUSE_ACCOUNT_ACCESS_HOME = previousHome;
-		}
-
-		for (const directory of [githubDirectory, codexDirectory]) {
-			expect((await stat(directory)).mode & 0o777).toBe(0o700);
-		}
-		for (const file of [githubFile, codexFile]) {
-			expect((await stat(file)).mode & 0o777).toBe(0o600);
-		}
-		expect(loginEnvironments).toEqual([{ GH_PROMPT_DISABLED: "1" }, undefined]);
-	});
-
-	it("keeps GitHub's device code until its later verification URL", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-device-code-"));
-		temporaryDirectories.push(userData);
-		const events = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* AccountAccessService;
-				const collected = yield* Stream.runCollect(
-					service.startLogin("github"),
-				);
-				return collected;
-			}).pipe(
-				Effect.provide(
-					makeLayer(userData, {
-						capture: () =>
-							Effect.succeed({ stdout: "account", stderr: "", code: 0 }),
-						stream: () =>
-							Stream.make(
-								{ _tag: "line", text: "Copy your one-time code: ABCD-EFGH" },
-								{ _tag: "line", text: "Open https://github.com/login/device" },
-							),
-					}),
-				),
-			),
+		expect(result.credential?.secret).toBe(
+			"sk-ant-oat01-new-machine-purpose-token",
 		);
-
-		expect([...events]).toContainEqual({
-			_tag: "verification",
-			url: "https://github.com/login/device",
-			code: "ABCD-EFGH",
-		});
+		const file = join(userData, "secrets", "credentials.json");
+		expect((await stat(file)).mode & 0o777).toBe(0o600);
 	});
 
-	it("waits for Codex's code when the verification URL arrives first", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-codex-code-"));
-		temporaryDirectories.push(userData);
-		const events = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* AccountAccessService;
-				return yield* Stream.runCollect(service.startLogin("codex"));
-			}).pipe(
-				Effect.provide(
-					makeLayer(userData, {
-						stream: () =>
-							Stream.make(
-								{
-									_tag: "line",
-									text: "Open https://auth.openai.com/codex/device",
-								},
-								{ _tag: "line", text: "Enter code WXYZ-12345" },
-							),
-					}),
-				),
-			),
-		);
-
-		expect([...events]).toContainEqual({
-			_tag: "verification",
-			url: "https://auth.openai.com/codex/device",
-			code: "WXYZ-12345",
-		});
-	});
-
-	it("starts a Claude transfer without a local relay registration", async () => {
-		const userData = await mkdtemp(
-			join(tmpdir(), "zuse-account-claude-relay-"),
-		);
-		temporaryDirectories.push(userData);
-		const accountId = "user_01JZUSE0000000000000000000";
-		const relayUrl = resolveMachineRelayUrl();
-		const identity = makeIdentity();
-		const prepared = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* AccountAccessService;
-				return yield* service.prepareImport({
-					accountId,
-					providerId: "claude",
-				});
-			}).pipe(Effect.provide(makeLayer(userData, {}, { identity, relayUrl }))),
-		);
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					environments: [
-						{
-							environmentId: prepared.environmentId,
-							providerKind: "cloud",
-							linkedAt: Date.now(),
-							environmentPublicKey: identity.publicJwk,
-						},
-					],
+	it("rejects subscription tokens for providers that require their official login flow", async () => {
+		await expect(
+			withService((service) =>
+				service.setCredential({
+					providerId: "codex",
+					method: "subscription",
+					secret: "not-used-token",
 				}),
-				{ status: 200, headers: { "content-type": "application/json" } },
 			),
-		);
+		).rejects.toMatchObject({ code: "invalid-configuration" });
+	});
 
-		const events = await Effect.runPromise(
+	it("feeds Codex API keys to the official stdin login without returning them", async () => {
+		let received: {
+			readonly args: ReadonlyArray<string>;
+			readonly input: string;
+		} | null = null;
+		const status = await withService(
+			(service) =>
+				service.setCredential({
+					providerId: "codex",
+					method: "api-key",
+					secret: "openai-machine-key",
+				}),
+			{
+				input: (_command, args, input) => {
+					received = { args, input };
+					return Effect.succeed(0);
+				},
+			},
+		);
+		expect(received).toEqual({
+			args: ["login", "--with-api-key"],
+			input: "openai-machine-key",
+		});
+		expect(JSON.stringify(status)).not.toContain("openai-machine-key");
+	});
+
+	it("marks a stored provider credential expired when its real CLI probe fails", async () => {
+		const userData = await mkdtemp(join(tmpdir(), "zuse-account-access-"));
+		temporaryDirectories.push(userData);
+		const result = await Effect.runPromise(
 			Effect.gen(function* () {
 				const service = yield* AccountAccessService;
-				return yield* Stream.runCollect(
-					service.createClaudeTransfer({ prepared }),
-				);
+				yield* service.setCredential({
+					providerId: "grok",
+					method: "api-key",
+					secret: "expired-xai-key",
+				});
+				return yield* service.status();
 			}).pipe(
 				Effect.provide(
-					makeLayer(
-						userData,
-						{
-							stream: () =>
-								Stream.make(
-									{
-										_tag: "line",
-										text: "Open https://claude.ai/setup-token\r\nPaste code here if prompted > ",
-									},
-									{
-										_tag: "line",
-										text: "Token: sk-ant-oat01-abcdefghijklmnopqrstuvwxyz123456\u001b[39m",
-									},
-								),
-						},
-						{
-							role: "control-plane",
-							signedInUserId: accountId,
-							identity,
-							relayConfig: "missing",
-							relayUrl,
-						},
-					),
+					makeLayer(userData, {
+						capture: (_command, args) =>
+							Effect.succeed({
+								stdout: "",
+								stderr: "unauthorized",
+								code: args.includes("models") ? 1 : 0,
+							}),
+					}),
 				),
 			),
 		);
-
-		expect([...events]).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({ _tag: "verification" }),
-				{ _tag: "input-ready" },
-				expect.objectContaining({ _tag: "sealed" }),
-				{ _tag: "done", ok: true },
-			]),
-		);
+		expect(
+			result.providers.find((provider) => provider.providerId === "grok")
+				?.state,
+		).toBe("expired");
 	});
 
-	it("continues and cancels an interactive Claude login without exposing the code in arguments", async () => {
-		const userData = await mkdtemp(join(tmpdir(), "zuse-account-continue-"));
+	it("writes only non-secret custom configuration outside the secret store", async () => {
+		const userData = await mkdtemp(join(tmpdir(), "zuse-account-access-"));
 		temporaryDirectories.push(userData);
-		const writes: Array<{
-			readonly sessionId: string;
-			readonly input: string;
-		}> = [];
-		const cancellations: string[] = [];
-		const layer = makeLayer(
-			userData,
-			{
-				write: (sessionId, input) =>
-					Effect.sync(() => writes.push({ sessionId, input })),
-				cancel: (sessionId) => Effect.sync(() => cancellations.push(sessionId)),
-			},
-			{
-				role: "control-plane",
-				signedInUserId: "user_01JZUSE0000000000000000000",
-			},
-		);
-
-		const invalid = await Effect.runPromise(
+		await Effect.runPromise(
 			Effect.gen(function* () {
 				const service = yield* AccountAccessService;
-				yield* service.continueClaudeTransfer({
-					_tag: "code",
-					transferId: "transfer-1",
-					code: "safe-auth-code",
+				yield* service.configureCustom({
+					providerId: "grok",
+					baseUrl: "https://models.example/v1/",
+					modelProvider: "xai-compatible",
+					secret: "secret-api-key",
 				});
-				const rejected = yield* Effect.flip(
-					service.continueClaudeTransfer({
-						_tag: "code",
-						transferId: "transfer-1",
-						code: "unsafe\ncode",
-					}),
-				);
-				yield* service.continueClaudeTransfer({
-					_tag: "cancel",
-					transferId: "transfer-2",
-				});
-				return rejected;
-			}).pipe(Effect.provide(layer)),
+			}).pipe(Effect.provide(makeLayer(userData))),
 		);
+		const config = await readFile(
+			join(userData, "provider-config", "grok.json"),
+			"utf8",
+		);
+		expect(config).toContain("https://models.example/v1");
+		expect(config).not.toContain("secret-api-key");
+	});
 
-		expect(writes).toEqual([
-			{ sessionId: "transfer-1", input: "safe-auth-code\r" },
-		]);
-		expect(cancellations).toEqual(["transfer-2"]);
-		expect(invalid.code).toBe("transfer-rejected");
+	it("does not expose target-machine auth RPCs on the control plane", async () => {
+		await expect(
+			withService((service) => service.status(), {}, "control-plane"),
+		).rejects.toMatchObject({ code: "not-allowed" });
 	});
 });

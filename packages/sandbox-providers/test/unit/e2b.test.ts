@@ -120,7 +120,7 @@ describe("E2B sandbox provider", () => {
 		await Effect.runPromise(adapter.recoverByLabel("zuse-sandbox-1"));
 
 		expect(http.calls[0]?.url).toBe(
-			"https://api.e2b.app/v2/sandboxes?state=running,paused&metadata=zuse-label%3Dzuse-sandbox-1",
+			"https://api.e2b.app/v2/sandboxes?metadata=zuse-label%3Dzuse-sandbox-1",
 		);
 	});
 
@@ -260,7 +260,7 @@ describe("E2B sandbox provider", () => {
 		});
 	});
 
-	test("forks from a snapshot and always starts quarantined", async () => {
+	test("forks from a snapshot with the requested network policy", async () => {
 		const http = makeHttp([{ status: 201, body: { sandboxID: "sbx_fork" } }]);
 		const adapter = makeAdapter(http.client);
 
@@ -271,6 +271,7 @@ describe("E2B sandbox provider", () => {
 				snapshotId: "snap_1:default",
 				timeoutSeconds: 120,
 				env: { ZUSE_ENROLLMENT_TOKEN: "zenr_fork" },
+				network: { kind: "open" },
 				onTimeout: "pause",
 			}),
 		);
@@ -278,7 +279,7 @@ describe("E2B sandbox provider", () => {
 		expect(forked.providerSandboxId).toBe("sbx_fork");
 		const body = JSON.parse(String(http.calls[0]?.init?.body));
 		expect(body.templateID).toBe("snap_1:default");
-		expect(body.allow_internet_access).toBe(false);
+		expect(body.allow_internet_access).toBe(true);
 	});
 
 	test("recovers a timed-out create by deterministic label", async () => {
@@ -349,13 +350,6 @@ describe("E2B sandbox provider", () => {
 				},
 			},
 			{
-				status: 201,
-				body: {
-					sandboxID: "sbx_1",
-					envdAccessToken: "envd-secret",
-				},
-			},
-			{
 				status: 200,
 				rawBody: connectJsonResponse({ event: { start: { pid: 42 } } }),
 			},
@@ -372,12 +366,12 @@ describe("E2B sandbox provider", () => {
 		);
 
 		expect(http.calls[1]?.url).toBe(
-			"https://sandbox.test/sandboxes/sbx_1/connect",
-		);
-		expect(http.calls[2]?.url).toBe(
 			"https://49983-sbx_1.custom.e2b.app/process.Process/Start",
 		);
-		expect(http.calls[2]?.init?.headers).toMatchObject({
+		expect(http.calls.map((call) => call.url)).not.toContain(
+			"https://sandbox.test/sandboxes/sbx_1/connect",
+		);
+		expect(http.calls[1]?.init?.headers).toMatchObject({
 			"Connect-Protocol-Version": "1",
 			"Content-Type": "application/connect+json",
 			"E2b-Sandbox-Id": "sbx_1",
@@ -385,7 +379,7 @@ describe("E2B sandbox provider", () => {
 			"X-Access-Token": "envd-secret",
 			Authorization: "Basic enVzZTo=",
 		});
-		expect(decodeConnectJsonBody(http.calls[2]?.init?.body)).toEqual({
+		expect(decodeConnectJsonBody(http.calls[1]?.init?.body)).toEqual({
 			process: {
 				cmd: "/usr/local/bin/zuse-entrypoint",
 				args: [],
@@ -394,6 +388,40 @@ describe("E2B sandbox provider", () => {
 			},
 			stdin: false,
 		});
+	});
+
+	test("reuses the secure envd connection returned by sandbox creation", async () => {
+		const http = makeHttp([
+			{
+				status: 201,
+				body: {
+					sandboxID: "sbx_1",
+					domain: "custom.e2b.app",
+					envdAccessToken: "envd-secret",
+				},
+			},
+			{
+				status: 200,
+				rawBody: connectJsonResponse({ event: { start: { pid: 42 } } }),
+			},
+			{ status: 200 },
+		]);
+		const adapter = makeAdapter(http.client);
+
+		const created = await Effect.runPromise(adapter.create(createInput));
+		await Effect.runPromise(
+			adapter.startProcess(created.providerSandboxId, { command: "true" }),
+		);
+		await expect(
+			Effect.runPromise(
+				adapter.pathExists(created.providerSandboxId, "/tmp/ready"),
+			),
+		).resolves.toBe(true);
+
+		expect(http.calls).toHaveLength(3);
+		expect(http.calls.map((call) => call.url)).not.toContain(
+			"https://sandbox.test/sandboxes/sbx_1",
+		);
 	});
 
 	test("replaces a legacy runtime through the envd process API", async () => {
@@ -406,10 +434,6 @@ describe("E2B sandbox provider", () => {
 		};
 		const http = makeHttp([
 			{ status: 200, body: detail },
-			{
-				status: 201,
-				body: { sandboxID: "sbx_1", envdAccessToken: "envd-secret" },
-			},
 			{
 				status: 200,
 				body: {
@@ -426,7 +450,6 @@ describe("E2B sandbox provider", () => {
 				},
 			},
 			{ status: 200, body: {} },
-			{ status: 200, body: detail },
 			{
 				status: 200,
 				rawBody: connectJsonResponse({ event: { start: { pid: 42 } } }),
@@ -445,13 +468,13 @@ describe("E2B sandbox provider", () => {
 			),
 		);
 
-		expect(http.calls[2]?.url).toContain("/process.Process/List");
-		expect(http.calls[3]?.url).toContain("/process.Process/SendSignal");
-		expect(JSON.parse(String(http.calls[3]?.init?.body))).toEqual({
+		expect(http.calls[1]?.url).toContain("/process.Process/List");
+		expect(http.calls[2]?.url).toContain("/process.Process/SendSignal");
+		expect(JSON.parse(String(http.calls[2]?.init?.body))).toEqual({
 			process: { pid: 41 },
 			signal: "SIGNAL_SIGKILL",
 		});
-		expect(decodeConnectJsonBody(http.calls[5]?.init?.body)).toMatchObject({
+		expect(decodeConnectJsonBody(http.calls[3]?.init?.body)).toMatchObject({
 			process: {
 				cmd: "/opt/zuse/current/bin.mjs",
 				args: ["serve"],
@@ -469,12 +492,7 @@ describe("E2B sandbox provider", () => {
 		};
 		const http = makeHttp([
 			{ status: 200, body: detail },
-			{
-				status: 201,
-				body: { sandboxID: "sbx_1", envdAccessToken: "envd-secret" },
-			},
 			{ status: 200, body: { processes: [] } },
-			{ status: 200, body: detail },
 			{
 				status: 200,
 				rawBody: connectJsonResponse({ event: { start: { pid: 42 } } }),
@@ -494,7 +512,7 @@ describe("E2B sandbox provider", () => {
 			),
 		);
 
-		expect(decodeConnectJsonBody(http.calls[4]?.init?.body)).toMatchObject({
+		expect(decodeConnectJsonBody(http.calls[2]?.init?.body)).toMatchObject({
 			process: {
 				cmd: "/bin/bash",
 				args: [
@@ -509,7 +527,7 @@ describe("E2B sandbox provider", () => {
 			},
 		});
 		expect(
-			JSON.stringify(decodeConnectJsonBody(http.calls[4]?.init?.body)),
+			JSON.stringify(decodeConnectJsonBody(http.calls[2]?.init?.body)),
 		).not.toContain("proc_uid");
 	});
 

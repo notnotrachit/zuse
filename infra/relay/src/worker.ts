@@ -12,10 +12,6 @@ import { AccountIdentityLive } from "./account-identity.ts";
 import { resolveBillingRuntime } from "./billing-config.ts";
 import { CloudBillingStorePg } from "./cloud-billing-store.ts";
 import {
-	CloudCredentialVault,
-	CloudCredentialVaultLive,
-} from "./cloud-credential-vault.ts";
-import {
 	CloudWorkspaceLaunchIntentCipher,
 	CloudWorkspaceLaunchIntentCipherLive,
 } from "./cloud-workspace-launch-intent.ts";
@@ -79,6 +75,14 @@ interface Env {
 	readonly WORKOS_API_KEY?: string;
 	readonly RELAY_MINT_PRIVATE_JWK: string;
 	readonly RELAY_MINT_PUBLIC_JWK: string;
+	readonly CLOUD_DATA_ENCRYPTION_KEY?: string;
+	readonly GITHUB_APP_ID?: string;
+	readonly GITHUB_APP_SLUG?: string;
+	readonly GITHUB_APP_CLIENT_ID?: string;
+	readonly GITHUB_APP_PRIVATE_KEY?: string;
+	readonly GITHUB_APP_CLIENT_SECRET?: string;
+	readonly GITHUB_APP_WEBHOOK_SECRET?: string;
+	/** Legacy binding retained so existing encrypted staging data remains readable. */
 	readonly CLOUD_CREDENTIAL_VAULT_KEY?: string;
 	readonly CLOUD_WORKSPACE_IDLE_TIMEOUT_MS?: string;
 	readonly CLOUD_REPOSITORY_CACHE_MAX_BYTES?: string;
@@ -310,6 +314,13 @@ const build = (env: Env): ReturnType<typeof makeRelay> => {
 		throw new Error(
 			"Polar and POLAR_CLOUD_OVERAGE_METER_ID are required for billing export",
 		);
+	const cloudDataEncryptionKey =
+		env.CLOUD_DATA_ENCRYPTION_KEY ?? env.CLOUD_CREDENTIAL_VAULT_KEY;
+	const githubAppConfigured = [
+		env.GITHUB_APP_ID,
+		env.GITHUB_APP_SLUG,
+		env.GITHUB_APP_PRIVATE_KEY,
+	].every(isConfigured);
 	const configLayer = Config.layer({
 		relayIssuer: env.RELAY_ISSUER,
 		workosJwksUrl: env.WORKOS_JWKS_URL,
@@ -319,8 +330,24 @@ const build = (env: Env): ReturnType<typeof makeRelay> => {
 			: undefined,
 		mintPrivateKey: Redacted.make(env.RELAY_MINT_PRIVATE_JWK),
 		mintPublicKey: env.RELAY_MINT_PUBLIC_JWK,
-		cloudCredentialVaultKey: isConfigured(env.CLOUD_CREDENTIAL_VAULT_KEY)
-			? Redacted.make(env.CLOUD_CREDENTIAL_VAULT_KEY)
+		cloudDataEncryptionKey: isConfigured(cloudDataEncryptionKey)
+			? Redacted.make(cloudDataEncryptionKey)
+			: undefined,
+		githubApp: githubAppConfigured
+			? {
+					appId: env.GITHUB_APP_ID as string,
+					slug: env.GITHUB_APP_SLUG as string,
+					privateKey: Redacted.make(env.GITHUB_APP_PRIVATE_KEY as string),
+					clientId: isConfigured(env.GITHUB_APP_CLIENT_ID)
+						? env.GITHUB_APP_CLIENT_ID
+						: undefined,
+					clientSecret: isConfigured(env.GITHUB_APP_CLIENT_SECRET)
+						? Redacted.make(env.GITHUB_APP_CLIENT_SECRET)
+						: undefined,
+					webhookSecret: isConfigured(env.GITHUB_APP_WEBHOOK_SECRET)
+						? Redacted.make(env.GITHUB_APP_WEBHOOK_SECRET)
+						: undefined,
+				}
 			: undefined,
 		e2bWebhookSecret: isConfigured(env.E2B_WEBHOOK_SECRET)
 			? Redacted.make(env.E2B_WEBHOOK_SECRET)
@@ -416,9 +443,6 @@ const build = (env: Env): ReturnType<typeof makeRelay> => {
 		MachineStorePg.pipe(Layer.provide(dbLayer)),
 		CloudWorkspaceStorePg.pipe(Layer.provide(dbLayer)),
 		CloudBillingStorePg.pipe(Layer.provide(dbLayer)),
-		Layer.effect(CloudCredentialVault, CloudCredentialVaultLive).pipe(
-			Layer.provide(configLayer),
-		),
 		Layer.effect(
 			CloudWorkspaceLaunchIntentCipher,
 			CloudWorkspaceLaunchIntentCipherLive,
@@ -488,13 +512,18 @@ export default {
 		const cloudWorkspaceId = response.headers.get(
 			"x-zuse-reconcile-cloud-workspace",
 		);
+		const cloudPoolAccountId = response.headers.get(
+			"x-zuse-reconcile-cloud-pool",
+		);
 		response.headers.delete("x-zuse-reconcile-machine");
 		response.headers.delete("x-zuse-reconcile-cloud-build");
 		response.headers.delete("x-zuse-reconcile-cloud-workspace");
+		response.headers.delete("x-zuse-reconcile-cloud-pool");
 		if (
 			machineId === null &&
 			cloudBuildId === null &&
-			cloudWorkspaceId === null
+			cloudWorkspaceId === null &&
+			cloudPoolAccountId === null
 		) {
 			await relay.dispose();
 			return response;
@@ -507,7 +536,10 @@ export default {
 				...cloudBuildIds.map((buildId) => relay.reconcileCloudBuild(buildId)),
 				cloudWorkspaceId === null
 					? Promise.resolve()
-					: relay.reconcileCloudWorkspace(cloudWorkspaceId),
+					: relay.reconcileCloudWorkspaceStartup(cloudWorkspaceId),
+				cloudPoolAccountId === null
+					? Promise.resolve()
+					: relay.reconcileCloudPool(cloudPoolAccountId),
 			]).finally(() => relay.dispose()),
 		);
 		return response;

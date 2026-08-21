@@ -20,6 +20,7 @@ const relayDirectory = fileURLToPath(new URL("../..", import.meta.url));
 
 interface WranglerTarget {
 	readonly name: string;
+	readonly placement?: { readonly region: string };
 	readonly routes: ReadonlyArray<{ readonly pattern: string }>;
 	readonly vars: Readonly<Record<string, string>>;
 	readonly hyperdrive: ReadonlyArray<{
@@ -62,9 +63,9 @@ describe("relay deployment safety", () => {
 			`https://api.workos.com/sso/jwks/${WORKOS_STAGING_PUBLIC_CLIENT_ID}`,
 		);
 		expect(config.vars.MACHINE_ALPHA_ALLOWLIST).toBe(
-			"user_01KW7R9WGJFFSKDNESE7RN00N1",
+			"user_01KW7R9WGJFFSKDNESE7RN00N1,user_01M0HA239JJ7P73AA1X5M8KDHF",
 		);
-		expect(config.vars.MACHINE_MANUAL_ENTITLEMENTS).toBe("false");
+		expect(config.vars.MACHINE_MANUAL_ENTITLEMENTS).toBe("true");
 		expect(config.vars.MACHINE_PROVIDER).toBe("hetzner");
 		expect(config.vars.HETZNER_ADAPTER_ENABLED).toBe("true");
 		expect(config.vars.HETZNER_FIREWALL_ID).toBe("11418954");
@@ -75,18 +76,15 @@ describe("relay deployment safety", () => {
 			JSON.parse(config.vars.MACHINE_RUNTIME_SIGNING_PUBLIC_JWK ?? ""),
 		).not.toThrow();
 		expect(config.vars.MACHINE_LIVE_CHECKOUT_ENABLED).toBe("true");
-		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL).toBe(
-			config.vars.MACHINE_RUNTIME_MANIFEST_URL,
-		);
-		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK).toBe(
-			config.vars.MACHINE_RUNTIME_SIGNING_PUBLIC_JWK,
-		);
+		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_MANIFEST_URL).toBe("");
+		expect(config.vars.CLOUD_WORKSPACE_RUNTIME_SIGNING_PUBLIC_JWK).toBe("");
 		expect(config.vars).not.toHaveProperty("SANDBOX_DEFAULT_PROVIDER");
 		expect(config.vars.E2B_ADAPTER_ENABLED).toBe("true");
 		expect(config.vars.E2B_TEMPLATE_ID).toBe("zuse-cloud-sandbox");
 		expect(config.vars.E2B_TEMPLATE_VERSION).toBe(
-			"4dae42be-6c3b-4d78-ab63-cfa406d3d70d",
+			"e147c717-5a91-4d68-a244-f1ca65034a3d",
 		);
+		expect(config.placement).toEqual({ region: "aws:ap-southeast-1" });
 		expect(config.vars.POLAR_PRODUCT_PERSISTENT_STANDARD_V1).toBe(
 			"810223ea-94f2-47e7-9c09-af9a0fd86174",
 		);

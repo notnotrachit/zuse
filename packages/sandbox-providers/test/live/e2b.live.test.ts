@@ -131,6 +131,7 @@ describe.skipIf(apiKey === undefined)("E2B live lifecycle", () => {
 					snapshotId,
 					timeoutSeconds: LIVE_TIMEOUT_SECONDS,
 					env: { ZUSE_LIVE_TEST: runId },
+					network: { kind: "quarantined" },
 					onTimeout: "pause",
 				}),
 			);

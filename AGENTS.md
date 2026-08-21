@@ -17,6 +17,11 @@ Zuse is a clean, fast, reliable desktop GUI for working with many kinds of AI mo
 
 If a tradeoff is required, choose correctness and robustness over short-term convenience.
 
+## UI Density
+
+- Keep settings and authentication dialogs compact and border-light. Prefer spacing, typography, and subtle tonal backgrounds over decorative outer borders or bordered code containers.
+- In compact dialogs and Cloud Workspace settings, inputs, command rows, device-code rows, and actions should use an explicit `h-7`. Adjacent inputs and buttons must use the same visible height. Do not use `h-8`, `h-11`, or `min-h-11` for the visible control layout.
+
 ## Maintainability
 
 - Long-term maintainability is a core priority.

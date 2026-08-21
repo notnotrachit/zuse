@@ -139,10 +139,7 @@ export const useActiveContext = (): ActiveContext => {
 		cloudWorkspaceId === null ? null : EnvironmentId.make(cloudWorkspaceId),
 		cloudWorkspaceId === null ? "cache-only" : "connect",
 	);
-	const cloudFolder =
-		cloudShell.data?.folders.find(
-			(candidate) => candidate.path === "/home/zuse/workspace",
-		) ?? null;
+	const cloudFolder = cloudShell.data?.folders[0] ?? null;
 
 	return useMemo<ActiveContext>(() => {
 		if (!foldersLoaded) return { status: "loading" };
@@ -188,8 +185,7 @@ export const useActiveContext = (): ActiveContext => {
 			};
 		}
 		if (
-			pendingCreation !== null &&
-			pendingCreation.workspaceRequested &&
+			pendingCreation?.workspaceRequested &&
 			pendingCreation.projectId === selectedFolderId
 		) {
 			return {

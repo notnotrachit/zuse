@@ -1,13 +1,13 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { watch } from "node:fs";
-import { access, mkdir, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
 	AgentSessionId,
 	AgentTurnId,
 	ChatId,
 	CLOUD_TRANSCRIPT_CHECKPOINT_SCHEMA_VERSION,
-	CloudRuntimeCredential,
 	CloudTranscriptCheckpointPayload,
 	CloudTranscriptMessagePagePayload,
 	CloudWorkspaceRuntimeSummary,
@@ -29,6 +29,7 @@ import {
 } from "@zuse/utils/cloud-transcript-crypto";
 import {
 	Clock,
+	Deferred,
 	Duration,
 	Effect,
 	Layer,
@@ -51,25 +52,23 @@ import {
 	MessageService,
 } from "../conversation/services/conversation-services.ts";
 import { LanAuthService } from "../lan-auth/services/lan-auth-service.ts";
-import type { CredentialsService } from "../provider/services/credentials-service.ts";
+import { CredentialsService } from "../provider/services/credentials-service.ts";
 import {
 	WorkspaceService,
 	type WorkspaceServiceShape,
 } from "../workspace/services/workspace-service.ts";
-import { installCloudCredentials } from "./cloud-enrollment.ts";
 
 const CREDENTIALS_READY_MARKER = "/var/lib/zuse/workspace/credentials-ready";
 const CREDENTIALS_READY_EVENT =
 	"/var/lib/zuse/workspace/credentials-ready-event";
 const REPOSITORY_READY_MARKER = "/var/lib/zuse/workspace/repository-ready";
-export const CLOUD_WORKSPACE_ROOT = "/home/zuse/workspace";
-
 export interface CloudWorkspaceRuntimeConfig {
 	readonly workspaceId: string;
 	readonly relayUrl: string;
 	readonly bootToken: Redacted.Redacted<string>;
 	readonly bootTokenFile?: string;
 	readonly localPort: number;
+	readonly workspaceRoot: string;
 }
 
 export class CloudWorkspaceRuntimeError extends Schema.TaggedErrorClass<CloudWorkspaceRuntimeError>()(
@@ -139,6 +138,7 @@ export const bufferWorkspaceLocalFrame = (
 const BootstrapResponse = Schema.Struct({
 	workspaceId: Schema.String,
 	runtimeCredential: Schema.String,
+	runtimeGatewayCredential: Schema.String,
 	runtimeCredentialExpiresAt: Schema.Number,
 	runtimeGeneration: Schema.Number,
 	gatewayEpoch: Schema.Number,
@@ -158,21 +158,168 @@ const BootstrapResponse = Schema.Struct({
 			pendingRename: Schema.optional(Schema.String),
 		}),
 	),
-	cloudCredentials: Schema.Array(
-		Schema.Struct({
-			kind: Schema.Literals(["github", "claude", "codex"]),
-			credentialType: Schema.Literals([
-				"api-key",
-				"oauth-token",
-				"repository-token",
-				"native-store",
-			]),
-			sealedSecret: Schema.String,
-			version: Schema.Number,
-		}),
-	),
 	sealedTranscriptKey: Schema.String,
+	sealedProviderGrant: Schema.optional(Schema.String),
 });
+
+const ProviderGrant = Schema.Struct({
+	version: Schema.Literal(1),
+	providerId: Schema.Literals(["claude", "codex", "cursor", "grok"]),
+	method: Schema.Literals(["subscription", "api-key", "custom"]),
+	env: Schema.Record(Schema.String, Schema.String),
+	baseUrl: Schema.optional(Schema.String),
+	modelProvider: Schema.optional(Schema.String),
+	workspaceId: Schema.String,
+	runtimeGeneration: Schema.Number,
+	issuedAt: Schema.Number,
+});
+
+const IMAGE_PROVIDER_IDS = ["claude", "codex", "cursor", "grok"] as const;
+const ImageProviderSecrets = Schema.Record(
+	Schema.String,
+	Schema.Struct({
+		method: Schema.Literals(["subscription", "api-key", "custom"]),
+		secret: Schema.String,
+	}),
+);
+
+export const decodeImageProviderSecrets = (raw: string) =>
+	Effect.try({
+		try: () => JSON.parse(raw) as unknown,
+		catch: () => fail("workspace_image_credentials_invalid"),
+	}).pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(ImageProviderSecrets)),
+		Effect.filterOrFail(
+			(decoded) =>
+				Object.keys(decoded).every((providerId) =>
+					IMAGE_PROVIDER_IDS.includes(
+						providerId as (typeof IMAGE_PROVIDER_IDS)[number],
+					),
+				),
+			() => fail("workspace_image_credentials_invalid"),
+		),
+		Effect.mapError(() => fail("workspace_image_credentials_invalid")),
+	);
+
+const installImageProviderSecrets = Effect.fn("installImageProviderSecrets")(
+	function* (credentials: CredentialsService["Service"]) {
+		const path = "/home/zuse/.zuse-image/provider-secrets.json";
+		const raw = yield* Effect.promise(() =>
+			readFile(path, "utf8").catch(() => null),
+		);
+		if (raw === null) return;
+		const decoded = yield* decodeImageProviderSecrets(raw);
+		for (const [providerId, entry] of Object.entries(decoded)) {
+			yield* credentials
+				.setProviderCredential(
+					providerId as "claude" | "codex" | "cursor" | "grok",
+					{
+						kind:
+							providerId === "claude" && entry.method === "subscription"
+								? "oauth-token"
+								: "api-key",
+						secret: entry.secret,
+					},
+				)
+				.pipe(
+					Effect.mapError(() =>
+						fail("workspace_provider_credential_store_failed"),
+					),
+				);
+			if (providerId === "codex") yield* installCodexApiKey(entry.secret);
+		}
+		// The account image retains the source file. A chat fork removes its copy
+		// after importing it into the runtime's encrypted local credential store.
+		yield* Effect.promise(() => unlink(path).catch(() => undefined));
+	},
+);
+
+const decodeBase64Url = (value: string): Uint8Array<ArrayBuffer> =>
+	new Uint8Array(Buffer.from(value, "base64url"));
+
+const decryptProviderGrant = Effect.fn("decryptCloudProviderGrant")(function* (
+	sealed: string,
+	privateKey: CryptoKey,
+) {
+	const envelope = yield* Effect.try({
+		try: () => {
+			const parsed = JSON.parse(
+				Buffer.from(sealed, "base64url").toString("utf8"),
+			) as Record<string, unknown>;
+			if (
+				typeof parsed.wrappedKey !== "string" ||
+				typeof parsed.iv !== "string" ||
+				typeof parsed.tag !== "string" ||
+				typeof parsed.ciphertext !== "string"
+			)
+				throw new Error("invalid_envelope");
+			return {
+				wrappedKey: parsed.wrappedKey,
+				iv: parsed.iv,
+				tag: parsed.tag,
+				ciphertext: parsed.ciphertext,
+			};
+		},
+		catch: () => fail("workspace_provider_grant_invalid"),
+	});
+	const plaintext = yield* Effect.tryPromise({
+		try: async () => {
+			const rawKey = await crypto.subtle.decrypt(
+				{ name: "RSA-OAEP" },
+				privateKey,
+				decodeBase64Url(envelope.wrappedKey),
+			);
+			const aesKey = await crypto.subtle.importKey(
+				"raw",
+				rawKey,
+				{ name: "AES-GCM" },
+				false,
+				["decrypt"],
+			);
+			const ciphertext = Buffer.concat([
+				Buffer.from(envelope.ciphertext, "base64url"),
+				Buffer.from(envelope.tag, "base64url"),
+			]);
+			return crypto.subtle.decrypt(
+				{
+					name: "AES-GCM",
+					iv: decodeBase64Url(envelope.iv),
+					tagLength: 128,
+				},
+				aesKey,
+				ciphertext,
+			);
+		},
+		catch: () => fail("workspace_provider_grant_decryption_failed"),
+	});
+	return yield* Schema.decodeUnknownEffect(ProviderGrant)(
+		JSON.parse(new TextDecoder().decode(plaintext)),
+	).pipe(Effect.mapError(() => fail("workspace_provider_grant_invalid")));
+});
+
+const installCodexApiKey = (
+	secret: string,
+): Effect.Effect<void, CloudWorkspaceRuntimeError> =>
+	Effect.callback<void, CloudWorkspaceRuntimeError>((resume) => {
+		const child = spawn("codex", ["login", "--with-api-key"], {
+			stdio: ["pipe", "ignore", "ignore"],
+		});
+		const timer = setTimeout(() => child.kill("SIGTERM"), 30_000);
+		child.once("error", () => {
+			clearTimeout(timer);
+			resume(Effect.fail(fail("workspace_codex_login_failed")));
+		});
+		child.once("exit", (code) => {
+			clearTimeout(timer);
+			resume(
+				code === 0
+					? Effect.void
+					: Effect.fail(fail("workspace_codex_login_failed")),
+			);
+		});
+		child.stdin.end(`${secret}\n`);
+		return Effect.sync(() => child.kill("SIGTERM"));
+	});
 
 const RuntimeCredentialRenewalResponse = Schema.Struct({
 	workspaceId: Schema.String,
@@ -204,6 +351,7 @@ const RuntimeTranscriptMessagePageResponse = Schema.Struct({
 
 interface RuntimeCredentialState {
 	credential: string;
+	gatewayCredential?: string;
 	expiresAt: number;
 	generation: number;
 	gatewayEpoch: number;
@@ -513,6 +661,7 @@ const renewRuntimeCredential = (input: {
 						fail("workspace_runtime_renewal_fence_changed"),
 					);
 				input.state.credential = result.success.runtimeCredential;
+				input.state.gatewayCredential = undefined;
 				input.state.expiresAt = result.success.expiresAt;
 				return;
 			}
@@ -667,6 +816,7 @@ export const startCloudWorkspaceLaunchIntent = (input: {
 	readonly chats: ChatServiceShape;
 	readonly chatId: string;
 	readonly sessionId: string;
+	readonly workspaceRoot: string;
 	readonly launchIntent: Exclude<
 		typeof BootstrapResponse.Type.launchIntent,
 		undefined
@@ -680,9 +830,9 @@ export const startCloudWorkspaceLaunchIntent = (input: {
 			return yield* Effect.fail(fail("workspace_agent_config_invalid"));
 		const folders = yield* input.workspaces.list();
 		const folder =
-			folders.find((candidate) => candidate.path === CLOUD_WORKSPACE_ROOT) ??
+			folders.find((candidate) => candidate.path === input.workspaceRoot) ??
 			(yield* input.workspaces
-				.add(CLOUD_WORKSPACE_ROOT)
+				.add(input.workspaceRoot)
 				.pipe(Effect.mapError(() => fail("workspace_registration_failed"))));
 		const title = input.launchIntent.pendingRename ?? input.launchIntent.title;
 		const commandId = input.launchIntent.commandId;
@@ -743,11 +893,11 @@ export const makeCloudWorkspaceRuntimeLayer = (
 ): Layer.Layer<
 	never,
 	CloudWorkspaceRuntimeError,
-	| CredentialsService
 	| LanAuthService
 	| WorkspaceService
 	| ChatService
 	| MessageService
+	| CredentialsService
 	| SessionDomain
 > =>
 	config === undefined
@@ -758,6 +908,8 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					const workspaces = yield* WorkspaceService;
 					const chats = yield* ChatService;
 					const messages = yield* MessageService;
+					const credentials = yield* CredentialsService;
+					yield* installImageProviderSecrets(credentials);
 					const sessionDomain = yield* SessionDomain;
 					const [credentialKeyPair, signingKeyPair] = yield* Effect.tryPromise({
 						try: () =>
@@ -787,6 +939,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					);
 					const runtimeCredential: RuntimeCredentialState = {
 						credential: bootstrap.runtimeCredential,
+						gatewayCredential: bootstrap.runtimeGatewayCredential,
 						expiresAt: bootstrap.runtimeCredentialExpiresAt,
 						generation: bootstrap.runtimeGeneration,
 						gatewayEpoch: bootstrap.gatewayEpoch,
@@ -796,25 +949,6 @@ export const makeCloudWorkspaceRuntimeLayer = (
 						signingPrivateKey: signingKeyPair.privateKey,
 						state: runtimeCredential,
 					}).pipe(Effect.forkScoped({ startImmediately: true }));
-					const cloudCredentials = yield* Effect.forEach(
-						bootstrap.cloudCredentials,
-						(credential) =>
-							Effect.tryPromise({
-								try: async () => {
-									const decrypted = await compactDecrypt(
-										credential.sealedSecret,
-										credentialKeyPair.privateKey,
-									);
-									return new CloudRuntimeCredential({
-										kind: credential.kind,
-										credentialType: credential.credentialType,
-										secret: new TextDecoder().decode(decrypted.plaintext),
-										version: credential.version,
-									});
-								},
-								catch: () => fail("workspace_credential_decryption_failed"),
-							}),
-					);
 					const transcriptKey = yield* Effect.tryPromise({
 						try: async () => {
 							const decrypted = await compactDecrypt(
@@ -825,11 +959,49 @@ export const makeCloudWorkspaceRuntimeLayer = (
 						},
 						catch: () => fail("workspace_transcript_key_decryption_failed"),
 					});
-					yield* installCloudCredentials(cloudCredentials).pipe(
-						Effect.mapError(() => fail("workspace_credential_install_failed")),
-					);
+					if (bootstrap.sealedProviderGrant !== undefined) {
+						const grant = yield* decryptProviderGrant(
+							bootstrap.sealedProviderGrant,
+							credentialKeyPair.privateKey,
+						);
+						if (
+							grant.workspaceId !== config.workspaceId ||
+							grant.runtimeGeneration !== bootstrap.runtimeGeneration
+						)
+							return yield* Effect.fail(
+								fail("workspace_provider_grant_fence_mismatch"),
+							);
+						const secret =
+							grant.env.ANTHROPIC_API_KEY ??
+							grant.env.CLAUDE_CODE_OAUTH_TOKEN ??
+							grant.env.OPENAI_API_KEY ??
+							grant.env.CURSOR_API_KEY ??
+							grant.env.GROK_CODE_XAI_API_KEY ??
+							grant.env.XAI_API_KEY;
+						if (secret === undefined || secret.length < 8)
+							return yield* Effect.fail(
+								fail("workspace_provider_grant_invalid"),
+							);
+						yield* credentials
+							.setProviderCredential(grant.providerId, {
+								kind:
+									grant.providerId === "claude" &&
+									grant.method === "subscription"
+										? "oauth-token"
+										: "api-key",
+								secret,
+							})
+							.pipe(
+								Effect.mapError(() =>
+									fail("workspace_provider_credential_store_failed"),
+								),
+							);
+						if (grant.providerId === "codex") {
+							yield* installCodexApiKey(secret);
+						}
+					}
 					yield* writeCredentialsReady;
-					yield* retryCloudWorkspaceBootstrap(
+					const acknowledgeBootstrap = retryCloudWorkspaceBootstrap(
 						requestJson({
 							schema: RuntimeBootstrapAckResponse,
 							url: `${config.relayUrl}${RelayPaths.cloudWorkspaceBootstrapAck(config.workspaceId)}`,
@@ -840,8 +1012,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 								gatewayEpoch: runtimeCredential.gatewayEpoch,
 							},
 						}),
-					);
-					yield* removeBootToken(config.bootTokenFile);
+					).pipe(Effect.andThen(removeBootToken(config.bootTokenFile)));
 					const localCredential = yield* auth
 						.mintToken("cloud workspace gateway")
 						.pipe(
@@ -978,49 +1149,11 @@ export const makeCloudWorkspaceRuntimeLayer = (
 						).pipe(Effect.forkScoped({ startImmediately: true }));
 						return publisher;
 					});
-					yield* checkpointPublisherFor(bootstrap.initialSessionId);
-
 					const publishActivity = () => {
 						void Effect.runPromise(
 							summaryPublisher.publish("activity").pipe(Effect.ignore),
 						);
 					};
-					const sessionEventCursor = yield* sessionDomain.currentSequence.pipe(
-						Effect.mapError(() => fail("workspace_summary_cursor_unavailable")),
-					);
-					yield* sessionDomain
-						.allEvents({ afterSequence: sessionEventCursor })
-						.pipe(
-							Stream.runForEach((record) =>
-								Effect.gen(function* () {
-									const reason: RuntimeSummaryReason | null =
-										record.event._tag === "SessionTitleSet"
-											? "title"
-											: record.event._tag === "TurnSettled"
-												? "settled"
-												: record.event._tag === "MessagePersisted"
-													? "activity"
-													: null;
-									if (reason === null) return;
-									const checkpointPublisher = yield* checkpointPublisherFor(
-										record.streamId,
-									);
-									checkpointPublisher.mark(reason === "settled");
-									if (reason === "settled") {
-										void Effect.runPromise(
-											checkpointPublisher.flush.pipe(Effect.ignore),
-										);
-									}
-									if (record.streamId === bootstrap.initialSessionId) {
-										yield* summaryPublisher
-											.publish(reason)
-											.pipe(Effect.retry(cloudRuntimeRetrySchedule));
-									}
-								}),
-							),
-							Effect.forkScoped({ startImmediately: true }),
-						);
-
 					const localSockets = new Map<string, WebSocket>();
 					const pendingLocalFrames = new Map<
 						string,
@@ -1028,6 +1161,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					>();
 					let gateway: WebSocket | null = null;
 					let repositoryReady = false;
+					const gatewayOpened = yield* Deferred.make<void>();
 					const sendGateway = (message: unknown) => {
 						if (gateway?.readyState === WebSocket.OPEN)
 							gateway.send(
@@ -1095,9 +1229,16 @@ export const makeCloudWorkspaceRuntimeLayer = (
 
 					const connectGateway = websocketClosed(
 						bootstrap.gatewayUrl,
-						() => [bootstrap.gatewayProtocol, runtimeCredential.credential],
+						() => [
+							bootstrap.gatewayProtocol,
+							runtimeCredential.gatewayCredential ??
+								runtimeCredential.credential,
+						],
 						(socket) => {
 							gateway = socket;
+							void Effect.runPromise(
+								Deferred.succeed(gatewayOpened, undefined),
+							);
 							const reconnectPhase =
 								runtimeReadyPhaseOnGatewayOpen(repositoryReady);
 							if (reconnectPhase !== null)
@@ -1178,7 +1319,60 @@ export const makeCloudWorkspaceRuntimeLayer = (
 						Effect.forkScoped({ startImmediately: true }),
 					);
 
-					yield* waitForRepository;
+					yield* Effect.all(
+						[waitForRepository, Deferred.await(gatewayOpened)],
+						{ concurrency: "unbounded" },
+					);
+					yield* postReady(
+						config,
+						runtimeCredential.credential,
+						"repository-ready",
+					).pipe(Effect.retry(cloudRuntimeRetrySchedule));
+					repositoryReady = true;
+					yield* acknowledgeBootstrap.pipe(
+						Effect.forkScoped({ startImmediately: true }),
+					);
+
+					// Transcript and summary maintenance are not prerequisites for a usable
+					// sandbox. Start them after the gateway and worktree are ready so they
+					// never extend workspace setup latency.
+					yield* checkpointPublisherFor(bootstrap.initialSessionId);
+					const sessionEventCursor = yield* sessionDomain.currentSequence.pipe(
+						Effect.mapError(() => fail("workspace_summary_cursor_unavailable")),
+					);
+					yield* sessionDomain
+						.allEvents({ afterSequence: sessionEventCursor })
+						.pipe(
+							Stream.runForEach((record) =>
+								Effect.gen(function* () {
+									const reason: RuntimeSummaryReason | null =
+										record.event._tag === "SessionTitleSet"
+											? "title"
+											: record.event._tag === "TurnSettled"
+												? "settled"
+												: record.event._tag === "MessagePersisted"
+													? "activity"
+													: null;
+									if (reason === null) return;
+									const checkpointPublisher = yield* checkpointPublisherFor(
+										record.streamId,
+									);
+									checkpointPublisher.mark(reason === "settled");
+									if (reason === "settled") {
+										void Effect.runPromise(
+											checkpointPublisher.flush.pipe(Effect.ignore),
+										);
+									}
+									if (record.streamId === bootstrap.initialSessionId) {
+										yield* summaryPublisher
+											.publish(reason)
+											.pipe(Effect.retry(cloudRuntimeRetrySchedule));
+									}
+								}),
+							),
+							Effect.forkScoped({ startImmediately: true }),
+						);
+
 					const launchIntent = bootstrap.launchIntent;
 					if (launchIntent !== undefined) {
 						const started = yield* startCloudWorkspaceLaunchIntent({
@@ -1186,6 +1380,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 							chats,
 							chatId: bootstrap.chatId,
 							sessionId: bootstrap.initialSessionId,
+							workspaceRoot: config.workspaceRoot,
 							launchIntent,
 						}).pipe(Effect.result);
 						if (started._tag === "Failure") {
@@ -1212,20 +1407,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 									),
 								),
 						).pipe(Effect.retry(cloudRuntimeRetrySchedule));
-					} else {
-						// A resumed workspace already has its durable chat/session. A newly
-						// launched workspace does not become attachable until the launch
-						// intent above has created them and Relay has atomically recorded its
-						// receipt. Advertising repository-ready before that point lets the
-						// client timeline race the session transaction and reconnect-loop on
-						// SessionNotFoundError.
-						yield* postReady(
-							config,
-							runtimeCredential.credential,
-							"repository-ready",
-						).pipe(Effect.retry(cloudRuntimeRetrySchedule));
 					}
-					repositoryReady = true;
 					yield* summaryPublisher
 						.publish("initial")
 						.pipe(Effect.retry(cloudRuntimeRetrySchedule));

@@ -31,8 +31,10 @@ const INCLUDE_MARKER = "# Zuse cloud workspaces (managed include)";
 
 const sshRoot = (): string => join(homedir(), ".zuse", "ssh");
 const keyPath = (): string => join(sshRoot(), "id_ed25519");
-const managedConfigPath = (): string => join(sshRoot(), "config");
 const ticketsDir = (): string => join(sshRoot(), "tickets");
+
+/** The managed ssh config that declares every `zuse-*` cloud host alias. */
+export const cloudSshConfigPath = (): string => join(sshRoot(), "config");
 
 export const cloudSshHostAlias = (workspaceId: string): string =>
 	`zuse-${workspaceId}`;
@@ -96,7 +98,7 @@ const ensureUserConfigInclude = async (): Promise<void> => {
 	const existing = existsSync(configPath)
 		? await readFile(configPath, "utf8")
 		: "";
-	const updated = withUserConfigInclude(existing, managedConfigPath());
+	const updated = withUserConfigInclude(existing, cloudSshConfigPath());
 	if (updated !== null) await writeFile(configPath, updated, { mode: 0o600 });
 };
 
@@ -110,7 +112,7 @@ export const prepareCloudSshAccess = async (
 ): Promise<CloudSshPrepared> => {
 	const publicKey = await ensureCloudSshKeypair();
 	const bridgeCommand = `env ELECTRON_RUN_AS_NODE=1 "${process.execPath}" "${resolveBridgeScript()}"`;
-	await writeFile(managedConfigPath(), managedSshConfig(bridgeCommand), {
+	await writeFile(cloudSshConfigPath(), managedSshConfig(bridgeCommand), {
 		mode: 0o600,
 	});
 	await ensureUserConfigInclude();

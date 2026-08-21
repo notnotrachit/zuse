@@ -26,8 +26,6 @@ import type { RelayContext } from "../../src/handler.ts";
 import {
 	AccountIdentity,
 	CloudBillingStoreMemory,
-	CloudCredentialVault,
-	CloudCredentialVaultLive,
 	CloudWorkspaceLaunchIntentCipher,
 	CloudWorkspaceLaunchIntentCipherLive,
 	CloudWorkspaceStoreMemory,
@@ -146,7 +144,7 @@ const makeLayer = async (
 			JSON.stringify(await exportJWK(mintKey.privateKey)),
 		),
 		mintPublicKey: JSON.stringify(await exportJWK(mintKey.publicKey)),
-		cloudCredentialVaultKey: Redacted.make(
+		cloudDataEncryptionKey: Redacted.make(
 			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		),
 		managedTunnel,
@@ -177,10 +175,6 @@ const makeLayer = async (
 		MachineStoreMemory,
 		CloudWorkspaceStoreMemory,
 		CloudBillingStoreMemory,
-		Layer.effect(CloudCredentialVault, CloudCredentialVaultLive).pipe(
-			Layer.provide(configLayer),
-			Layer.orDie,
-		),
 		Layer.effect(
 			CloudWorkspaceLaunchIntentCipher,
 			CloudWorkspaceLaunchIntentCipherLive,
@@ -337,6 +331,28 @@ beforeEach(async () => {
 });
 
 describe("@zuse/relay", () => {
+	test("serves the GitHub App callback without a WorkOS bearer", async () => {
+		const response = await relay.fetch(
+			new Request(
+				`${RELAY_ISSUER}/v1/cloud/github/callback?installation_id=123`,
+			),
+		);
+
+		expect(response.status).toBe(400);
+		expect(response.headers.get("content-type")).toContain("text/html");
+		expect(await response.text()).toContain("Installation not linked");
+
+		const invalidState = await relay.fetch(
+			new Request(
+				`${RELAY_ISSUER}/v1/cloud/github/callback?installation_id=123&state=invalid`,
+			),
+		);
+		expect(invalidState.status).toBe(400);
+		expect(await invalidState.text()).toContain(
+			"GitHub could not be connected",
+		);
+	});
+
 	test("offers each server-owned cloud machine and makes creation idempotent", async () => {
 		const headers = {
 			authorization: "Bearer test-token:user_a",

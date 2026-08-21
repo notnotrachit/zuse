@@ -1,11 +1,11 @@
 # Cloud sandbox template
 
-This credential-free image contains the Zuse runtime and supported developer
-toolchain. Its inert `sleep infinity` command is deliberate. Project builders
-start `zuse-project-builder`; workspace forks start `zuse-workspace-bootstrap`
-with a one-time workspace boot token. The runtime binds only to loopback and
-opens an authenticated outbound connection to the workspace gateway, so no
-provider endpoint is exposed to clients.
+The credential-free base template contains the Zuse runtime and supported
+developer toolchain. An account-image build adds the user's selected normal Git
+checkouts below `/home/repos/<owner>/<repository>` and provider authentication.
+Each chat forks that account image, starts the runtime from `/home/zuse`, and
+selects one existing checkout without cloning, fetching, copying, or creating a
+worktree. Its inert `sleep infinity` base command is deliberate.
 
 SSH access does not run a listening daemon. The runtime's `/ssh` WebSocket
 route (ticket-gated, cloud-environment role only) spawns `sshd -i` per
@@ -62,15 +62,13 @@ Managed-server runtime manifests are intentionally not reused by cloud
 workspaces. A cloud-specific signed manifest may be configured separately after
 its workspace protocol has passed staging compatibility checks; otherwise the
 workspace uses the runtime baked into the published template.
-The optional fast-start cache clones the selected repository as a bare mirror,
-removes credentials and runtime identity, validates the result, and creates a
-snapshot. It does
-not evaluate repository environment configuration, install dependencies, or run
-the project setup command. Install dependencies later from the workspace terminal
-or through the agent when the task requires them.
+The explicit account-image build synchronizes every selected repository, removes
+transient GitHub credentials and runtime identity, validates the result, and
+creates one private snapshot. Normal workspace launch performs no Git network
+operation. Repository freshness changes only through Update image.
 
 The runtime exchanges the one-time token for a renewable workspace credential,
-installs account credentials, removes the boot token, fetches the latest base,
-checks out the task branch, and acknowledges the durable start command. The
-prepared snapshot contains no repository token, agent credential, runtime
+installs any runtime-scoped credential grant, opens the selected local branch,
+and acknowledges the durable start command. The account snapshot contains
+provider authentication by design, but no GitHub installation token, runtime
 identity, shell history, or authenticated process.

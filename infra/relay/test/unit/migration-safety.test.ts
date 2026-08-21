@@ -38,6 +38,22 @@ const cloudBillingMigrationUrl = new URL(
 	"../../drizzle/migrations/0010_cloud_billing_ledger.sql",
 	import.meta.url,
 );
+const machineOwnedAuthMigrationUrl = new URL(
+	"../../drizzle/migrations/0011_machine_owned_auth.sql",
+	import.meta.url,
+);
+const singleAccountImageMigrationUrl = new URL(
+	"../../drizzle/migrations/0012_single_account_image.sql",
+	import.meta.url,
+);
+const cloudProjectSelectionMigrationUrl = new URL(
+	"../../drizzle/migrations/0014_cloud_project_selection.sql",
+	import.meta.url,
+);
+const githubAppInstallationsMigrationUrl = new URL(
+	"../../drizzle/migrations/0015_github_app_installations.sql",
+	import.meta.url,
+);
 
 describe("relay migration reconciliation", () => {
 	test("keeps the main migration history before managed cloud machines", async () => {
@@ -60,7 +76,46 @@ describe("relay migration reconciliation", () => {
 			{ idx: 8, tag: "0008_runtime_summary_projection" },
 			{ idx: 9, tag: "0009_cloud_transcript_checkpoints" },
 			{ idx: 10, tag: "0010_cloud_billing_ledger" },
+			{ idx: 11, tag: "0011_machine_owned_auth" },
+			{ idx: 12, tag: "0012_single_account_image" },
+			{ idx: 13, tag: "0013_cloud_image_build_details" },
+			{ idx: 14, tag: "0014_cloud_project_selection" },
+			{ idx: 15, tag: "0015_github_app_installations" },
 		]);
+	});
+
+	test("stores GitHub App installation metadata without access tokens", async () => {
+		const migration = await readFile(
+			githubAppInstallationsMigrationUrl,
+			"utf8",
+		);
+		expect(migration).toContain(
+			'CREATE TABLE "relay_cloud_github_installations"',
+		);
+		expect(migration).toContain('"installation_id" bigint NOT NULL');
+		expect(migration).not.toMatch(/access_token|refresh_token|private_key/iu);
+	});
+
+	test("supports reversible account-image repository selection", async () => {
+		const migration = await readFile(cloudProjectSelectionMigrationUrl, "utf8");
+		expect(migration).toContain(
+			'ADD COLUMN "included" boolean DEFAULT true NOT NULL',
+		);
+	});
+
+	test("persists generation-fenced warm account-image sandboxes", async () => {
+		const migration = await readFile(singleAccountImageMigrationUrl, "utf8");
+		expect(migration).toContain('CREATE TABLE "relay_cloud_workspace_pool"');
+		expect(migration).toContain('"image_generation" text NOT NULL');
+		expect(migration).toContain("relay_cloud_pool_available_idx");
+	});
+
+	test("removes the imported credential table and workspace credential epoch", async () => {
+		const migration = await readFile(machineOwnedAuthMigrationUrl, "utf8");
+		expect(migration).toContain(
+			'DROP TABLE IF EXISTS "relay_cloud_credential_connections"',
+		);
+		expect(migration).toContain('DROP COLUMN IF EXISTS "credential_epoch"');
 	});
 
 	test("adds immutable cloud billing evidence and financial ledgers", async () => {

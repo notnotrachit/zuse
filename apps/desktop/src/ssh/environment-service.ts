@@ -219,6 +219,16 @@ export class SshEnvironmentManager {
 		return Effect.runPromise(discoverSshHosts());
 	}
 
+	/** The resolved ssh target of a currently connected environment, if any. */
+	resolvedTargetFor(environmentId: string): SshEnvironmentTarget | null {
+		for (const handle of this.handles.values()) {
+			if (handle.connection.descriptor.environmentId === environmentId) {
+				return handle.connection.profile.target;
+			}
+		}
+		return null;
+	}
+
 	ensure(input: EnsureSshEnvironmentInput): Promise<SshEnvironmentConnection> {
 		const saved =
 			"profileId" in input ? this.profiles.get(input.profileId) : null;

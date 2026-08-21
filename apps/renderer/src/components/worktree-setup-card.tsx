@@ -8,6 +8,7 @@ import {
 } from "../lib/cloud-workspace-catalog.ts";
 import { runControlPlane } from "../lib/control-plane-client.ts";
 import { useActiveEnvironmentEntities } from "../lib/environment-entity-hooks.ts";
+import { formatError } from "../lib/format-error.ts";
 import { shouldShowSetupCard } from "../lib/setup-card-visibility.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
 import { useChatsStore } from "../store/chats.ts";
@@ -221,11 +222,11 @@ export function CloudWorkspaceSetupCard({
 					}),
 				);
 			await refreshCloudChatCatalog();
-		} catch {
+		} catch (cause) {
 			toastManager.add({
 				type: "error",
-				title: "Cloud action failed",
-				description: "The workspace was kept. Try again.",
+				title: "Couldn't retry cloud workspace",
+				description: formatError(cause),
 			});
 		} finally {
 			setBusy(null);
@@ -278,9 +279,19 @@ export function CloudWorkspaceSetupCard({
 				</div>
 				{failed ? (
 					<div className="flex items-center gap-2 border-t border-border/40 px-3.5 py-2">
-						<p className="min-w-0 flex-1 text-[11px] text-[var(--accent-red)]">
-							{cloudFailureMessage(summary.statusCode)}
-						</p>
+						<div className="min-w-0 flex-1 text-[11px]">
+							<p className="text-[var(--accent-red)]">
+								{cloudFailureMessage(summary.statusCode)}
+							</p>
+							{summary.failureDiagnostic === undefined ? null : (
+								<p
+									className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground"
+									title={summary.failureDiagnostic}
+								>
+									{summary.failureDiagnostic.split("\n").at(-1)}
+								</p>
+							)}
+						</div>
 						<Button
 							size="xs"
 							loading={busy === "retry"}

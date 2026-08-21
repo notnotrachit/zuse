@@ -11,10 +11,6 @@ import {
 } from "../../src/account-identity.ts";
 import { CloudBillingStoreMemory } from "../../src/cloud-billing-store-memory.ts";
 import {
-	CloudCredentialVault,
-	CloudCredentialVaultLive,
-} from "../../src/cloud-credential-vault.ts";
-import {
 	CloudWorkspaceLaunchIntentCipher,
 	CloudWorkspaceLaunchIntentCipherLive,
 } from "../../src/cloud-workspace-launch-intent.ts";
@@ -45,7 +41,7 @@ const makeRuntime = async () => {
 			JSON.stringify(await exportJWK(mint.privateKey)),
 		),
 		mintPublicKey: JSON.stringify(await exportJWK(mint.publicKey)),
-		cloudCredentialVaultKey: Redacted.make(
+		cloudDataEncryptionKey: Redacted.make(
 			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		),
 	});
@@ -59,10 +55,6 @@ const makeRuntime = async () => {
 		MachineProvidersFake,
 		BillingProvidersManual,
 		SandboxProvidersFake,
-		Layer.effect(CloudCredentialVault, CloudCredentialVaultLive).pipe(
-			Layer.provide(config),
-			Layer.orDie,
-		),
 		Layer.effect(
 			CloudWorkspaceLaunchIntentCipher,
 			CloudWorkspaceLaunchIntentCipherLive,
@@ -96,32 +88,12 @@ const makeRuntime = async () => {
 };
 
 describe("cloud workspace runtime bootstrap", () => {
-	test("backfills legacy transcript keys and replays byte-stable credentials", async () => {
+	test("backfills transcript keys and replays a byte-stable bootstrap", async () => {
 		const runtime = await makeRuntime();
 		const store = await runtime.runPromise(CloudWorkspaceStore);
-		const vault = await runtime.runPromise(CloudCredentialVault);
 		const now = Date.now();
 		const workspaceId = "workspace-bootstrap";
 		const bootTokenHash = await runtime.runPromise(sha256Hex("boot-token"));
-		const encryptedCredential = await runtime.runPromise(
-			vault.encrypt("account-1", "github", 1, {
-				credentialType: "repository-token",
-				secret: "github-secret",
-			}),
-		);
-		await runtime.runPromise(
-			store.saveCredential({
-				connectionId: "credential-1",
-				accountId: "account-1",
-				kind: "github",
-				state: "connected",
-				encryptedPayload: encryptedCredential,
-				encryptionKeyVersion: "v1",
-				credentialVersion: 1,
-				createdAtMs: now,
-				updatedAtMs: now,
-			}),
-		);
 		const launchCiphertext = await runtime.runPromise(
 			Effect.gen(function* () {
 				const cipher = yield* CloudWorkspaceLaunchIntentCipher;
@@ -155,12 +127,10 @@ describe("cloud workspace runtime bootstrap", () => {
 					state: "provisioning",
 					desiredState: "ready",
 					statusCode: "runtime-starting",
-					credentialEpoch: 0,
 					idempotencyKey: "bootstrap-key",
 					requestConfig: {
 						runtimeGeneration: 4,
 						gatewayEpoch: 8,
-						credentialKinds: ["github"],
 					},
 					nextActionAtMs: now + 30_000,
 					revision: 1,
@@ -237,9 +207,7 @@ describe("cloud workspace runtime bootstrap", () => {
 			await runtime.runPromise(store.getWorkspace(workspaceId)),
 		).toMatchObject({ wrappedTranscriptKey: expect.any(String) });
 		const first = (await firstResponse.json()) as Record<string, unknown>;
-		expect(first.cloudCredentials).toMatchObject([
-			{ kind: "github", credentialType: "repository-token", version: 1 },
-		]);
+		expect(first).not.toHaveProperty("cloudCredentials");
 		const replayResponse = await bootstrap();
 		expect(replayResponse.status).toBe(200);
 		expect(await replayResponse.json()).toEqual(first);

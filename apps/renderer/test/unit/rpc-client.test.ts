@@ -10,11 +10,12 @@ Object.defineProperty(globalThis, "location", {
 const {
 	acquireRendererRpcSession,
 	canReuseCloudWorkspaceTicket,
-	clearCloudWorkspaceRuntimeRecovery,
 	cloudWorkspaceRequiresRuntimeRecovery,
 	cloudWorkspaceRuntimeRecoveryCommandId,
+	isAuthCodedConnectionError,
 	isIgnorableRendererFailure,
 	isRpcClientTransportError,
+	refreshCloudWorkspaceConnectionWithRecovery,
 	RENDERER_WEBSOCKET_OPEN_TIMEOUT,
 	resolveRendererRpcTransportForTest,
 	shouldReconnectRendererConnection,
@@ -56,6 +57,29 @@ describe("renderer RPC transport selection", () => {
 		});
 
 		expect(resolveRendererRpcTransportForTest()).toEqual({ kind: "electron" });
+	});
+
+	it("classifies coded auth rejections that carry no message text", async () => {
+		const { CloudWorkspaceOpError, ConnectAuthError } = await import(
+			"@zuse/contracts"
+		);
+		expect(
+			isAuthCodedConnectionError(
+				new CloudWorkspaceOpError({ code: "not-allowed" }),
+			),
+		).toBe(true);
+		expect(
+			isAuthCodedConnectionError(
+				new ConnectAuthError({ reason: "not-allowed" }),
+			),
+		).toBe(true);
+		expect(
+			isAuthCodedConnectionError(
+				new CloudWorkspaceOpError({ code: "conflict" }),
+			),
+		).toBe(false);
+		expect(isAuthCodedConnectionError(new Error("boom"))).toBe(false);
+		expect(isAuthCodedConnectionError(null)).toBe(false);
 	});
 
 	it("restarts only terminal cloud connection failures", () => {
@@ -218,7 +242,28 @@ describe("renderer RPC transport selection", () => {
 			"WebSocket closed (4100: workspace runtime unavailable).",
 			"WebSocket closed (4100: workspace runtime unavailable).",
 		]);
-		clearCloudWorkspaceRuntimeRecovery("workspace-recover");
+		const events: string[] = [];
+		const ticket = await refreshCloudWorkspaceConnectionWithRecovery(
+			"workspace-recover",
+			async (recoveryId) => {
+				events.push(`recover:${recoveryId}`);
+			},
+			async () => {
+				events.push("connect");
+				return {
+					workspaceId: "workspace-recover",
+					wsUrl: "wss://cloud.example/workspaces/workspace-recover",
+					protocol: "zuse-workspace-v2",
+					role: "client" as const,
+					generation: 2,
+					gatewayEpoch: 2,
+					credential: "new-ticket",
+					expiresAt: Date.now() + 60_000,
+				};
+			},
+		);
+		expect(events).toEqual([`recover:${commandId}`, "connect"]);
+		expect(ticket.generation).toBe(2);
 		expect(cloudWorkspaceRuntimeRecoveryCommandId("workspace-recover")).toBe(
 			undefined,
 		);

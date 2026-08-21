@@ -40,6 +40,7 @@ import {
 } from "./client-command-outbox.ts";
 import {
 	acquireRendererRpcSession,
+	isAuthCodedConnectionError,
 	isRpcClientTransportError,
 	type MemoizeClient,
 	type RendererRpcSession,
@@ -1038,7 +1039,7 @@ const faultFor = (cause: unknown): EnvironmentFault => {
 				? "update-required"
 				: lower.includes("revoked")
 					? "revoked"
-					: code === "not-allowed" ||
+					: isAuthCodedConnectionError(cause) ||
 							lower.includes("unauthorized") ||
 							lower.includes("authentication")
 						? "blocked-auth"

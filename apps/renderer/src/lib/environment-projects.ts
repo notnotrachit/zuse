@@ -115,7 +115,7 @@ export const listEnvironmentGithubRepos = (
 	readonly repos: ReadonlyArray<GithubRepoSummary>;
 	readonly authenticated: boolean;
 }> =>
-	Promise.all([
+	Promise.allSettled([
 		run<{ readonly limit: number }, ReadonlyArray<GithubRepoSummary>>(
 			environmentId,
 			"workspace.listGithubRepos",
@@ -126,4 +126,8 @@ export const listEnvironmentGithubRepos = (
 			"workspace.ghAuthStatus",
 			{},
 		),
-	]).then(([repos, auth]) => ({ repos, authenticated: auth.authenticated }));
+	]).then(([repos, auth]) => ({
+		repos: repos.status === "fulfilled" ? repos.value : [],
+		authenticated:
+			auth.status === "fulfilled" ? auth.value.authenticated : false,
+	}));

@@ -265,6 +265,64 @@ describe("EnvironmentRuntimeRegistry", () => {
 		await registry.dispose();
 	});
 
+	it("keeps the failed phase quiet during automatic retries and stops after the ladder", async () => {
+		let resolves = 0;
+		const phases: string[] = [];
+		const scheduled: Array<{ task: () => void; cancelled: boolean }> = [];
+		const registry = new EnvironmentRuntimeRegistry<{ id: number }>(
+			{
+				resolve: () => {
+					resolves += 1;
+					return Effect.fail({
+						phase: "failed" as const,
+						message: "gateway closed",
+					});
+				},
+			},
+			{
+				random: () => 0.5,
+				schedule: (_delay, task) => {
+					const item = { task, cancelled: false };
+					scheduled.push(item);
+					return () => {
+						item.cancelled = true;
+					};
+				},
+			},
+		);
+		const runtime = registry.get(EnvironmentId.make("environment-flap"));
+		runtime.subscribe((view) => phases.push(view.phase));
+		const lease = runtime.retain("connect");
+		await waitUntil(() => scheduled.length === 1);
+		// The user-driven first attempt shows progress before failing.
+		expect(phases).toContain("connecting");
+		const failuresBeforeRetries = resolves;
+
+		// Drain the automatic ladder: each fired retry fails and schedules the
+		// next one, without oscillating the visible phase back to connecting.
+		phases.length = 0;
+		for (let index = 0; index < 6; index += 1) {
+			scheduled[index]?.task();
+			await waitUntil(() => resolves === failuresBeforeRetries + index + 1);
+			// Let the failure handling settle before inspecting the schedule.
+			for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+		}
+		expect(scheduled.length).toBe(6);
+		expect(runtime.snapshot().phase).toBe("failed");
+		expect(phases).not.toContain("connecting");
+		expect(phases).not.toContain("reconnecting");
+
+		// An explicit retry starts a fresh, visible episode with new backoff.
+		const beforeManualRetry = resolves;
+		await runtime.retryNow().catch(() => undefined);
+		await waitUntil(() => resolves === beforeManualRetry + 1);
+		expect(phases).toContain("connecting");
+		expect(scheduled.length).toBe(7);
+
+		lease.release();
+		await registry.dispose();
+	});
+
 	it("retries retained runtimes immediately after a platform online edge", async () => {
 		let available = false;
 		let resolves = 0;

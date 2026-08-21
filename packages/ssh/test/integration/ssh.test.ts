@@ -121,9 +121,25 @@ describe("@zuse/ssh", () => {
 
 	test("builds native ssh commands", () => {
 		expect(sshGArgs("devbox")).toEqual(["-G", "devbox"]);
-		expect(
-			tunnelArgs({ host: "devbox", localPort: 3001, remotePort: 8787 }),
-		).toContain("127.0.0.1:3001:127.0.0.1:8787");
+		const args = tunnelArgs({
+			host: "devbox",
+			localPort: 3001,
+			remotePort: 8787,
+		});
+		expect(args).toContain("127.0.0.1:3001:127.0.0.1:8787");
+		expect(args).toContain("ExitOnForwardFailure=yes");
+		expect(args).not.toContain("-F");
+	});
+
+	test("resolves tunnel aliases against a dedicated ssh config", () => {
+		const args = tunnelArgs({
+			host: "zuse-workspace",
+			localPort: 3000,
+			remotePort: 3000,
+			configFile: "/home/user/.zuse/ssh/config",
+		});
+		expect(args.slice(0, 2)).toEqual(["-F", "/home/user/.zuse/ssh/config"]);
+		expect(args.at(-1)).toBe("zuse-workspace");
 	});
 
 	test("rejects SSH option and username injection", () => {

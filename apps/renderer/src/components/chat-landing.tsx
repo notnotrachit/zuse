@@ -4,6 +4,7 @@ import {
 	type AttachmentRef,
 	type ChatId,
 	type ChatWorkspacePolicy,
+	type CloudAccountImage,
 	type CloudProject,
 	type CloudProviderOption,
 	CommandId,
@@ -31,7 +32,6 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
-	useRef,
 	useState,
 } from "react";
 import {
@@ -394,11 +394,12 @@ export function ChatLanding() {
 		ReadonlyArray<CloudProviderOption>
 	>([]);
 	const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
+	const [cloudAccountImage, setCloudAccountImage] =
+		useState<CloudAccountImage | null>(null);
 	const [cloudSubscribed, setCloudSubscribed] = useState(false);
 	const [cloudPlacementError, setCloudPlacementError] = useState(false);
 	const setView = useUiStore((state) => state.setView);
 	const setSettingsSection = useUiStore((state) => state.setSettingsSection);
-	const cloudCacheRefreshRequests = useRef(new Set<string>());
 	const [projectSetupOpen, setProjectSetupOpen] = useState(false);
 	const anchoredGroup = useMemo(
 		() =>
@@ -416,21 +417,22 @@ export function ChatLanding() {
 	useEffect(() => {
 		let cancelled = false;
 		let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-		cloudCacheRefreshRequests.current.clear();
 		setSelectedCloudProviderId(null);
 		setCloudProviders([]);
 		setCloudProject(null);
+		setCloudAccountImage(null);
 		setCloudSubscribed(false);
 		setCloudPlacementError(false);
 		if (!CLOUD_WORKSPACE_BETA_AVAILABLE || cloudRepositoryIdentity === null)
 			return;
 		const loadCloudPlacement = async (): Promise<void> => {
 			try {
-				const [providerResult, projectResult, entitlementResult] =
+				const [providerResult, projectResult, entitlementResult, imageResult] =
 					await Promise.all([
 						runControlPlane((client) => client["cloud.providers"]()),
 						runControlPlane((client) => client["cloud.projects.list"]()),
 						runControlPlane((client) => client["machines.entitlements"]()),
+						runControlPlane((client) => client["cloud.image.status"]()),
 					]);
 				if (cancelled) return;
 				const project =
@@ -450,47 +452,11 @@ export function ChatLanding() {
 				);
 				setCloudProviders(providerResult.providers);
 				setCloudProject(project);
+				setCloudAccountImage(imageResult);
 				setCloudSubscribed(subscribed);
 				setCloudPlacementError(false);
 
-				const staleProviders =
-					project === null || !subscribed
-						? []
-						: providerResult.providers.filter((provider) => {
-								const latest = project.latestBuilds[provider.providerId];
-								return (
-									project.activeBuilds[provider.providerId] === undefined &&
-									(latest?.state === "ready" || latest?.state === "failed")
-								);
-							});
-				for (const provider of staleProviders) {
-					const latest = project?.latestBuilds[provider.providerId];
-					if (project === null || latest === undefined) continue;
-					const requestKey = `${project.projectId}:${provider.providerId}`;
-					if (cloudCacheRefreshRequests.current.has(requestKey)) continue;
-					cloudCacheRefreshRequests.current.add(requestKey);
-					try {
-						await runControlPlane((client) =>
-							client["cloud.projects.prepare"]({
-								projectId: project.projectId,
-								providerId: provider.providerId,
-								idempotencyKey: `automatic-refresh:${requestKey}:${latest.buildId}`,
-							}),
-						);
-					} catch (cause) {
-						cloudCacheRefreshRequests.current.delete(requestKey);
-						throw cause;
-					}
-				}
-				const buildIsChanging =
-					staleProviders.length > 0 ||
-					(project !== null &&
-						Object.values(project.latestBuilds).some(
-							(build) =>
-								build.state === "queued" ||
-								build.state === "building" ||
-								build.state === "sanitizing",
-						));
+				const buildIsChanging = imageResult.state === "building";
 				if (buildIsChanging && !cancelled)
 					refreshTimer = setTimeout(() => {
 						void loadCloudPlacement();
@@ -508,26 +474,42 @@ export function ChatLanding() {
 	const cloudPickerItems = useMemo<ReadonlyArray<CloudComputerPickerItem>>(
 		() =>
 			cloudProviders.map((provider) => {
-				const build = cloudProject?.latestBuilds[provider.providerId];
+				const included =
+					cloudProject !== null &&
+					cloudAccountImage?.repositories.some(
+						(repository) => repository.projectId === cloudProject.projectId,
+					) === true;
 				const ready =
-					cloudProject?.activeBuilds[provider.providerId] !== undefined;
+					included &&
+					(cloudAccountImage?.state === "ready" ||
+						cloudAccountImage?.state === "outdated");
 				const statusText = cloudPlacementError
 					? "Unavailable"
 					: !cloudSubscribed
 						? "Subscription required"
 						: cloudProject === null
 							? "Connect repository"
-							: ready || build !== undefined
+							: ready
 								? provider.displayName
-								: "Getting ready";
+								: cloudAccountImage?.state === "building"
+									? "Building cloud image"
+									: cloudAccountImage?.state === "auth-broken"
+										? "Rebuild authentication"
+										: "Update cloud image";
 				return {
 					providerId: provider.providerId,
 					providerLabel: provider.displayName,
-					disabled: cloudPlacementError || !cloudSubscribed,
+					disabled: cloudPlacementError || !cloudSubscribed || !ready,
 					statusText,
 				};
 			}),
-		[cloudPlacementError, cloudProject, cloudProviders, cloudSubscribed],
+		[
+			cloudAccountImage,
+			cloudPlacementError,
+			cloudProject,
+			cloudProviders,
+			cloudSubscribed,
+		],
 	);
 	const resolvedTarget: NewChatTarget | null =
 		selectedCloudProviderId !== null
@@ -810,7 +792,6 @@ export function ChatLanding() {
 						baseRef: `origin/${cloudProject.defaultBranch}`,
 						agent: draft.providerId,
 						model: draft.model,
-						credentialKinds: [draft.providerId as "claude" | "codex"],
 						firstMessage: input.text,
 						idempotencyKey: crypto.randomUUID(),
 					}),

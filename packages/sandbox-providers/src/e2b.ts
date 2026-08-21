@@ -203,7 +203,21 @@ export const makeE2bSandboxProvider = (
 	);
 	const endpointDomain = (domain: string | null | undefined): string =>
 		domain ?? config.sandboxDomain ?? E2B_DEFAULT_SANDBOX_DOMAIN;
-	const controlTokens = new Map<string, string>();
+	const controlConnections = new Map<
+		string,
+		{ readonly accessToken: string; readonly domain: string }
+	>();
+	const rememberControlConnection = (detail: {
+		readonly sandboxID: string;
+		readonly domain?: string | null;
+		readonly envdAccessToken?: string | null;
+	}): void => {
+		if (detail.envdAccessToken == null) return;
+		controlConnections.set(detail.sandboxID, {
+			accessToken: detail.envdAccessToken,
+			domain: endpointDomain(detail.domain),
+		});
+	};
 
 	const send = (
 		method: string,
@@ -313,11 +327,7 @@ export const makeE2bSandboxProvider = (
 			autoPause: input.onTimeout === "pause",
 		}).pipe(
 			Effect.tap((created) =>
-				Effect.sync(() => {
-					if (created.envdAccessToken != null) {
-						controlTokens.set(created.sandboxID, created.envdAccessToken);
-					}
-				}),
+				Effect.sync(() => rememberControlConnection(created)),
 			),
 			Effect.map(
 				(created): ProviderSandbox => ({
@@ -349,12 +359,22 @@ export const makeE2bSandboxProvider = (
 			"GET",
 			`/sandboxes/${encodeURIComponent(providerSandboxId)}`,
 			SandboxDetail,
+		).pipe(
+			Effect.tap((detail) =>
+				Effect.sync(() => rememberControlConnection(detail)),
+			),
 		);
 
 	const processConnection = Effect.fn("E2bSandboxProvider.processConnection")(
 		function* (providerSandboxId: string) {
+			const cached = controlConnections.get(providerSandboxId);
+			if (cached !== undefined)
+				return {
+					accessToken: cached.accessToken,
+					host: `49983-${providerSandboxId}.${cached.domain}`,
+				};
 			const detail = yield* sandboxDetail(providerSandboxId);
-			let accessToken = controlTokens.get(providerSandboxId);
+			let accessToken = detail.envdAccessToken ?? undefined;
 			if (accessToken === undefined) {
 				const connected = yield* request(
 					"POST",
@@ -363,13 +383,13 @@ export const makeE2bSandboxProvider = (
 					{ timeout: 300 },
 				);
 				accessToken = connected.envdAccessToken ?? undefined;
-				if (accessToken !== undefined)
-					controlTokens.set(providerSandboxId, accessToken);
 			}
 			if (accessToken === undefined) return yield* providerError("rejected");
+			const domain = endpointDomain(detail.domain);
+			controlConnections.set(providerSandboxId, { accessToken, domain });
 			return {
 				accessToken,
-				host: `49983-${providerSandboxId}.${endpointDomain(detail.domain)}`,
+				host: `49983-${providerSandboxId}.${domain}`,
 			};
 		},
 	);
@@ -614,9 +634,22 @@ export const makeE2bSandboxProvider = (
 						},
 						body: form,
 					}),
-				catch: () => providerError("transient"),
+				catch: () => {
+					reportRequestFailure({
+						method: "POST /files",
+						phase: "network",
+					});
+					return providerError("transient");
+				},
 			});
-			if (!response.ok) return yield* errorForStatus(response.status);
+			if (!response.ok) {
+				reportRequestFailure({
+					method: "POST /files",
+					phase: "response",
+					status: response.status,
+				});
+				return yield* errorForStatus(response.status);
+			}
 		},
 	);
 
@@ -636,9 +669,6 @@ export const makeE2bSandboxProvider = (
 			),
 		create: (input) =>
 			createSandbox({ ...input, templateId: config.templateId }),
-		// A fork wakes with the parent's warm state and secrets, so the network
-		// barrier is hard-coded here: it opens only via an explicit setNetwork
-		// after re-key/enrollment completes (ADR 0033).
 		fork: (input) =>
 			createSandbox({
 				sandboxId: input.sandboxId,
@@ -647,13 +677,13 @@ export const makeE2bSandboxProvider = (
 				templateId: input.snapshotId,
 				timeoutSeconds: input.timeoutSeconds,
 				env: input.env,
-				network: { kind: "quarantined" },
+				network: input.network,
 				onTimeout: input.onTimeout,
 			}),
 		recoverByLabel: (providerLabel) =>
 			request(
 				"GET",
-				`/v2/sandboxes?state=running,paused&metadata=${encodeURIComponent(
+				`/v2/sandboxes?metadata=${encodeURIComponent(
 					new URLSearchParams({
 						[LABEL_METADATA_KEY]: providerLabel,
 					}).toString(),
@@ -726,7 +756,7 @@ export const makeE2bSandboxProvider = (
 				[404],
 			).pipe(
 				Effect.tap(() =>
-					Effect.sync(() => controlTokens.delete(providerSandboxId)),
+					Effect.sync(() => controlConnections.delete(providerSandboxId)),
 				),
 			),
 		// Snapshots are stored as templates on the provider side.

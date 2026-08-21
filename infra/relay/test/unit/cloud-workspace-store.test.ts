@@ -51,6 +51,84 @@ const startCommand = (workspaceId: string, accountId = "account-1") => ({
 });
 
 describe("cloud workspace store", () => {
+	test("soft-removes repositories and lets the same repository be added again", async () => {
+		const runtime = ManagedRuntime.make(CloudWorkspaceStoreMemory);
+		const store = await runtime.runPromise(CloudWorkspaceStore);
+		await runtime.runPromise(store.connectProject(project));
+		expect(
+			await runtime.runPromise(store.listProjects("account-1")),
+		).toHaveLength(1);
+
+		const removed = await runtime.runPromise(
+			store.removeProject(project.projectId, 200),
+		);
+		expect(removed).toMatchObject({ included: false, updatedAtMs: 200 });
+		expect(await runtime.runPromise(store.listProjects("account-1"))).toEqual(
+			[],
+		);
+
+		const reconnected = await runtime.runPromise(
+			store.connectProject({
+				...project,
+				projectId: "project-reconnected",
+				idempotencyKey: "connect-2",
+				updatedAtMs: 300,
+			}),
+		);
+		expect(reconnected.projectId).toBe(project.projectId);
+		expect(reconnected.included).not.toBe(false);
+		expect(
+			await runtime.runPromise(store.listProjects("account-1")),
+		).toHaveLength(1);
+		await runtime.dispose();
+	});
+
+	test("claims one warm sandbox atomically and leaves other generations alone", async () => {
+		const runtime = ManagedRuntime.make(CloudWorkspaceStoreMemory);
+		const store = await runtime.runPromise(CloudWorkspaceStore);
+		for (const [poolId, generation] of [
+			["pool-current-a", "image-2"],
+			["pool-current-b", "image-2"],
+			["pool-stale", "image-1"],
+		] as const)
+			await runtime.runPromise(
+				store.savePool({
+					poolId,
+					accountId: "account-1",
+					provider: "e2b",
+					imageGeneration: generation,
+					providerSandboxId: `sandbox-${poolId}`,
+					state: "available",
+					createdAtMs: 100,
+					updatedAtMs: 100,
+				}),
+			);
+
+		const [first, second, empty] = await Promise.all([
+			runtime.runPromise(
+				store.claimPool("account-1", "e2b", "image-2", "workspace-a", 200),
+			),
+			runtime.runPromise(
+				store.claimPool("account-1", "e2b", "image-2", "workspace-b", 200),
+			),
+			runtime.runPromise(
+				store.claimPool("account-1", "e2b", "missing", "workspace-c", 200),
+			),
+		]);
+
+		expect(
+			new Set([first?.claimedWorkspaceId, second?.claimedWorkspaceId]),
+		).toEqual(new Set(["workspace-a", "workspace-b"]));
+		expect(first?.poolId).not.toBe(second?.poolId);
+		expect(empty).toBeNull();
+		expect(
+			(await runtime.runPromise(store.listPool("account-1", "e2b"))).find(
+				(item) => item.poolId === "pool-stale",
+			)?.state,
+		).toBe("available");
+		await runtime.dispose();
+	});
+
 	test("connects repositories idempotently and leases one active workspace per branch", async () => {
 		const runtime = ManagedRuntime.make(CloudWorkspaceStoreMemory);
 		const store = await runtime.runPromise(CloudWorkspaceStore);
@@ -74,7 +152,6 @@ describe("cloud workspace store", () => {
 			state: "queued" as const,
 			desiredState: "ready" as const,
 			statusCode: "queued",
-			credentialEpoch: 0,
 			idempotencyKey: "workspace-key",
 			requestConfig: {},
 			nextActionAtMs: 100,
@@ -227,7 +304,6 @@ describe("cloud workspace store", () => {
 			state: "provisioning" as const,
 			desiredState: "ready" as const,
 			statusCode: "runtime-starting",
-			credentialEpoch: 0,
 			idempotencyKey: "workspace-boot-key",
 			requestConfig: { startupTimings: { allocatedAt: 100 } },
 			nextActionAtMs: 100,
@@ -258,14 +334,6 @@ describe("cloud workspace store", () => {
 					runtimeCredentialExpiresAtMs: 10_000,
 					generation: 1,
 					gatewayEpoch: 1,
-					cloudCredentials: [
-						{
-							kind: "github",
-							credentialType: "repository-token",
-							sealedSecret: "sealed",
-							version: 1,
-						},
-					],
 					sealedTranscriptKey: "sealed-transcript-key",
 					nowMs: 200,
 					...overrides,
@@ -274,12 +342,13 @@ describe("cloud workspace store", () => {
 		const first = await enroll();
 		expect(first).toMatchObject({
 			kind: "created",
+			launchIntent: { commandId: `launch:${workspace.workspaceId}` },
 			workspace: {
 				runtimeBootTokenHash: "boot-hash",
 				runtimeCredentialHash: "runtime-hash",
 				state: "setup",
 			},
-			receipt: { cloudCredentials: [{ sealedSecret: "sealed" }] },
+			receipt: { sealedTranscriptKey: "sealed-transcript-key" },
 		});
 		const replay = await enroll({ nowMs: 201 });
 		expect(replay).toMatchObject({
@@ -295,6 +364,33 @@ describe("cloud workspace store", () => {
 		).toBeNull();
 		expect(await enroll({ generation: 2 })).toBeNull();
 		expect(await enroll({ gatewayEpoch: 2 })).toBeNull();
+		expect(
+			await runtime.runPromise(
+				store.markRuntimeRepositoryReady({
+					workspaceId: workspace.workspaceId,
+					currentCredentialHash: "wrong-runtime-hash",
+					nowMs: 220,
+					nextIdleAtMs: 2_000,
+				}),
+			),
+		).toBeNull();
+		expect(
+			await runtime.runPromise(
+				store.markRuntimeRepositoryReady({
+					workspaceId: workspace.workspaceId,
+					currentCredentialHash: "runtime-hash",
+					nowMs: 220,
+					nextIdleAtMs: 2_000,
+				}),
+			),
+		).toMatchObject({
+			runtimeState: "online",
+			state: "setup",
+			statusCode: "agent-starting",
+			requestConfig: {
+				startupTimings: { connectedAt: 220, repositoryReadyAt: 220 },
+			},
+		});
 		const checkpoint = {
 			workspaceId: workspace.workspaceId,
 			sessionId: workspace.initialSessionId,
@@ -382,10 +478,7 @@ describe("cloud workspace store", () => {
 		).toMatchObject({
 			runtimeBootTokenHash: undefined,
 			requestConfig: {
-				runtimeBootstrapReceipt: {
-					acknowledgedAtMs: 300,
-					cloudCredentials: [],
-				},
+				runtimeBootstrapReceipt: { acknowledgedAtMs: 300 },
 			},
 		});
 		expect(
@@ -417,7 +510,6 @@ describe("cloud workspace store", () => {
 			state: "ready" as const,
 			desiredState: "ready" as const,
 			statusCode: "agent-running",
-			credentialEpoch: 1,
 			idempotencyKey: "workspace-renew-key",
 			requestConfig: { runtimeCredentialExpiresAtMs: 2_000 },
 			nextActionAtMs: 2_000,
@@ -484,7 +576,6 @@ describe("cloud workspace store", () => {
 			state: "ready" as const,
 			desiredState: "ready" as const,
 			statusCode: "agent-running",
-			credentialEpoch: 1,
 			idempotencyKey: "workspace-summary-key",
 			requestConfig: { runtimeGeneration: 4 },
 			nextActionAtMs: 10_000,
@@ -565,7 +656,6 @@ describe("cloud workspace store", () => {
 			state: "setup" as const,
 			desiredState: "ready" as const,
 			statusCode: "enrollment-pending",
-			credentialEpoch: 0,
 			idempotencyKey: "workspace-race-key",
 			requestConfig: {},
 			nextActionAtMs: 100,
@@ -703,7 +793,6 @@ describe("cloud workspace store", () => {
 					state: "paused",
 					desiredState: "paused",
 					statusCode: "paused",
-					credentialEpoch: 0,
 					idempotencyKey: "workspace-paused-key",
 					requestConfig: {
 						startupTimings: { requestedAt: 100, agentStartedAt: 200 },
@@ -751,7 +840,6 @@ describe("cloud workspace store", () => {
 			state: "ready" as const,
 			desiredState: "ready" as const,
 			statusCode: "agent-starting",
-			credentialEpoch: 0,
 			idempotencyKey: "workspace-launch-completion-key",
 			requestConfig: { startupTimings: { requestedAt: 100 } },
 			nextActionAtMs: 100,
@@ -830,7 +918,6 @@ describe("cloud workspace store", () => {
 			state: "queued" as const,
 			desiredState: "ready" as const,
 			statusCode: "provisioning-queued",
-			credentialEpoch: 0,
 			idempotencyKey: "workspace-expired-launch-key",
 			requestConfig: {},
 			nextActionAtMs: 100,
@@ -856,34 +943,6 @@ describe("cloud workspace store", () => {
 			state: "failed",
 			statusCode: "launch-intent-expired",
 		});
-		await runtime.dispose();
-	});
-
-	test("rotates and disconnects account credentials without retaining plaintext", async () => {
-		const runtime = ManagedRuntime.make(CloudWorkspaceStoreMemory);
-		const store = await runtime.runPromise(CloudWorkspaceStore);
-		const saved = await runtime.runPromise(
-			store.saveCredential({
-				connectionId: "credential-1",
-				accountId: "account-1",
-				kind: "claude",
-				state: "connected",
-				encryptedPayload: "encrypted-envelope",
-				encryptionKeyVersion: "v1",
-				credentialVersion: 1,
-				createdAtMs: 100,
-				updatedAtMs: 100,
-			}),
-		);
-		expect(saved.encryptedPayload).toBe("encrypted-envelope");
-		const disconnected = await runtime.runPromise(
-			store.disconnectCredential("account-1", "claude", 200),
-		);
-		expect(disconnected).toMatchObject({
-			state: "disconnected",
-			credentialVersion: 2,
-		});
-		expect(disconnected?.encryptedPayload).toBeUndefined();
 		await runtime.dispose();
 	});
 });

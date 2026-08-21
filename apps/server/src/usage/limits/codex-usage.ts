@@ -74,21 +74,22 @@ export const mapCodexRateLimits = (
 };
 
 export const fetchCodexUsage = async (): Promise<ProviderUsageLimits> => {
-	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timeout = setTimeout(() => reject(new Error("timeout")), 5_000);
+		const result = await withCodexControlClient("codex", async (client) => {
+			let timeout: ReturnType<typeof setTimeout> | undefined;
+			try {
+				return await Promise.race([
+					client.request<unknown>("account/rateLimits/read", {}),
+					new Promise<never>((_, reject) => {
+						timeout = setTimeout(() => reject(new Error("timeout")), 5_000);
+					}),
+				]);
+			} finally {
+				if (timeout !== undefined) clearTimeout(timeout);
+			}
 		});
-		const result = await withCodexControlClient("codex", (client) =>
-			Promise.race([
-				client.request<unknown>("account/rateLimits/read", {}),
-				timeoutPromise,
-			]),
-		);
 		return mapCodexRateLimits(result);
 	} catch {
 		return unavailable("codex", "error");
-	} finally {
-		if (timeout !== undefined) clearTimeout(timeout);
 	}
 };
