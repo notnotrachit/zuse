@@ -21,6 +21,7 @@ import { sha256Base64Url } from "@zuse/utils/cloud-transcript-crypto";
 import { Clock, Effect, Redacted, Schema } from "effect";
 import { CompactEncrypt, importJWK, type JWK } from "jose";
 import { requireWorkos } from "./auth.ts";
+import { type BetaAccess, requireCloudBetaAccess } from "./beta-access.ts";
 import {
 	cancelCloudAuthLogin,
 	cloudAuthStatus,
@@ -101,6 +102,7 @@ export type CloudWorkspaceRouteContext =
 	| SandboxProviders
 	| SandboxOfferConfiguration
 	| RelayConfiguration
+	| BetaAccess
 	| WorkosVerifier
 	| CloudBillingStore;
 
@@ -1533,7 +1535,17 @@ export const routeCloudWorkspaceRequest = (
 			return response;
 		}
 
+		const actionMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/(pause|resume|restart|archive|unarchive|delete)$/u.exec(
+				path,
+			);
+		const isCleanupAction =
+			method === "POST" &&
+			(actionMatch?.[2] === "pause" ||
+				actionMatch?.[2] === "archive" ||
+				actionMatch?.[2] === "delete");
 		const principal = yield* requireWorkos(request);
+		if (!isCleanupAction) yield* requireCloudBetaAccess(principal.accountId);
 		if (method === "GET" && path === "/v1/cloud/github") {
 			const installations = yield* store.listGithubInstallations(
 				principal.accountId,
@@ -2406,10 +2418,6 @@ export const routeCloudWorkspaceRequest = (
 			return response;
 		}
 
-		const actionMatch =
-			/^\/v1\/cloud\/workspaces\/([^/]+)\/(pause|resume|restart|archive|unarchive|delete)$/u.exec(
-				path,
-			);
 		if (method === "POST" && actionMatch !== null) {
 			const workspace = yield* store.getWorkspace(
 				decodeURIComponent(actionMatch[1] ?? ""),

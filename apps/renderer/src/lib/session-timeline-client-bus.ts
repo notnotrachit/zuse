@@ -127,7 +127,8 @@ class RendererTimelinePersistence implements ResourcePersistence {
 		if (
 			ref === null ||
 			sessionTimelineCache === null ||
-			value.cursor === null
+			value.cursor === null ||
+			(value.data as SessionTimelineProjection).olderMessageSequence != null
 		) {
 			return;
 		}
@@ -1028,16 +1029,17 @@ const faultFor = (cause: unknown): EnvironmentFault => {
 			? String(cause.code)
 			: "";
 	const message =
-		cause instanceof Error && cause.message !== ""
+		code ||
+		(cause instanceof Error && cause.message !== ""
 			? cause.message
-			: code || String(cause);
+			: String(cause));
 	const lower = message.toLowerCase();
 	const phase: EnvironmentFault["phase"] =
 		globalThis.navigator?.onLine === false
 			? "offline"
 			: lower.includes("update required") || lower.includes("protocol")
 				? "update-required"
-				: lower.includes("revoked")
+				: code === "beta-access-required" || lower.includes("revoked")
 					? "revoked"
 					: isAuthCodedConnectionError(cause) ||
 							lower.includes("unauthorized") ||
@@ -1250,7 +1252,7 @@ export const loadOlderSessionMessages = (
 		const applied = bus.update(key, {
 			expectedGeneration,
 			expectedCursor,
-			persist: true,
+			persist: page.olderMessageSequence === null,
 			update: (projection) => {
 				// A prior page can change this cursor without changing the stream
 				// cursor. Never apply a response to a different pagination head.
@@ -1286,6 +1288,40 @@ export const loadOlderSessionMessages = (
 	return request;
 };
 
+export const completeOlderSessionMessages = async (
+	ref: SessionRef,
+	options?: {
+		readonly maxAttempts?: number;
+		readonly retryDelay?: (attempt: number) => Promise<void>;
+	},
+): Promise<void> => {
+	const maxAttempts = options?.maxAttempts ?? 10;
+	const retryDelay =
+		options?.retryDelay ??
+		((attempt: number) =>
+			new Promise<void>((resolve) => {
+				setTimeout(resolve, Math.min(4_000, 100 * 2 ** attempt));
+			}));
+	let attempt = 0;
+	for (;;) {
+		try {
+			const result = await loadOlderSessionMessages(ref);
+			if (result.applied) {
+				attempt = 0;
+				if (!result.hasMore) return;
+				continue;
+			}
+		} catch (cause) {
+			if (attempt + 1 >= maxAttempts) throw cause;
+		}
+		if (attempt + 1 >= maxAttempts) {
+			throw new Error("Cloud transcript history remained unavailable");
+		}
+		await retryDelay(attempt);
+		attempt += 1;
+	}
+};
+
 export const dispatchSessionCommand = <Payload, Result>(input: {
 	readonly ref: SessionRef;
 	readonly kind: string;
@@ -1307,8 +1343,13 @@ export const dispatchSessionCommand = <Payload, Result>(input: {
 export const addOptimisticSessionMessage = (
 	ref: SessionRef,
 	message: Message,
-): boolean =>
-	rendererClientBus.overlay(sessionTimelineResourceKey(ref), {
+): boolean => {
+	const key = sessionTimelineResourceKey(ref);
+	// Cloud launches stage their durable chat before any transcript consumer is
+	// mounted. Materialize the canonical cell so their first optimistic message
+	// is not discarded during that handoff.
+	rendererClientBus.snapshot(key);
+	return rendererClientBus.overlay(key, {
 		initialData: emptyTimelineProjection(),
 		update: (projection) => {
 			const index = projection.messages.findIndex(
@@ -1325,6 +1366,7 @@ export const addOptimisticSessionMessage = (
 			return SessionTimelineProjection.make({ ...projection, messages });
 		},
 	});
+};
 
 export const removeOptimisticSessionMessage = (
 	ref: SessionRef,
@@ -1348,12 +1390,32 @@ export const updateOptimisticSessionQueue = (
 	) => SessionTimelineProjection["queue"],
 ): boolean =>
 	rendererClientBus.overlay(sessionTimelineResourceKey(ref), {
+		initialData: emptyTimelineProjection(),
 		update: (projection) =>
 			SessionTimelineProjection.make({
 				...projection,
 				queue: update(projection.queue),
 			}),
 	});
+
+/** Restarts a retained provisional timeline after its session is acknowledged. */
+export const restartSessionTimeline = (ref: SessionRef): boolean =>
+	rendererClientBus.restart(sessionTimelineResourceKey(ref));
+
+/**
+ * Repairs the creation race where an optimistic timeline exists before the
+ * durable session, but the creation acknowledgement tries to restart it before
+ * ChatView has retained a live driver. Calling this from the mounted consumer
+ * guarantees the resource has an owner; a real snapshot cursor makes the
+ * operation a no-op on ordinary chat mounts.
+ */
+export const restartProvisionalSessionTimeline = (
+	ref: SessionRef,
+	view: ResourceView<SessionTimelineProjection>,
+): boolean => {
+	if (view.data === null || view.cursor !== null) return false;
+	return restartSessionTimeline(ref);
+};
 
 export const retainSessionTimeline = (
 	ref: SessionRef,

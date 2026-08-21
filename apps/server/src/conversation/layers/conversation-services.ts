@@ -3,9 +3,9 @@ import {
 	type ChatId,
 	type FolderId,
 	type ProviderId,
-	SessionId,
+	type SessionId,
 	SessionNotFoundError,
-	WorktreeId,
+	type WorktreeId,
 } from "@zuse/contracts";
 import type { ChatCommand } from "@zuse/domain/chat/commands";
 import type { SessionCommand } from "@zuse/domain/core/commands";
@@ -185,36 +185,6 @@ const ConversationRuntimeLive = Layer.effect(
       `.pipe(Effect.orDie);
 		}
 
-		// Worktree deletion can null the sessions read-model FK without changing
-		// domain state. Repair live projection drift through SessionDomain so the
-		// event log, read model, cursor reset, and subscribers stay coherent.
-		const driftedWorktreeSessions = yield* sql<{
-			readonly id: string;
-			readonly worktree_id: string;
-		}>`
-			SELECT s.id, c.worktree_id
-			FROM sessions s
-			INNER JOIN chats c ON c.id = s.chat_id
-			INNER JOIN worktrees w ON w.id = c.worktree_id
-			WHERE s.archived_at IS NULL
-			  AND c.archived_at IS NULL
-			  AND s.worktree_id IS NOT c.worktree_id
-		`.pipe(Effect.orDie);
-		if (driftedWorktreeSessions.length > 0) {
-			const repairedAt = yield* currentTimestamp;
-			yield* Effect.forEach(
-				driftedWorktreeSessions,
-				(row) =>
-					appendSessionCommand(SessionId.make(row.id), {
-						_tag: "SetWorktree",
-						worktreeId: WorktreeId.make(row.worktree_id),
-						updatedAt: repairedAt,
-						forceProjection: true,
-					}),
-				{ discard: true },
-			);
-		}
-
 		/**
 		 * Resolve the cwd a session should run in. NULL `worktreeId` falls
 		 * through to the project's main checkout (handled by `provider.start`
@@ -326,6 +296,7 @@ const ConversationRuntimeLive = Layer.effect(
 			archiveSession,
 			unarchiveSession,
 			deleteSession,
+			releaseInitialTurn,
 		} = sessionOperations;
 
 		// -------------------------------------------------------------------------
@@ -564,6 +535,7 @@ const ConversationRuntimeLive = Layer.effect(
 			archiveSession,
 			unarchiveSession,
 			deleteSession,
+			releaseInitialTurn,
 			resumeSession,
 			getGoal,
 			setGoal,

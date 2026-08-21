@@ -348,20 +348,33 @@ describe("WorktreeServiceLive", () => {
 		expect(await run((service) => service.get(created.id))).toBeNull();
 
 		const restored = await run((service) => service.restore(snapshot));
-		expect(restored).toMatchObject({ id: created.id, setupStatus: "pending" });
+		expect(restored).toMatchObject({
+			worktree: { id: created.id, setupStatus: "pending" },
+			checkpoint: "none",
+		});
 	});
 
 	test("archives dirty state as a checkpoint and restores it as uncommitted changes", async () => {
 		const created = await run((service) => service.create(projectId));
 		writeFileSync(join(created.path, "dirty.txt"), "dirty\n");
 		const beforeArchive = git(created.path, "rev-parse", "HEAD");
+		const branchBeforeArchive = git(
+			repositoryRoot,
+			"rev-parse",
+			`refs/heads/${created.branch}`,
+		);
 
 		const checkpoint = await run((service) => service.archive(created.id));
 		expect(checkpoint).toMatchObject({
 			checkpointCreated: true,
-			archiveRef: null,
+			archiveRef: `refs/zuse/archive/${created.id}`,
 			branch: created.branch,
 		});
+		if (checkpoint.archiveRef === null) throw new Error("archive ref missing");
+		const checkpointRef = checkpoint.archiveRef;
+		expect(
+			git(repositoryRoot, "rev-parse", `refs/heads/${created.branch}`),
+		).toBe(branchBeforeArchive);
 		expect(existsSync(created.path)).toBe(false);
 		expect(await run((service) => service.get(created.id))).toBeNull();
 		expect(
@@ -376,7 +389,6 @@ describe("WorktreeServiceLive", () => {
 
 		const restored = await run((service) =>
 			service.restore({
-				...checkpoint,
 				id: created.id,
 				projectId: created.projectId,
 				path: created.path,
@@ -386,9 +398,16 @@ describe("WorktreeServiceLive", () => {
 				createdAt: created.createdAt,
 			}),
 		);
-		expect(restored.setupStatus).toBe("pending");
+		expect(restored.worktree.setupStatus).toBe("pending");
+		expect(restored.checkpoint).toBe("applied");
 		expect(git(created.path, "rev-parse", "HEAD")).toBe(beforeArchive);
+		expect(git(created.path, "symbolic-ref", "--short", "HEAD")).toBe(
+			created.branch,
+		);
 		expect(git(created.path, "status", "--short")).toContain("?? dirty.txt");
+		expect(() =>
+			git(repositoryRoot, "rev-parse", "--verify", checkpointRef),
+		).toThrow();
 		const setupEvents = await run((service) =>
 			service.setupStream(created.id).pipe(Stream.runCollect),
 		);
@@ -397,6 +416,22 @@ describe("WorktreeServiceLive", () => {
 				.filter((event) => event._tag === "status")
 				.map((event) => event.status),
 		).toContain("skipped");
+	});
+
+	test("archive checkpoint never moves an externally switched branch", async () => {
+		const created = await run((service) => service.create(projectId));
+		git(created.path, "switch", "-c", "externally-switched");
+		const branchHead = git(created.path, "rev-parse", "HEAD");
+		writeFileSync(join(created.path, "dirty-after-switch.txt"), "dirty\n");
+
+		const outcome = await run((service) => service.archive(created.id));
+		if (outcome.archiveRef === null) throw new Error("archive ref missing");
+
+		expect(outcome.archiveRef).toBe(`refs/zuse/archive/${created.id}`);
+		expect(
+			git(repositoryRoot, "rev-parse", "refs/heads/externally-switched"),
+		).toBe(branchHead);
+		expect(outcome.archiveCommit).not.toBe(branchHead);
 	});
 
 	test("archives a clean worktree without creating a checkpoint commit", async () => {
@@ -467,7 +502,7 @@ describe("WorktreeServiceLive", () => {
 			outcome.archiveCommit,
 		);
 
-		await run((service) =>
+		const restored = await run((service) =>
 			service.restore({
 				...outcome,
 				id: created.id,
@@ -478,6 +513,7 @@ describe("WorktreeServiceLive", () => {
 				createdAt: created.createdAt,
 			}),
 		);
+		expect(restored.checkpoint).toBe("applied");
 		expect(git(created.path, "status", "--short")).toContain("?? detached.txt");
 		expect(() =>
 			git(repositoryRoot, "rev-parse", "--verify", archiveRef),
@@ -515,7 +551,7 @@ describe("WorktreeServiceLive", () => {
 		);
 		expect(archivedRows[0]?.abs_path).toBe(archivedFile);
 
-		await run((service) =>
+		const restored = await run((service) =>
 			service.restore({
 				...outcome,
 				id: created.id,
@@ -526,6 +562,7 @@ describe("WorktreeServiceLive", () => {
 				createdAt: created.createdAt,
 			}),
 		);
+		expect(restored.checkpoint).toBe("none");
 		expect(readFileSync(contextFile, "utf8")).toBe("context survives\n");
 		const restoredRows = await runSql(
 			(sql) =>
@@ -594,13 +631,14 @@ describe("WorktreeServiceLive", () => {
 		).toBe("Zuse <zuse@localhost>");
 	});
 
-	test("keeps a checkpoint committed when its branch advances while archived", async () => {
+	test("restores the checkpoint without overwriting a branch that advanced", async () => {
 		const created = await run((service) => service.create(projectId));
 		await run((service) =>
 			service.setupStream(created.id).pipe(Stream.runCollect),
 		);
 		writeFileSync(join(created.path, "checkpoint.txt"), "checkpoint\n");
 		const outcome = await run((service) => service.archive(created.id));
+		if (outcome.archiveRef === null) throw new Error("archive ref missing");
 		const advancedPath = join(temporaryRoot, "advanced");
 		git(repositoryRoot, "worktree", "add", advancedPath, created.branch);
 		writeFileSync(join(advancedPath, "advanced.txt"), "advanced\n");
@@ -609,7 +647,7 @@ describe("WorktreeServiceLive", () => {
 		const advancedCommit = git(advancedPath, "rev-parse", "HEAD");
 		git(repositoryRoot, "worktree", "remove", advancedPath);
 
-		await run((service) =>
+		const restored = await run((service) =>
 			service.restore({
 				...outcome,
 				id: created.id,
@@ -620,8 +658,18 @@ describe("WorktreeServiceLive", () => {
 				createdAt: created.createdAt,
 			}),
 		);
+		expect(restored.checkpoint).toBe("branch-advanced");
 		expect(git(created.path, "rev-parse", "HEAD")).toBe(advancedCommit);
+		expect(git(created.path, "symbolic-ref", "--short", "HEAD")).toBe(
+			created.branch,
+		);
 		expect(git(created.path, "status", "--short")).toBe("");
+		expect(git(repositoryRoot, "rev-parse", outcome.archiveRef)).toBe(
+			outcome.archiveCommit,
+		);
+		expect(
+			git(repositoryRoot, "rev-parse", `refs/heads/${created.branch}`),
+		).toBe(advancedCommit);
 	});
 
 	test("manual removal checkpoints dirty work instead of rejecting it", async () => {
@@ -635,7 +683,13 @@ describe("WorktreeServiceLive", () => {
 
 		expect(await run((service) => service.get(created.id))).toBeNull();
 		expect(
-			git(repositoryRoot, "show", "-s", "--format=%B", created.branch),
+			git(
+				repositoryRoot,
+				"show",
+				"-s",
+				"--format=%B",
+				`refs/zuse/archive/${created.id}`,
+			),
 		).toContain(`Zuse-Archive-Checkpoint: ${created.id}`);
 	});
 

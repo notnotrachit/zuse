@@ -113,6 +113,7 @@ import {
 } from "../store/chats.ts";
 import {
 	type EnvironmentCatalogEntry,
+	environmentCatalogViewState,
 	useEnvironmentCatalogStore,
 } from "../store/environment-catalog.ts";
 import { useRegisterPane } from "../store/pane-focus.ts";
@@ -256,6 +257,11 @@ export function ProjectsSidebar() {
 	const initializeEnvironmentCatalog = useEnvironmentCatalogStore(
 		(s) => s.initialize,
 	);
+	const catalogInitialized = useEnvironmentCatalogStore((s) => s.initialized);
+	const catalogInitializing = useEnvironmentCatalogStore((s) => s.initializing);
+	const catalogInitializationError = useEnvironmentCatalogStore(
+		(s) => s.initializationError,
+	);
 
 	const {
 		chatsByProject,
@@ -336,6 +342,13 @@ export function ProjectsSidebar() {
 			shellViews,
 		],
 	);
+	const catalogViewState = environmentCatalogViewState({
+		initialized: catalogInitialized,
+		initializing: catalogInitializing,
+		initializationError: catalogInitializationError,
+		projectCount: logicalGroups.length,
+		projectsLoading: loading,
+	});
 
 	return (
 		<aside
@@ -374,7 +387,31 @@ export function ProjectsSidebar() {
 			<ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
 				{desktopCatalogEnabled ? (
 					<>
-						{logicalGroups.length === 0 && !loading ? (
+						{catalogViewState === "loading" ? (
+							<li
+								className="flex items-center justify-center gap-2 px-3 py-4 text-[13px] text-muted-foreground"
+								aria-busy="true"
+							>
+								<Spinner className="size-3.5" />
+								Loading projects…
+							</li>
+						) : null}
+						{catalogViewState === "unavailable" ? (
+							<li className="px-3 py-4 text-center text-[13px] text-muted-foreground">
+								<p role="alert">This computer couldn’t load its projects.</p>
+								<p className="mt-1 text-[12px]">{catalogInitializationError}</p>
+								<button
+									type="button"
+									className="mt-2 rounded-md border border-sidebar-border px-2.5 py-1 text-[12px] text-sidebar-foreground hover:bg-sidebar-accent"
+									onClick={() => {
+										void initializeEnvironmentCatalog().catch(() => undefined);
+									}}
+								>
+									Retry
+								</button>
+							</li>
+						) : null}
+						{catalogViewState === "empty" ? (
 							<li className="px-3 py-4 text-center text-[13px] text-muted-foreground">
 								No projects yet. Click + to add one.
 							</li>
@@ -534,7 +571,16 @@ function SidebarFooter() {
  * optional, so this is the primary place to discover sign-in after onboarding.
  */
 function SidebarAccount() {
-	const { isSignedIn, user, name, signingIn, signIn, signOut } = useAuth();
+	const {
+		isSignedIn,
+		isLoading,
+		isUnavailable,
+		user,
+		name,
+		signingIn,
+		signIn,
+		signOut,
+	} = useAuth();
 	const setView = useUiStore((s) => s.setView);
 	const setSettingsSection = useUiStore((s) => s.setSettingsSection);
 	const refreshUsageLimits = useUsageLimitsStore((s) => s.refresh);
@@ -604,10 +650,16 @@ function SidebarAccount() {
 									{initial}
 								</AvatarFallback>
 							</Avatar>
+						) : isLoading ? (
+							<HugeiconsIcon icon={UserCircleIcon} className="size-3.5" />
 						) : (
 							<HugeiconsIcon icon={Login03Icon} className="size-3.5" />
 						)}
-						{!isSignedIn ? (
+						{isUnavailable ? (
+							<span>Account unavailable</span>
+						) : isLoading ? (
+							<span>Loading account…</span>
+						) : !isSignedIn ? (
 							<span>{signingIn ? "Signing in…" : "Sign in"}</span>
 						) : nameIsEmail && user?.email ? (
 							<BlurredEmail email={user.email} />
@@ -618,7 +670,7 @@ function SidebarAccount() {
 				}
 			/>
 			<MenuPopup side="top" align="start" className="w-64">
-				{!isSignedIn ? (
+				{!isSignedIn && !isLoading ? (
 					<>
 						<MenuItem disabled={signingIn} onClick={() => void signIn()}>
 							<HugeiconsIcon icon={Login03Icon} />
@@ -1619,6 +1671,9 @@ function ChatRow({ chat, projectRoot }: { chat: Chat; projectRoot: string }) {
 	const archiveProgress = useChatsStore(
 		(s) => s.archiveProgressByChat[chat.id] ?? null,
 	);
+	const isRestoring = useArchivePreviewStore(
+		(s) => s.restoringByChat[chat.id] === true,
+	);
 	const creationPending = useChatsStore(
 		(s) => s.pendingCreationByChat[chat.id] !== undefined,
 	);
@@ -1775,6 +1830,18 @@ function ChatRow({ chat, projectRoot }: { chat: Chat; projectRoot: string }) {
 		if (isArchiving) return;
 		void archiveChatWithConfirm(chat.id);
 	};
+	const restoreChat = () => {
+		if (isRestoring) return;
+		void unarchiveChat(chat.id).then((outcome) => {
+			if (!outcome.ok) {
+				toastManager.add({
+					type: "error",
+					title: "Chat could not be restored",
+					description: outcome.reason,
+				});
+			}
+		});
+	};
 
 	return (
 		<>
@@ -1861,11 +1928,11 @@ function ChatRow({ chat, projectRoot }: { chat: Chat; projectRoot: string }) {
 						</span>
 						<button
 							type="button"
-							disabled={isArchiving}
+							disabled={isArchiving || isRestoring}
 							onClick={(e) => {
 								e.stopPropagation();
 								if (isArchived) {
-									void unarchiveChat(chat.id);
+									restoreChat();
 								} else {
 									archiveChat();
 								}
@@ -1877,7 +1944,7 @@ function ChatRow({ chat, projectRoot }: { chat: Chat; projectRoot: string }) {
 							aria-label={`${primaryActionLabel} ${chat.title}`}
 							title={primaryActionLabel}
 						>
-							{isArchiving ? (
+							{isArchiving || isRestoring ? (
 								<Spinner className="size-3.5" />
 							) : (
 								<HugeiconsIcon icon={primaryActionIcon} className="size-3.5" />
@@ -1902,10 +1969,15 @@ function ChatRow({ chat, projectRoot }: { chat: Chat; projectRoot: string }) {
 					</MenuItem>
 					{isArchived ? (
 						<MenuItem
-							onClick={() => void unarchiveChat(chat.id)}
+							disabled={isRestoring}
+							onClick={restoreChat}
 							className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] hover:bg-sidebar-accent"
 						>
-							<HugeiconsIcon icon={ArchiveArrowUpIcon} className="size-3.5" />
+							{isRestoring ? (
+								<Spinner className="size-3.5" />
+							) : (
+								<HugeiconsIcon icon={ArchiveArrowUpIcon} className="size-3.5" />
+							)}
 							Unarchive
 						</MenuItem>
 					) : (

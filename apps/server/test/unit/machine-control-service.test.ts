@@ -49,13 +49,22 @@ describe("machine control relay URL", () => {
 		expect(mapRelayErrorCode(400, undefined).code).toBe("invalid-request");
 	});
 
-	it("uses staging outside packaged production", () => {
-		expect(resolveMachineRelayUrl({ NODE_ENV: "development" })).toBe(
-			"https://relay-staging.stuff.md",
+	it("preserves private-beta access failures", () => {
+		expect(mapRelayErrorCode(403, "cloud_beta_access_required").code).toBe(
+			"beta-access-required",
+		);
+		expect(mapRelayErrorCode(503, "cloud_beta_access_unavailable").code).toBe(
+			"beta-access-unavailable",
 		);
 	});
 
-	it("uses production only for production or an explicit override", () => {
+	it("defaults to production when packaged Electron has no runtime NODE_ENV", () => {
+		expect(resolveMachineRelayUrl({ NODE_ENV: "development" })).toBe(
+			"https://relay.stuff.md",
+		);
+	});
+
+	it("uses an explicit Relay override for development and staging", () => {
 		expect(resolveMachineRelayUrl({ NODE_ENV: "production" })).toBe(
 			"https://relay.stuff.md",
 		);

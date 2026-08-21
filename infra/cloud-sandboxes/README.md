@@ -1,5 +1,8 @@
 # Cloud sandbox template
 
+For the surrounding control plane, lifecycle, cache, and security model, start
+with the [Zuse Cloud documentation](../../docs/cloud/README.md).
+
 The credential-free base template contains the Zuse runtime and supported
 developer toolchain. An account-image build adds the user's selected normal Git
 checkouts below `/home/repos/<owner>/<repository>` and provider authentication.

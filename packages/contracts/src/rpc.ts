@@ -125,6 +125,7 @@ import {
 	GitMergePrRpc,
 	GitOriginRpc,
 	GitPrDetailsRpc,
+	GitPrNotificationClaimRpc,
 	GitPrStateRpc,
 	GitPushRpc,
 	GitResolveConflictRpc,
@@ -139,6 +140,7 @@ import {
 	GitSwitchBranchRpc,
 	GitUserNameRpc,
 	GitWorkspaceChangesRpc,
+	GitWorkspaceSnapshotRpc,
 } from "./git.ts";
 import { ConnectHandshakeRpc } from "./handshake.ts";
 import {
@@ -230,6 +232,7 @@ import {
 	ChatCreateRpc,
 	ChatCreationDiscardRpc,
 	ChatCreationListRpc,
+	ChatCreationRecoverRpc,
 	ChatCreationStreamRpc,
 	ChatDeleteRpc,
 	ChatDirectoryStatusRpc,
@@ -444,8 +447,10 @@ export const MemoizeRpcs = RpcGroup.make(
 	GitSwitchBranchRpc,
 	GitUserNameRpc,
 	GitWorkspaceChangesRpc,
+	GitWorkspaceSnapshotRpc,
 	GitOriginRpc,
 	GitPrStateRpc,
+	GitPrNotificationClaimRpc,
 	GitPrDetailsRpc,
 	GitListPrsRpc,
 	GitListIssuesRpc,
@@ -500,6 +505,7 @@ export const MemoizeRpcs = RpcGroup.make(
 	ChatCreationListRpc,
 	ChatCreationStreamRpc,
 	ChatCreationDiscardRpc,
+	ChatCreationRecoverRpc,
 	ChatRenameRpc,
 	ChatMarkReadRpc,
 	ChatStreamChangesRpc,

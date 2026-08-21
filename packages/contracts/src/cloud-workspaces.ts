@@ -527,6 +527,8 @@ export class CloudWorkspaceOpError extends Schema.TaggedErrorClass<CloudWorkspac
 		code: Schema.Literals([
 			"not-found",
 			"not-allowed",
+			"beta-access-required",
+			"beta-access-unavailable",
 			"invalid-request",
 			"entitlement-required",
 			"provider-unavailable",

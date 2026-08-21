@@ -9,6 +9,7 @@ import {
 	AccountIdentity,
 	type AccountIdentityApi,
 } from "../../src/account-identity.ts";
+import { BetaAccessAllowAll } from "../../src/beta-access.ts";
 import { CloudBillingStoreMemory } from "../../src/cloud-billing-store-memory.ts";
 import {
 	CloudWorkspaceLaunchIntentCipher,
@@ -47,6 +48,7 @@ const makeRuntime = async () => {
 	});
 	const layer = Layer.mergeAll(
 		config,
+		BetaAccessAllowAll,
 		WorkosVerifierTest,
 		RelayStoreMemory,
 		CloudWorkspaceStoreMemory,
@@ -81,6 +83,7 @@ const makeRuntime = async () => {
 			AccountIdentity,
 			AccountIdentity.of({
 				deleteUser: () => Effect.void,
+				verifiedEmail: () => Effect.succeed(null),
 			} satisfies AccountIdentityApi),
 		),
 	);

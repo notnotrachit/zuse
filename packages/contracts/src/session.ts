@@ -541,6 +541,17 @@ export const SessionTimelineFrame = Schema.Union([
 		cursor: Schema.optional(SessionStreamCursor),
 		/** Sequence immediately before the oldest included message, if any. */
 		olderMessageSequence: Schema.optional(Schema.NullOr(Schema.Number)),
+		/** Complete durable message count represented by this snapshot series. */
+		totalMessageCount: Schema.optional(Schema.Number),
+	}),
+	Schema.Struct({
+		kind: Schema.Literal("snapshot-chunk"),
+		sessionId: SessionId,
+		throughVersion: Schema.Number,
+		messages: Schema.Array(Message),
+		/** Sequence immediately before the oldest included message, if any. */
+		olderMessageSequence: Schema.NullOr(Schema.Number),
+		cursor: Schema.optional(SessionStreamCursor),
 	}),
 	Schema.Struct({
 		kind: Schema.Literal("event"),
@@ -574,6 +585,11 @@ export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoun
 export class SessionStartError extends Schema.TaggedErrorClass<SessionStartError>()(
 	"SessionStartError",
 	{ providerId: ProviderId, reason: Schema.String },
+) {}
+
+export class ChatCreationConflictError extends Schema.TaggedErrorClass<ChatCreationConflictError>()(
+	"ChatCreationConflictError",
+	{ operationId: Schema.String, reason: Schema.String },
 ) {}
 
 export class GoalUnsupportedError extends Schema.TaggedErrorClass<GoalUnsupportedError>()(
@@ -911,28 +927,16 @@ export type ChatArchiveJob = typeof ChatArchiveJob.Type;
 
 export const ChatDirectoryStatus = Schema.Union([
 	Schema.TaggedStruct("available", {}),
-	Schema.TaggedStruct("restorable", {}),
 	Schema.TaggedStruct("unavailable", {
-		reason: Schema.Literals([
-			"project-missing",
-			"worktree-missing",
-			"restore-unavailable",
-		]),
+		reason: Schema.Literals(["project-missing", "worktree-missing"]),
 	}),
 ]);
 export type ChatDirectoryStatus = typeof ChatDirectoryStatus.Type;
 
 const ChatArchiveErrors = Schema.Union([
 	ChatNotFoundError,
-	ChatArchiveScriptError,
-	ChatArchiveTimeoutError,
 	ChatArchiveWorktreeError,
 ]);
-
-const ArchiveCleanupSummary = Schema.Struct({
-	ran: Schema.Boolean,
-	output: Schema.String,
-});
 
 const WorktreeCheckpointSummary = Schema.Struct({
 	archiveCommit: Schema.String,
@@ -943,7 +947,6 @@ const WorktreeCheckpointSummary = Schema.Struct({
 
 export const ChatArchiveResult = Schema.Struct({
 	chat: Chat,
-	cleanup: Schema.NullOr(ArchiveCleanupSummary),
 	checkpoint: Schema.NullOr(WorktreeCheckpointSummary),
 	job: Schema.NullOr(ChatArchiveJob),
 });
@@ -954,6 +957,7 @@ export const ChatUnarchiveResult = Schema.Struct({
 	sessions: Schema.Array(Session),
 	worktree: Schema.NullOr(Worktree),
 	directoryStatus: ChatDirectoryStatus,
+	restoreNotice: Schema.optional(Schema.Literal("branch-advanced")),
 });
 export type ChatUnarchiveResult = typeof ChatUnarchiveResult.Type;
 
@@ -1000,15 +1004,27 @@ export const ChatWorkspacePolicy = Schema.Union([
 ]);
 export type ChatWorkspacePolicy = typeof ChatWorkspacePolicy.Type;
 
-export const ChatCreationOperationStatus = Schema.Literals([
-	"pending",
+export const ChatCreationPhase = Schema.Literals([
+	"persisted",
 	"creating_workspace",
-	"creating_chat",
-	"succeeded",
+	"running_setup",
+	"starting_agent",
+	"running",
 	"failed",
+	"cancelling",
+	"cancelled",
 ]);
-export type ChatCreationOperationStatus =
-	typeof ChatCreationOperationStatus.Type;
+export type ChatCreationPhase = typeof ChatCreationPhase.Type;
+
+export const ChatCreationFailureStage = Schema.Literals([
+	"workspace",
+	"setup",
+	"provider",
+	"configuration",
+	"legacy_unknown",
+	"legacy_inconsistent",
+]);
+export type ChatCreationFailureStage = typeof ChatCreationFailureStage.Type;
 
 export const ChatCreationOperation = Schema.Struct({
 	operationId: Schema.String,
@@ -1027,7 +1043,18 @@ export const ChatCreationOperation = Schema.Struct({
 	startupReady: Schema.Boolean,
 	workspacePolicy: ChatWorkspacePolicy,
 	worktreeId: Schema.NullOr(WorktreeId),
-	status: ChatCreationOperationStatus,
+	phase: ChatCreationPhase,
+	failureStage: Schema.NullOr(ChatCreationFailureStage),
+	retryable: Schema.Boolean,
+	attempts: Schema.Struct({
+		workspace: Schema.Number,
+		setup: Schema.Number,
+		provider: Schema.Number,
+	}),
+	setupBypassed: Schema.Boolean,
+	leaseEpoch: Schema.Number,
+	fingerprintVersion: Schema.Number,
+	phaseStartedAt: Schema.DateFromString,
 	error: Schema.NullOr(Schema.String),
 	createdAt: Schema.DateFromString,
 	updatedAt: Schema.DateFromString,
@@ -1060,6 +1087,25 @@ export const ChatCreationStreamRpc = Rpc.make("chat.creation.stream", {
 export const ChatCreationDiscardRpc = Rpc.make("chat.creation.discard", {
 	payload: Schema.Struct({ operationId: Schema.String }),
 	success: Schema.Struct({ discarded: Schema.Boolean }),
+});
+
+export const ChatCreationRecoveryAction = Schema.Literals([
+	"retry_workspace",
+	"retry_setup",
+	"continue_anyway",
+	"retry_agent",
+]);
+export type ChatCreationRecoveryAction = typeof ChatCreationRecoveryAction.Type;
+
+export const ChatCreationRecoverRpc = Rpc.make("chat.creation.recover", {
+	payload: Schema.Struct({
+		operationId: Schema.String,
+		action: ChatCreationRecoveryAction,
+		expectedPhase: ChatCreationPhase,
+		expectedFailureStage: Schema.NullOr(ChatCreationFailureStage),
+		expectedAttempt: Schema.Number,
+	}),
+	success: ChatCreationOperation,
 });
 
 export const ChatCreateRpc = Rpc.make("chat.create", {
@@ -1099,7 +1145,7 @@ export const ChatCreateRpc = Rpc.make("chat.create", {
 		initialSession: Session,
 		initialMessage: Schema.NullOr(Message),
 	}),
-	error: SessionStartError,
+	error: Schema.Union([SessionStartError, ChatCreationConflictError]),
 });
 
 export const ChatRenameRpc = Rpc.make("chat.rename", {

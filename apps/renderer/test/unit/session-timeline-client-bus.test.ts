@@ -10,6 +10,7 @@ import {
 	Message,
 	MessageId,
 	PtyId,
+	QueuedMessage,
 	QueueState,
 	SessionId,
 	SessionNotFoundError,
@@ -18,6 +19,8 @@ import {
 import { Effect, Queue, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	addOptimisticSessionMessage,
+	completeOlderSessionMessages,
 	getRendererClientBus,
 	loadOlderSessionMessages,
 	registerEnvironmentActivationForTest,
@@ -27,9 +30,12 @@ import {
 	registerSessionTimelineOlderPageSynchronizer,
 	rehydrateRendererCommandPayload,
 	resetSessionTimelineClientBusForTest,
+	restartProvisionalSessionTimeline,
 	retainSessionTimeline,
+	sessionTimelineResourceKey,
 	setSessionTimelineRpcClientForTest,
 	setSessionTimelineRpcSessionForTest,
+	updateOptimisticSessionQueue,
 } from "../../src/lib/session-timeline-client-bus.ts";
 
 const waitUntil = async (predicate: () => boolean): Promise<void> => {
@@ -239,11 +245,37 @@ describe("renderer session timeline ClientBus adapter", () => {
 		retained.lease.release();
 	});
 
-	it("keeps application stream errors resource-local", async () => {
+	it("keeps revoked private-beta access cached without retrying", async () => {
+		let attempts = 0;
+		registerEnvironmentActivationForTest(environmentId, async () => {
+			attempts += 1;
+			throw new CloudWorkspaceOpError({ code: "beta-access-required" });
+		});
+
+		const retained = retainSessionTimeline(ref, "connect");
+		await waitUntil(
+			() =>
+				getRendererClientBus().connection(environmentId).phase === "revoked",
+		);
+		expect(getRendererClientBus().connection(environmentId).error).toBe(
+			"beta-access-required",
+		);
+		await new Promise((resolve) => setTimeout(resolve, 650));
+		expect(attempts).toBe(1);
+		retained.lease.release();
+	});
+
+	it("restarts a provisional session timeline after its creation is acknowledged", async () => {
+		let streamStarts = 0;
+		const frames = Effect.runSync(Queue.unbounded());
 		setSessionTimelineRpcSessionForTest(async () => ({
 			client: {
-				"session.events": () =>
-					Stream.fail(new SessionNotFoundError({ sessionId })),
+				"session.events": () => {
+					streamStarts += 1;
+					return streamStarts === 1
+						? Stream.fail(new SessionNotFoundError({ sessionId }))
+						: Stream.fromQueue(frames);
+				},
 			} as never,
 			dispose: async () => undefined,
 		}));
@@ -255,7 +287,89 @@ describe("renderer session timeline ClientBus adapter", () => {
 		expect(getRendererClientBus().connection(environmentId).phase).toBe(
 			"connected",
 		);
+		// New-chat creation installs its optimistic queue before ChatView owns the
+		// stream. Reproduce that cursorless runtime projection here.
+		expect(updateOptimisticSessionQueue(ref, (queue) => queue)).toBe(true);
+		const provisional = getRendererClientBus().snapshot(retained.key);
+		expect(provisional.cursor).toBeNull();
+		expect(provisional.data).not.toBeNull();
+		expect(restartProvisionalSessionTimeline(ref, provisional)).toBe(true);
+		await waitUntil(() => streamStarts === 2);
+		Queue.offerUnsafe(frames, {
+			kind: "snapshot",
+			sessionId,
+			throughVersion: 0,
+			cursor: { epoch: "created", version: 0 },
+			projection: SessionTimelineProjection.make({
+				messages: [],
+				status: "idle",
+				currentTurn: null,
+				queue: QueueState.make({ items: [], paused: false }),
+				permissionMode: "default",
+				runtimeMode: "approval-required",
+			}),
+		});
+		Queue.offerUnsafe(frames, {
+			kind: "synchronized",
+			sessionId,
+			throughVersion: 0,
+			cursor: { epoch: "created", version: 0 },
+		});
+		await waitUntil(
+			() => getRendererClientBus().snapshot(retained.key).sync === "live",
+		);
+		expect(
+			restartProvisionalSessionTimeline(
+				ref,
+				getRendererClientBus().snapshot(retained.key),
+			),
+		).toBe(false);
 		retained.lease.release();
+	});
+
+	it("seeds an empty provisional timeline with its startup queue item", () => {
+		const key = sessionTimelineResourceKey(ref);
+		getRendererClientBus().snapshot(key);
+		const queued = QueuedMessage.make({
+			id: "queue-startup",
+			sessionId,
+			input: ComposerInput.make({
+				text: "visible immediately",
+				attachments: [],
+				fileRefs: [],
+				skillRefs: [],
+				annotations: [],
+			}),
+			position: 0,
+			createdAt: new Date(1),
+			updatedAt: new Date(1),
+			ready: true,
+		});
+
+		expect(
+			updateOptimisticSessionQueue(ref, () =>
+				QueueState.make({ items: [queued], paused: false }),
+			),
+		).toBe(true);
+		expect(getRendererClientBus().snapshot(key).data?.queue.items).toEqual([
+			queued,
+		]);
+	});
+
+	it("seeds a cloud launch message before its first timeline consumer mounts", () => {
+		const key = sessionTimelineResourceKey(ref);
+		const message = Message.make({
+			id: MessageId.make("cloud-launch-message"),
+			sessionId,
+			role: "user",
+			content: { _tag: "user", text: "visible during startup", goal: false },
+			createdAt: new Date(1),
+		});
+
+		expect(addOptimisticSessionMessage(ref, message)).toBe(true);
+		expect(getRendererClientBus().snapshot(key).data?.messages).toEqual([
+			message,
+		]);
 	});
 
 	it("prepares a woken environment on the same passive session", async () => {
@@ -494,6 +608,7 @@ describe("renderer session timeline ClientBus adapter", () => {
 				pageCalls += 1;
 				expect(cursor).toEqual({ epoch: "r2-page", version: 8 });
 				expect(beforeSequence).toBe(20);
+				if (pageCalls === 1) return null;
 				return { messages: [older], olderMessageSequence: null };
 			},
 		);
@@ -503,12 +618,12 @@ describe("renderer session timeline ClientBus adapter", () => {
 				getRendererClientBus().snapshot(retained.key).origin === "checkpoint",
 		);
 
-		await expect(loadOlderSessionMessages(ref)).resolves.toEqual({
-			applied: true,
-			loaded: 1,
-			hasMore: false,
-		});
-		expect(pageCalls).toBe(1);
+		await expect(
+			completeOlderSessionMessages(ref, {
+				retryDelay: async () => undefined,
+			}),
+		).resolves.toBeUndefined();
+		expect(pageCalls).toBe(2);
 		expect(getRendererClientBus().snapshot(retained.key)).toMatchObject({
 			connection: "dormant",
 			data: { messages: [older], olderMessageSequence: null },

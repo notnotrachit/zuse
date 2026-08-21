@@ -42,7 +42,11 @@ import { runtimeOperationClient } from "../lib/runtime-operation-client.ts";
 import { getRendererClientBus } from "../lib/session-timeline-client-bus.ts";
 import { createAtomStore as create } from "../state/atom-store.ts";
 import { activateAnnotationsEnvironment } from "./annotations.ts";
-import { restorePendingCreation, useChatsStore } from "./chats.ts";
+import {
+	pendingCreationEntities,
+	restorePendingCreation,
+	useChatsStore,
+} from "./chats.ts";
 import { useSessionsStore } from "./sessions.ts";
 import { useUiStore } from "./ui.ts";
 import { useWorkspaceStore } from "./workspace.ts";
@@ -141,7 +145,9 @@ export const projectEnvironmentShell = (
 		creationOperations
 			.filter(
 				(operation) =>
-					operation.status !== "succeeded" && operation.status !== "failed",
+					operation.phase !== "running" &&
+					operation.phase !== "failed" &&
+					operation.phase !== "cancelled",
 			)
 			.map((operation) => operation.operationId),
 	);
@@ -150,14 +156,12 @@ export const projectEnvironmentShell = (
 			resumedCreationOperations.delete(operationId);
 		}
 	}
-	const durableChatIds = new Set(
-		Object.values(normalized.chatsByProject)
-			.flat()
-			.map((chat) => chat.id),
-	);
 	const succeededOperationIds = new Set(
 		creationOperations
-			.filter((operation) => operation.status === "succeeded")
+			.filter(
+				(operation) =>
+					operation.phase === "running" || operation.phase === "cancelled",
+			)
 			.map((operation) => operation.operationId),
 	);
 	const pendingByChat = Object.fromEntries(
@@ -166,14 +170,15 @@ export const projectEnvironmentShell = (
 				? {}
 				: previousChats.pendingCreationByChat,
 		).filter(
-			([, creation]) =>
-				!durableChatIds.has(creation.chatId) &&
-				!succeededOperationIds.has(creation.operationId),
+			([, creation]) => !succeededOperationIds.has(creation.operationId),
 		),
 	);
 	const restoredPending = Object.fromEntries(
 		creationOperations
-			.filter((operation) => operation.status !== "succeeded")
+			.filter(
+				(operation) =>
+					operation.phase !== "running" && operation.phase !== "cancelled",
+			)
 			.map((operation) => {
 				const pending = restorePendingCreation(operation);
 				return [pending.chat.id, pending.creation] as const;
@@ -181,8 +186,14 @@ export const projectEnvironmentShell = (
 	);
 	const optimisticChats = new Map<string, Chat>();
 	const optimisticSessions = new Map<string, Session>();
+	for (const creation of Object.values(pendingByChat)) {
+		const optimistic = pendingCreationEntities(creation);
+		optimisticChats.set(optimistic.chat.id, optimistic.chat);
+		optimisticSessions.set(optimistic.session.id, optimistic.session);
+	}
 	for (const operation of creationOperations) {
-		if (operation.status === "succeeded") continue;
+		if (operation.phase === "running" || operation.phase === "cancelled")
+			continue;
 		const pending = restorePendingCreation(operation);
 		optimisticChats.set(pending.chat.id, pending.chat);
 		optimisticSessions.set(pending.session.id, pending.session);
@@ -309,7 +320,9 @@ export const projectEnvironmentShell = (
 			creationOperations
 				.filter(
 					(operation) =>
-						operation.status !== "succeeded" && operation.status !== "failed",
+						operation.phase !== "running" &&
+						operation.phase !== "failed" &&
+						operation.phase !== "cancelled",
 				)
 				.map((operation) => [operation.projectId, true] as const),
 		),
@@ -349,6 +362,8 @@ type EnvironmentCatalogState = {
 	readonly entries: ReadonlyArray<EnvironmentCatalogEntry>;
 	readonly activeEnvironmentId: string;
 	readonly initialized: boolean;
+	readonly initializing: boolean;
+	readonly initializationError: string | null;
 	readonly hiddenRelayEnvironmentIds: ReadonlyArray<string>;
 	initialize: () => Promise<void>;
 	syncAccountEnvironments: () => Promise<void>;
@@ -466,6 +481,52 @@ export const cloudConnectionFailure = (cause: unknown): Error => {
 	if (/timeout|timed out|network|socket|connect|unreachable/u.test(normalized))
 		return new Error(`Endpoint reachability failed: ${detail}`);
 	return new Error(`Secure connection failed: ${detail}`);
+};
+
+export const loadOptionalEnvironmentSources = async (input: {
+	readonly sshProfiles: Promise<ReadonlyArray<RemoteEnvironmentProfile>>;
+	readonly tailnetProfiles: Promise<ReadonlyArray<TailnetEnvironmentProfile>>;
+	readonly relayEnvironments: Promise<
+		Readonly<{ environments: ReadonlyArray<RelayEnvironmentRecord> }>
+	>;
+}): Promise<{
+	readonly profiles: ReadonlyArray<RemoteEnvironmentProfile>;
+	readonly tailnetProfiles: ReadonlyArray<TailnetEnvironmentProfile>;
+	readonly relayEnvironments: ReadonlyArray<RelayEnvironmentRecord>;
+}> => {
+	const [sshResult, tailnetResult, relayResult] = await Promise.allSettled([
+		input.sshProfiles,
+		input.tailnetProfiles,
+		input.relayEnvironments,
+	]);
+	return {
+		profiles: sshResult.status === "fulfilled" ? sshResult.value : [],
+		tailnetProfiles:
+			tailnetResult.status === "fulfilled" ? tailnetResult.value : [],
+		relayEnvironments:
+			relayResult.status === "fulfilled" ? relayResult.value.environments : [],
+	};
+};
+
+export type EnvironmentCatalogViewState =
+	| "loading"
+	| "unavailable"
+	| "empty"
+	| "ready";
+
+export const environmentCatalogViewState = (input: {
+	readonly initialized: boolean;
+	readonly initializing: boolean;
+	readonly initializationError: string | null;
+	readonly projectCount: number;
+	readonly projectsLoading: boolean;
+}): EnvironmentCatalogViewState => {
+	if (!input.initialized) {
+		return !input.initializing && input.initializationError !== null
+			? "unavailable"
+			: "loading";
+	}
+	return input.projectCount === 0 && !input.projectsLoading ? "empty" : "ready";
 };
 
 export const createConnectionAttemptCoordinator = () => {
@@ -838,82 +899,107 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 			entries: [],
 			activeEnvironmentId: LOCAL_ENVIRONMENT_KEY,
 			initialized: false,
+			initializing: false,
+			initializationError: null,
 			hiddenRelayEnvironmentIds: [],
 			initialize: () => {
 				return initializeOnce(get().initialized, async () => {
-					const localClient = await runtimeOperationClient(
-						LOCAL_ENVIRONMENT_KEY,
-					);
-					const [descriptor, profiles, tailnetProfiles] = await Promise.all([
-						Effect.runPromise(localClient["connect.describe"]()),
-						window.zuse?.ssh?.listProfiles() ?? Promise.resolve([]),
-						window.zuse?.tailnet?.listProfiles() ?? Promise.resolve([]),
-					]);
-					registerLocalEnvironment(descriptor.environmentId);
-					setActiveEnvironment(descriptor.environmentId);
-					const relayEnvironments = await Effect.runPromise(
-						localClient["environments.list"](),
-					).catch(() => ({ environments: [] as const }));
-					const profileEnvironmentIds = new Set(
-						[...profiles, ...tailnetProfiles].map(
-							(profile) => profile.environmentId,
-						),
-					);
-					const hiddenRelayEnvironmentIds = readHiddenRelayEnvironmentIds();
-					const hiddenRelayIds = new Set(hiddenRelayEnvironmentIds);
-					const accountRelayEnvironments =
-						relayEnvironments.environments.filter(
-							(environment) =>
-								environment.environmentId !== descriptor.environmentId &&
-								!profileEnvironmentIds.has(environment.environmentId),
+					set({ initializing: true, initializationError: null });
+					try {
+						const localClient = await runtimeOperationClient(
+							LOCAL_ENVIRONMENT_KEY,
 						);
-					// Record every account relay environment — including hidden ones —
-					// so retry and unhide can reconnect without re-fetching the list.
-					for (const environment of accountRelayEnvironments) {
-						relayRecords.set(environment.environmentId, environment);
-					}
-					const visibleRelayEnvironments = accountRelayEnvironments.filter(
-						(environment) => !hiddenRelayIds.has(environment.environmentId),
-					);
-					set({
-						activeEnvironmentId: descriptor.environmentId,
-						hiddenRelayEnvironmentIds,
-						entries: orderEnvironmentCatalog([
-							{
-								connectionKind: "local",
-								environmentId: descriptor.environmentId,
-								profileId: null,
-								label: descriptor.label ?? "This computer",
-								target: null,
-								descriptor,
-								status: "offline",
-								error: null,
-							},
-							...visibleRelayEnvironments.map(relayEntry),
-							...profiles.map(profileEntry),
-							...tailnetProfiles.map(tailnetProfileEntry),
-						]),
-					});
-					for (const entry of get().entries) {
-						retainShell(entryKey(entry), entry.environmentId, "cache-only");
-					}
-					const localEntry = get().entries.find(
-						(entry) => entry.connectionKind === "local",
-					);
-					if (localEntry !== undefined) {
-						const runtime = retainShell(
+						const descriptor = await Effect.runPromise(
+							localClient["connect.describe"](),
+						);
+						registerLocalEnvironment(descriptor.environmentId);
+						setActiveEnvironment(descriptor.environmentId);
+
+						const hiddenRelayEnvironmentIds = readHiddenRelayEnvironmentIds();
+						const localEntry: EnvironmentCatalogEntry = {
+							connectionKind: "local",
+							environmentId: descriptor.environmentId,
+							profileId: null,
+							label: descriptor.label ?? "This computer",
+							target: null,
+							descriptor,
+							status: "offline",
+							error: null,
+						};
+						set({
+							activeEnvironmentId: descriptor.environmentId,
+							hiddenRelayEnvironmentIds,
+							entries: [localEntry],
+						});
+
+						const localRuntime = retainShell(
 							entryKey(localEntry),
 							localEntry.environmentId,
 							"connect",
 						);
 						await activateRuntime(
 							entryKey(localEntry),
-							runtime,
+							localRuntime,
 							localEntry.environmentId,
 							undefined,
 						);
+						set({ initialized: true, initializationError: null });
+
+						// Remote catalogs are optional. A corrupt saved profile or an
+						// unavailable account service must never hide the local workspace.
+						const { profiles, tailnetProfiles, relayEnvironments } =
+							await loadOptionalEnvironmentSources({
+								sshProfiles:
+									window.zuse?.ssh?.listProfiles() ?? Promise.resolve([]),
+								tailnetProfiles:
+									window.zuse?.tailnet?.listProfiles() ?? Promise.resolve([]),
+								relayEnvironments: Effect.runPromise(
+									localClient["environments.list"](),
+								),
+							});
+						const profileEnvironmentIds = new Set(
+							[...profiles, ...tailnetProfiles].map(
+								(profile) => profile.environmentId,
+							),
+						);
+						const hiddenRelayIds = new Set(hiddenRelayEnvironmentIds);
+						const accountRelayEnvironments = relayEnvironments.filter(
+							(environment) =>
+								environment.environmentId !== descriptor.environmentId &&
+								!profileEnvironmentIds.has(environment.environmentId),
+						);
+						for (const environment of accountRelayEnvironments) {
+							relayRecords.set(environment.environmentId, environment);
+						}
+						const optionalEntries = [
+							...accountRelayEnvironments
+								.filter(
+									(environment) =>
+										!hiddenRelayIds.has(environment.environmentId),
+								)
+								.map(relayEntry),
+							...profiles.map(profileEntry),
+							...tailnetProfiles.map(tailnetProfileEntry),
+						];
+						set((state) => ({
+							entries: orderEnvironmentCatalog([
+								...state.entries.filter(
+									(entry) => entry.connectionKind === "local",
+								),
+								...optionalEntries,
+							]),
+						}));
+						for (const entry of optionalEntries) {
+							retainShell(entryKey(entry), entry.environmentId, "cache-only");
+						}
+					} catch (cause) {
+						const message = errorMessage(cause);
+						set({ initialized: false, initializationError: message });
+						useWorkspaceStore.setState({ loading: false, error: message });
+						throw cause;
+					} finally {
+						set({ initializing: false });
 					}
-					set({ initialized: true });
 				});
 			},
 			syncAccountEnvironments: async () => {
@@ -1104,6 +1190,19 @@ export const useEnvironmentCatalogStore = create<EnvironmentCatalogState>(
 				await connectProfile(profileId);
 			},
 			retryEnvironment: async (environmentId) => {
+				const entry = get().entries.find(
+					(candidate) => candidate.environmentId === environmentId,
+				);
+				if (entry?.connectionKind === "local") {
+					const catalogKey = entryKey(entry);
+					const runtime = retainShell(catalogKey, environmentId, "connect");
+					patchEntry(catalogKey, { status: "connecting", error: null });
+					getRendererClientBus().retryConnection(
+						EnvironmentId.make(environmentId),
+					);
+					await runtime.lease.activate("connect");
+					return;
+				}
 				const environment = relayRecords.get(environmentId);
 				const local = get().entries.find(
 					(entry) => entry.connectionKind === "local",

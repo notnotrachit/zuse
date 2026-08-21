@@ -1,3 +1,4 @@
+import type { SessionRef } from "@zuse/client-runtime/resource-ref";
 import type { ResourceView } from "@zuse/client-runtime/resource-state";
 import type { SessionTimelineProjection } from "@zuse/contracts";
 import {
@@ -10,6 +11,8 @@ import {
 	EnvironmentId,
 	type FolderId,
 	type GitOriginInfo,
+	Message,
+	MessageId,
 	type ProviderId,
 	Session,
 	type SessionId,
@@ -37,6 +40,8 @@ import {
 	timelineReadingPositionStore,
 } from "../lib/session-timeline-cache.ts";
 import {
+	addOptimisticSessionMessage,
+	completeOlderSessionMessages,
 	registerEnvironmentActivation,
 	registerSessionTimelineCheckpointSynchronizer,
 	registerSessionTimelineOlderPageSynchronizer,
@@ -128,6 +133,18 @@ const registerCloudEnvironmentResolver = (summary: CloudChatSummary): void => {
 				payload.cursor.version !== checkpoint.metadata.cursor.version
 			)
 				throw new Error("Cloud transcript checkpoint metadata mismatch");
+			if (
+				current.connection === "dormant" &&
+				payload.projection.olderMessageSequence != null
+			) {
+				// Let ClientBus publish the recent checkpoint first, then complete its
+				// canonical projection automatically from encrypted storage pages.
+				setTimeout(() => {
+					void completeOlderSessionMessages(ref).catch((cause) => {
+						useCloudChatsStore.setState({ error: formatError(cause) });
+					});
+				}, 0);
+			}
 			return {
 				data: payload.projection,
 				cursor: payload.cursor,
@@ -285,7 +302,7 @@ export const cloudSessionPlaceholder = (
 export const stageCloudChat = (
 	summary: CloudChatSummary,
 	projectId: FolderId,
-	_firstMessage?: string,
+	firstMessage?: string,
 ): void => {
 	const previous = cloudSummaryForEnvironment(summary.workspaceId);
 	if (
@@ -336,6 +353,21 @@ export const stageCloudChat = (
 			],
 		},
 	}));
+	if (firstMessage !== undefined) {
+		addOptimisticSessionMessage(
+			{
+				environmentId: EnvironmentId.make(accepted.workspaceId),
+				sessionId: accepted.initialSessionId,
+			} satisfies SessionRef,
+			Message.make({
+				id: MessageId.make(`launch:${accepted.workspaceId}:message`),
+				sessionId: accepted.initialSessionId,
+				role: "user",
+				content: { _tag: "user", text: firstMessage, goal: false },
+				createdAt: now,
+			}),
+		);
+	}
 	useChatsStore.setState({ error: null });
 };
 

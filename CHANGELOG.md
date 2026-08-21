@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.6]
+
+### Fixed
+- Complete local, archived, cloud, and mobile chat histories now load automatically instead of stopping at a recent subset or depending on scroll-triggered pagination
+- New chats keep their queued prompt and workspace-creation progress visible, and explicit retries no longer collide with the original command identity
+- Consumed queued messages no longer reappear as false provider errors
+- Archiving dirty worktrees no longer advances the checked-out Git branch, and unarchive can recover from the retained archive-job snapshot
+- Switching chats restores each chat's sidebar state without an unwanted transition
+
+## [0.20.5]
+
+### Fixed
+- Cloud Workspace checkout now activates subscriptions reliably and automatically grants access to signed-in accounts that purchased through a checkout link
+- Cloud workspaces no longer stop during startup when Codex usage lookup times out
+- Local projects, chats, and saved WorkOS account state no longer disappear when an individual project has a Git error; the local computer remains connected
+- Add Project stays visually stable during GitHub outages, explains that GitHub is unavailable, preserves manual repository URLs, and provides scoped Retry actions
+- The notch tray now detects scaled MacBook displays and aligns with the physical camera housing
+
+## [0.20.4]
+
+### Changed
+- Cloud workspace settings now refresh when opened, focused, or after an action instead of continuously polling in the background
+
+### Fixed
+- Packaged desktop builds now connect to the production cloud service by default, preventing false subscription and invite-only errors caused by an unavailable staging endpoint
+- Cloud beta access remains reliable when several workspace requests start together, avoiding contradictory availability errors for an invited account
+
+## [0.20.3]
+
+### Fixed
+- Restored local projects and chats after upgrading when Local network access is disabled, and made project loading recoverable without deleting or replacing the local database
+
+## [0.20.2]
+
+### Fixed
+- Restored Zuse Cloud connectivity by routing production clients through the active Relay endpoint
+
+## [0.20.1]
+
+### Fixed
+- Cloud Workspace now appears in production desktop builds for invited beta users, while Relay continues enforcing private-beta access server-side
+
+## [0.20.0]
+
+### Added
+- Run coding agents in invite-only Zuse Cloud workspaces, with guided GitHub repository setup, encrypted credentials and transcripts, secure reconnects, pause/resume/archive controls, SSH access, and one-way local file sync
+- View Cloud usage and control overage spending under the `$40/month` plan, including `$35` of attributable E2B compute and additional provider cost plus 5%
+- Control installed desktop chats from the Zuse CLI through secure local credential discovery
+
+### Changed
+- Chats now use one durable, environment-scoped realtime state path, so agents continue after the client closes and cached transcripts appear immediately before bounded live catch-up
+- Sign-in, integration, and purchase callbacks now use polished, accessible status pages with accurate success and failure states
+
+### Fixed
+- Cloud workspaces now recover reliably across bootstrap failures, stale runtime registrations, paused chats, reconnects, and runtime upgrades
+- Cloud repository onboarding preserves successful connections when another repository fails, making retries targeted and idempotent
+- Published CLI packages now install cleanly and can authenticate to packaged desktop builds
+
 ## [0.19.0]
 
 ### Added

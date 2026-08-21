@@ -41,7 +41,6 @@ import {
 	RelayConnectGrant,
 	RelayEnvironmentList,
 	RelayPaths,
-	STAGING_RELAY_URL,
 } from "@zuse/contracts";
 import {
 	Context,
@@ -254,11 +253,7 @@ export const streamCloudWorkspaceLifecycle = (
 
 export const resolveMachineRelayUrl = (
 	env: Readonly<Record<string, string | undefined>> = process.env,
-): string =>
-	(
-		env.ZUSE_RELAY_URL ??
-		(env.NODE_ENV === "production" ? PRODUCTION_RELAY_URL : STAGING_RELAY_URL)
-	).replace(/\/+$/u, "");
+): string => (env.ZUSE_RELAY_URL ?? PRODUCTION_RELAY_URL).replace(/\/+$/u, "");
 
 export const mapRelayErrorCode = (
 	status: number,
@@ -266,6 +261,12 @@ export const mapRelayErrorCode = (
 ): MachineControlError => {
 	if (code === "machine_alpha_not_allowed") {
 		return new MachineControlError("not-allowed");
+	}
+	if (code === "cloud_beta_access_required") {
+		return new MachineControlError("beta-access-required");
+	}
+	if (code === "cloud_beta_access_unavailable") {
+		return new MachineControlError("beta-access-unavailable");
 	}
 	if (code === "invalid_machine_offer") {
 		return new MachineControlError("invalid-offer");

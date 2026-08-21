@@ -18,6 +18,7 @@ import {
 	type WorktreeId,
 } from "@zuse/contracts";
 import { toastManager } from "../components/ui/toast.tsx";
+import { nextChatCreateCommandId } from "../lib/chat-create-command-id.ts";
 import {
 	cloudSummaryForChat,
 	optimisticallyUnarchiveCloudChat,
@@ -34,7 +35,10 @@ import {
 import { formatError } from "../lib/format-error.ts";
 import { upsertLatestEntity } from "../lib/latest-entity.ts";
 import { markRendererInteraction } from "../lib/performance-marks.ts";
-import { getActiveEnvironment } from "../lib/rpc-client.ts";
+import {
+	getActiveEnvironment,
+	isIgnorableRendererFailure,
+} from "../lib/rpc-client.ts";
 import {
 	dropQueuedMessage,
 	queueSessionMessage,
@@ -43,7 +47,10 @@ import {
 	sessionTimelineCache,
 	timelineReadingPositionStore,
 } from "../lib/session-timeline-cache.ts";
-import { getRendererClientBus } from "../lib/session-timeline-client-bus.ts";
+import {
+	getRendererClientBus,
+	restartSessionTimeline,
+} from "../lib/session-timeline-client-bus.ts";
 import { createAtomStore as create } from "../state/atom-store.ts";
 import { batchAtomUpdates } from "../state/registry.tsx";
 import { useArchivePreviewStore } from "./archive-preview.ts";
@@ -173,6 +180,7 @@ type ChatsState = {
 		chatId: ChatId,
 		preserveFocus?: boolean,
 	) => Promise<boolean>;
+	readonly continueCreation: (chatId: ChatId) => Promise<boolean>;
 	readonly discardCreation: (chatId: ChatId) => void;
 	readonly archiveProgressByChat: Record<string, ChatArchiveProgressPhase>;
 	readonly error: string | null;
@@ -274,13 +282,64 @@ export type PendingChatCreation = {
 	readonly workspaceRequested: boolean;
 	readonly worktreeId: WorktreeId | null;
 	readonly workspacePolicy: ChatWorkspacePolicy | null;
-	readonly phase: "creating-workspace" | "creating-chat" | "failed";
+	readonly phase: ChatCreationOperation["phase"];
+	readonly failureStage: ChatCreationOperation["failureStage"];
+	readonly retryable: boolean;
+	readonly attempts: ChatCreationOperation["attempts"];
+	readonly setupBypassed: boolean;
 	readonly error: string | null;
 	readonly previousChatId: ChatId | null;
 	readonly previousSessionId: SessionId | null;
 	readonly startupQueueId: string | null;
+	readonly createdAt: Date;
 	readonly startedAt: number;
 };
+
+export const pendingCreationEntities = (
+	creation: PendingChatCreation,
+): { readonly chat: Chat; readonly session: Session } => {
+	const title = creation.title?.trim() || "New chat";
+	return {
+		chat: Chat.make({
+			id: creation.chatId,
+			projectId: creation.projectId,
+			worktreeId: creation.worktreeId,
+			title,
+			titleProvenance: creation.title === undefined ? "pending" : "manual",
+			activeSessionId: creation.sessionId,
+			originSessionId: null,
+			archivedAt: null,
+			lastMessageAt: null,
+			lastReadAt: creation.createdAt,
+			createdAt: creation.createdAt,
+			updatedAt: creation.createdAt,
+		}),
+		session: Session.make({
+			id: creation.sessionId,
+			projectId: creation.projectId,
+			title,
+			titleProvenance: creation.title === undefined ? "pending" : "manual",
+			providerId: creation.providerId,
+			model: creation.model,
+			status: creation.phase === "failed" ? "error" : "booting",
+			archivedAt: null,
+			cursor: null,
+			resumeStrategy: "none",
+			runtimeMode: creation.runtimeMode ?? "approval-required",
+			worktreeId: creation.worktreeId,
+			chatId: creation.chatId,
+			forkedFromSessionId: null,
+			forkedFromMessageId: null,
+			permissionMode: creation.permissionMode ?? "default",
+			toolSearch: creation.toolSearch ?? false,
+			createdAt: creation.createdAt,
+			updatedAt: creation.createdAt,
+		}),
+	};
+};
+
+export const chatStoreErrorMessage = (cause: unknown): string | null =>
+	isIgnorableRendererFailure(cause) ? null : formatError(cause);
 
 /**
  * A chat is unread when it has message activity the user hasn't seen since
@@ -361,7 +420,7 @@ export const restorePendingCreation = (
 			titleProvenance: operation.title === null ? "pending" : "manual",
 			providerId: operation.providerId,
 			model: operation.model,
-			status: operation.status === "failed" ? "error" : "idle",
+			status: operation.phase === "failed" ? "error" : "booting",
 			archivedAt: null,
 			cursor: null,
 			resumeStrategy: "none",
@@ -392,17 +451,16 @@ export const restorePendingCreation = (
 			workspaceRequested: operation.workspacePolicy._tag !== "main",
 			worktreeId: operation.worktreeId,
 			workspacePolicy: operation.workspacePolicy,
-			phase:
-				operation.status === "failed"
-					? "failed"
-					: operation.status === "creating_workspace" ||
-							operation.status === "pending"
-						? "creating-workspace"
-						: "creating-chat",
+			phase: operation.phase,
+			failureStage: operation.failureStage,
+			retryable: operation.retryable,
+			attempts: operation.attempts,
+			setupBypassed: operation.setupBypassed,
 			error: operation.error,
 			previousChatId: null,
 			previousSessionId: null,
 			startupQueueId: operation.startupQueueId,
+			createdAt: operation.createdAt,
 			startedAt: performance.now(),
 		},
 	};
@@ -439,14 +497,15 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				if (job.status === "failed") notifyArchiveFailure(job);
 				else monitorArchiveJob(job.chatId);
 			}
-			const chats = activeChatsByProject()[projectId] ?? [];
 			const restored = creationOperations
-				.filter((operation) => operation.status !== "succeeded")
+				.filter(
+					(operation) =>
+						operation.phase !== "running" && operation.phase !== "cancelled",
+				)
 				.map(restorePendingCreation);
-			const durableChatIds = new Set(chats.map((chat) => chat.id));
 			const succeededOperationIds = new Set(
 				creationOperations
-					.filter((operation) => operation.status === "succeeded")
+					.filter((operation) => operation.phase === "running")
 					.map((operation) => operation.operationId),
 			);
 			set((s) => ({
@@ -455,8 +514,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 						Object.entries(s.pendingCreationByChat).filter(
 							([, creation]) =>
 								creation.projectId !== projectId ||
-								(!durableChatIds.has(creation.chatId) &&
-									!succeededOperationIds.has(creation.operationId)),
+								!succeededOperationIds.has(creation.operationId),
 						),
 					),
 					...Object.fromEntries(
@@ -493,12 +551,13 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				},
 			}));
 		} catch (err) {
+			const message = chatStoreErrorMessage(err);
 			set((state) => ({
 				loadingByProject: {
 					...state.loadingByProject,
 					[projectId]: false,
 				},
-				error: formatError(err),
+				error: message,
 			}));
 		}
 	},
@@ -522,7 +581,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				opts?.operationId ?? `create_${crypto.randomUUID()}`;
 			const initialPrompt = opts?.startupInput?.text.trim();
 			try {
-				const commandId = CommandId.make(`chat-create:${remoteOperationId}`);
+				const commandId = nextChatCreateCommandId(remoteOperationId);
 				const { result } = await dispatchChatCommand<unknown, ChatCreateResult>(
 					{
 						environmentId: targetEnvironmentId,
@@ -632,15 +691,16 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				opts?.workspacePolicy instanceof Promise
 					? null
 					: (opts?.workspacePolicy ?? null),
-			phase:
-				opts?.worktreeId instanceof Promise ||
-				opts?.workspacePolicy instanceof Promise
-					? "creating-workspace"
-					: "creating-chat",
+			phase: "persisted",
+			failureStage: null,
+			retryable: true,
+			attempts: { workspace: 0, setup: 0, provider: 0 },
+			setupBypassed: false,
 			error: null,
 			previousChatId,
 			previousSessionId,
 			startupQueueId: opts?.startupQueueId ?? null,
+			createdAt: now,
 			startedAt: performance.now(),
 		};
 		const pendingCreation: PendingChatCreation =
@@ -649,7 +709,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				: {
 						...previousPending,
 						workspacePolicy: nextPending.workspacePolicy,
-						phase: nextPending.phase,
+						phase: previousPending.phase,
 						error: null,
 						startedAt: nextPending.startedAt,
 					};
@@ -725,7 +785,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 		}
 		markRendererInteraction(initialSessionId, "first-atom-commit");
 		const environmentId = EnvironmentId.make(getActiveEnvironment());
-		const commandId = CommandId.make(`chat-create:${operationId}`);
+		const commandId = nextChatCreateCommandId(operationId);
 		let knownWorktreeId = optimisticWorktreeId;
 		try {
 			const workspacePolicy = await opts?.workspacePolicy;
@@ -746,10 +806,6 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 								? (s.pendingCreationByChat[chatId] ?? pendingCreation)
 										.workspaceRequested
 								: workspacePolicy._tag !== "main",
-						phase:
-							workspacePolicy?._tag === "fresh"
-								? "creating-workspace"
-								: "creating-chat",
 					},
 				},
 			}));
@@ -811,6 +867,13 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 					),
 				},
 			}));
+			// Refresh the worktree projection without gating the acknowledged chat.
+			// This side request can be delayed independently of chat creation; awaiting
+			// it leaves the provisional setup surface mounted while the real turn runs
+			// behind it, so the transcript only appears after a navigation remount.
+			if (chat.worktreeId !== null) {
+				void useWorktreesStore.getState().refresh(projectId);
+			}
 			// Land the new chat in front of the project's existing list and
 			// mark it active so the renderer immediately swaps to it.
 			set((s) => {
@@ -826,11 +889,13 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 						...s.creatingByProject,
 						[projectId]: false,
 					},
-					pendingCreationByChat: Object.fromEntries(
-						Object.entries(s.pendingCreationByChat).filter(
-							([id]) => id !== chatId,
-						),
-					),
+					pendingCreationByChat: {
+						...s.pendingCreationByChat,
+						[chatId]: {
+							...(s.pendingCreationByChat[chatId] ?? pendingCreation),
+							worktreeId: chat.worktreeId,
+						},
+					},
 				};
 			});
 			// Mirror the initial session into the sessions store and select it
@@ -854,9 +919,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 						: s.selectedSessionByProject,
 				};
 			});
-			if (chat.worktreeId !== null) {
-				void useWorktreesStore.getState().refresh(projectId);
-			}
+			restartSessionTimeline({ environmentId, sessionId: initialSession.id });
 			return {
 				chatId: chat.id,
 				initialSessionId: initialSession.id,
@@ -864,7 +927,26 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				startupQueueId,
 			};
 		} catch (err) {
-			const reason = formatError(err);
+			const reportableError = chatStoreErrorMessage(err);
+			if (reportableError === null) {
+				// Replacing a retained stream interrupts the in-flight RPC fiber. The
+				// durable command/outbox remains authoritative, so keep the optimistic
+				// chat selected while its creation projection catches up.
+				set((s) => ({
+					error: null,
+					creatingByProject: {
+						...s.creatingByProject,
+						[projectId]: false,
+					},
+				}));
+				return {
+					chatId,
+					initialSessionId,
+					worktreeId: knownWorktreeId,
+					startupQueueId,
+				};
+			}
+			const reason = reportableError;
 			const retryable = getRendererClientBus()
 				.snapshot(
 					environmentShellResourceKey({
@@ -912,6 +994,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 						[chatId]: {
 							...(s.pendingCreationByChat[chatId] ?? pendingCreation),
 							phase: "failed",
+							failureStage: "configuration",
 							error: reason,
 							startupQueueId:
 								s.pendingCreationByChat[chatId]?.startupQueueId ??
@@ -934,6 +1017,44 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 		const existing = creationRetryPromises.get(creation.operationId);
 		if (existing !== undefined) return existing;
 		const retry = (async () => {
+			if (creation.phase === "failed" && creation.failureStage !== null) {
+				const action =
+					creation.failureStage === "workspace"
+						? "retry_workspace"
+						: creation.failureStage === "setup"
+							? "retry_setup"
+							: creation.failureStage === "provider"
+								? "retry_agent"
+								: null;
+				if (action === null || !creation.retryable) return false;
+				const expectedAttempt =
+					creation.failureStage === "workspace"
+						? creation.attempts.workspace
+						: creation.failureStage === "setup"
+							? creation.attempts.setup
+							: creation.attempts.provider;
+				const { result: recovered } = await dispatchChatCommand<
+					unknown,
+					ChatCreationOperation
+				>({
+					kind: "chat.creation.recover",
+					payload: {
+						operationId: creation.operationId,
+						action,
+						expectedPhase: creation.phase,
+						expectedFailureStage: creation.failureStage,
+						expectedAttempt,
+					},
+				});
+				const restored = restorePendingCreation(recovered).creation;
+				set((state) => ({
+					pendingCreationByChat: {
+						...state.pendingCreationByChat,
+						[chatId]: { ...creation, ...restored },
+					},
+				}));
+				if (recovered.phase === "failed") return false;
+			}
 			const result = await get().create(
 				creation.projectId,
 				creation.providerId,
@@ -969,6 +1090,39 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				creationRetryPromises.delete(creation.operationId);
 			}
 		}
+	},
+	continueCreation: async (chatId) => {
+		const creation = get().pendingCreationByChat[chatId];
+		if (
+			creation === undefined ||
+			creation.phase !== "failed" ||
+			creation.failureStage !== "setup" ||
+			!creation.retryable
+		) {
+			return false;
+		}
+		const { result: recovered } = await dispatchChatCommand<
+			unknown,
+			ChatCreationOperation
+		>({
+			kind: "chat.creation.recover",
+			payload: {
+				operationId: creation.operationId,
+				action: "continue_anyway",
+				expectedPhase: creation.phase,
+				expectedFailureStage: creation.failureStage,
+				expectedAttempt: creation.attempts.setup,
+			},
+		});
+		const restored = restorePendingCreation(recovered).creation;
+		set((state) => ({
+			pendingCreationByChat: {
+				...state.pendingCreationByChat,
+				[chatId]: { ...creation, ...restored },
+			},
+		}));
+		if (recovered.phase === "failed") return false;
+		return get().retryCreation(chatId, true);
 	},
 	discardCreation: (chatId) => {
 		const creation = get().pendingCreationByChat[chatId];
@@ -1260,7 +1414,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				const chat = chatReceipt.result;
 				const job = jobReceipt.result;
 				if (chat.archivedAt !== null) {
-					reconciled = { chat, cleanup: null, checkpoint: null, job };
+					reconciled = { chat, checkpoint: null, job };
 				} else {
 					definitiveFailure = true;
 				}
@@ -1519,6 +1673,17 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 				useUiStore.getState().setActiveMainTab("chat");
 				if (result.worktree !== null) {
 					void useWorktreesStore.getState().refresh(resolvedProjectId);
+					useWorktreesStore
+						.getState()
+						.subscribeSetup(resolvedProjectId, result.worktree.id);
+				}
+				if (result.restoreNotice === "branch-advanced") {
+					toastManager.add({
+						type: "warning",
+						title: "Branch changed while archived",
+						description:
+							"The worktree was restored at the latest branch tip. Archived changes remain safely stored for recovery.",
+					});
 				}
 				return { ok: true, ...result } as const;
 			} catch (err) {

@@ -358,7 +358,7 @@ describe("cloud runtime assets", () => {
 		expect(build).not.toContain("releases.invalid");
 	});
 
-	test("gates automatic and explicit staging publication without deploying production", async () => {
+	test("gates automatic and explicit runtime publication", async () => {
 		const workflow = await readWorkspaceFile(
 			".github/workflows/cloud-runtime-staging.yml",
 		);
@@ -370,14 +370,14 @@ describe("cloud runtime assets", () => {
 		expect(workflow).toContain(
 			'"$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main"',
 		);
-		expect(workflow).toContain("publish_staging:");
-		expect(workflow).toContain("refs/heads/swarajbachu/untitled-v1");
+		expect(workflow).toContain('"$REQUESTED_TARGET" == "production"');
+		expect(workflow).toContain("refs/tags/v*");
 		expect(workflow.match(/id: publication/gu)).toHaveLength(1);
 		expect(
 			workflow.match(/steps\.publication\.outputs\.enabled == 'true'/gu),
 		).toHaveLength(2);
 		expect(
-			workflow.match(/needs\.build\.outputs\.publish_staging == 'true'/gu),
+			workflow.match(/needs\.build\.outputs\.publish == 'true'/gu),
 		).toHaveLength(1);
 		expect(workflow).not.toContain(
 			"ZUSE_RUNTIME_SIGNING_PRIVATE_JWK: $" +

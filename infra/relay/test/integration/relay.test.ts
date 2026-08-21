@@ -25,6 +25,9 @@ import * as Config from "../../src/config.ts";
 import type { RelayContext } from "../../src/handler.ts";
 import {
 	AccountIdentity,
+	BetaAccess,
+	BetaAccessAllowAll,
+	BetaAccessDenied,
 	CloudBillingStoreMemory,
 	CloudWorkspaceLaunchIntentCipher,
 	CloudWorkspaceLaunchIntentCipherLive,
@@ -94,6 +97,7 @@ let pushCalls: ReadonlyArray<{
 	readonly target: string;
 }>[];
 let identityDeletes: string[];
+let verifiedIdentityEmail: string | null;
 
 const placementAdapter = (providerId: string): SandboxProviderAdapter => ({
 	providerId,
@@ -126,6 +130,7 @@ const makeLayer = async (
 	liveCheckoutEnabled = false,
 	machineControlOverrides: Partial<MachineControlConfig> = {},
 	sandboxProvidersLayer: Layer.Layer<SandboxProviders> = SandboxProvidersFake,
+	betaAccessLayer: Layer.Layer<BetaAccess> = BetaAccessAllowAll,
 ): Promise<Layer.Layer<RelayContext>> => {
 	const billingLayer =
 		typeof billingLayerOrMaxEnvironments === "number"
@@ -162,6 +167,7 @@ const makeLayer = async (
 	const accountIdentityLayer = Layer.succeed(
 		AccountIdentity,
 		AccountIdentity.of({
+			verifiedEmail: () => Effect.succeed(verifiedIdentityEmail),
 			deleteUser: (accountId) =>
 				Effect.sync(() => {
 					identityDeletes.push(accountId);
@@ -170,6 +176,7 @@ const makeLayer = async (
 	);
 	return Layer.mergeAll(
 		configLayer,
+		betaAccessLayer,
 		WorkosVerifierTest,
 		RelayStoreMemory,
 		MachineStoreMemory,
@@ -327,6 +334,7 @@ const mintAccess = async (
 beforeEach(async () => {
 	pushCalls = [];
 	identityDeletes = [];
+	verifiedIdentityEmail = null;
 	relay = makeRelay(await makeLayer());
 });
 
@@ -351,6 +359,62 @@ describe("@zuse/relay", () => {
 		expect(await invalidState.text()).toContain(
 			"GitHub could not be connected",
 		);
+	});
+
+	test("gates hosted operations without blocking local links or resource cleanup", async () => {
+		const gatedRelay = makeRelay(
+			await makeLayer(
+				undefined,
+				BillingProvidersManual,
+				false,
+				{},
+				SandboxProvidersFake,
+				Layer.succeed(
+					BetaAccess,
+					BetaAccess.of({
+						check: () => Effect.fail(new BetaAccessDenied()),
+						grant: () => Effect.void,
+					}),
+				),
+			),
+		);
+		const headers = { authorization: "Bearer test-token:user_a" };
+		const hosted = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/machine-offers`, { headers }),
+		);
+		expect(hosted.status).toBe(403);
+		expect(await hosted.json()).toEqual({
+			error: "cloud_beta_access_required",
+		});
+		const resume = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/cloud/workspaces/missing/resume`, {
+				method: "POST",
+				headers,
+			}),
+		);
+		expect(resume.status).toBe(403);
+
+		for (const action of ["pause", "archive", "delete"] as const) {
+			const cleanup = await gatedRelay.fetch(
+				new Request(`${RELAY_ISSUER}/v1/cloud/workspaces/missing/${action}`, {
+					method: "POST",
+					headers,
+				}),
+			);
+			expect(cleanup.status).toBe(404);
+			expect(await cleanup.json()).toEqual({
+				error: "cloud_workspace_not_found",
+			});
+		}
+
+		const local = await gatedRelay.fetch(
+			new Request(`${RELAY_ISSUER}/v1/client/environment-link-challenges`, {
+				method: "POST",
+				headers,
+			}),
+		);
+		expect(local.status).toBe(200);
+		await gatedRelay.dispose();
 	});
 
 	test("offers each server-owned cloud machine and makes creation idempotent", async () => {

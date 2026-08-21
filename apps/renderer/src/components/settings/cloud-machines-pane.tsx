@@ -234,13 +234,9 @@ export function CloudMachinesPane() {
 			return;
 		}
 		void load();
-		const timer = window.setInterval(() => void load(), 5_000);
 		const handleFocus = () => void load();
 		window.addEventListener("focus", handleFocus);
-		return () => {
-			window.clearInterval(timer);
-			window.removeEventListener("focus", handleFocus);
-		};
+		return () => window.removeEventListener("focus", handleFocus);
 	}, [authLoading, isSignedIn, load]);
 
 	const beginPurchase = async () => {
@@ -369,9 +365,10 @@ export function CloudMachinesPane() {
 
 	useEffect(() => {
 		void refreshRuntimeStatus();
+		if (runtimeStatus?.state !== "updating") return;
 		const interval = window.setInterval(
 			() => void refreshRuntimeStatus(),
-			runtimeStatus?.state === "updating" ? 2_000 : 30_000,
+			2_000,
 		);
 		return () => window.clearInterval(interval);
 	}, [refreshRuntimeStatus, runtimeStatus?.state]);

@@ -207,11 +207,14 @@ export function CloudWorkspacePool() {
 		void load();
 		void loadGithubRepos();
 		const timer = window.setInterval(() => void load(), 5_000);
-		const refreshGithubAfterBrowserFlow = () => void loadGithubRepos();
-		window.addEventListener("focus", refreshGithubAfterBrowserFlow);
+		const refreshAfterBrowserFlow = () => {
+			void load();
+			void loadGithubRepos();
+		};
+		window.addEventListener("focus", refreshAfterBrowserFlow);
 		return () => {
 			window.clearInterval(timer);
-			window.removeEventListener("focus", refreshGithubAfterBrowserFlow);
+			window.removeEventListener("focus", refreshAfterBrowserFlow);
 		};
 	}, [authLoading, isSignedIn, load, loadGithubRepos]);
 

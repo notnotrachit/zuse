@@ -162,6 +162,39 @@ class MemoryPersistence implements ClientPersistence {
 }
 
 describe("ClientBus", () => {
+	it("fingerprints binary payloads by bytes instead of enumerable indices", () => {
+		const binary = {
+			kind: "attachments.upload",
+			commandId: CommandId.make("command-binary"),
+			environmentId,
+			resource: timelineKey,
+			payload: { bytes: new Uint8Array([1, 2, 3]) },
+			retry: "never" as const,
+			createdAt: 1,
+		};
+
+		expect(
+			commandFingerprint({
+				...binary,
+				payload: { bytes: new Uint8Array([1, 2, 3]) },
+			}),
+		).toBe(commandFingerprint(binary));
+		expect(
+			commandFingerprint({
+				...binary,
+				payload: { bytes: new Uint8Array([1, 2, 4]) },
+			}),
+		).not.toBe(commandFingerprint(binary));
+		// Uint8Array's enumerable shape is { "0": 1, ... }. It must retain a
+		// distinct identity from a real application object with those keys.
+		expect(
+			commandFingerprint({
+				...binary,
+				payload: { bytes: { 0: 1, 1: 2, 2: 3 } },
+			}),
+		).not.toBe(commandFingerprint(binary));
+	});
+
 	it("shares one environment resolution and one keyed driver across retainers", async () => {
 		let resolves = 0;
 		let starts = 0;
@@ -225,6 +258,31 @@ describe("ClientBus", () => {
 		second.release();
 		expect(cleanup).toBe(1);
 		unsubscribe();
+		await bus.dispose();
+	});
+
+	it("restarts a retained resource after its provisional subscription fails", async () => {
+		let starts = 0;
+		let stops = 0;
+		const bus = new ClientBus<Client>({
+			resolver: immediateResolver(),
+			driverFor: () => ({
+				start: () => {
+					starts += 1;
+				},
+				stop: () => {
+					stops += 1;
+				},
+			}),
+		});
+		const lease = bus.retain(timelineKey, { activation: "connect" });
+		await waitUntil(() => starts === 1);
+
+		expect(bus.restart(timelineKey)).toBe(true);
+		expect(stops).toBe(1);
+		expect(starts).toBe(2);
+
+		lease.release();
 		await bus.dispose();
 	});
 

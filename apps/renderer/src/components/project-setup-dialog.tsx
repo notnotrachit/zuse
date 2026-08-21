@@ -87,6 +87,18 @@ export function ProjectSetupDialog({
 		() => entries.filter((entry) => entry.status === "connected"),
 		[entries],
 	);
+	const catalogInitializing = useEnvironmentCatalogStore(
+		(state) => state.initializing,
+	);
+	const catalogInitializationError = useEnvironmentCatalogStore(
+		(state) => state.initializationError,
+	);
+	const initializeCatalog = useEnvironmentCatalogStore(
+		(state) => state.initialize,
+	);
+	const retryEnvironment = useEnvironmentCatalogStore(
+		(state) => state.retryEnvironment,
+	);
 	const [mode, setMode] = useState<ProjectSetupMode>(initialMode);
 	const [environmentId, setEnvironmentId] = useState(
 		initialEnvironmentId ?? getLocalEnvironmentId(),
@@ -100,7 +112,11 @@ export function ProjectSetupDialog({
 	const [repos, setRepos] = useState<ReadonlyArray<GithubRepoSummary>>([]);
 	const [ghAuthenticated, setGhAuthenticated] = useState(false);
 	const [loadingRepos, setLoadingRepos] = useState(false);
+	const [reposError, setReposError] = useState(false);
+	const [reposRequest, setReposRequest] = useState(0);
 	const [submitting, setSubmitting] = useState(false);
+	const [retryingConnection, setRetryingConnection] = useState(false);
+	const [retryFailure, setRetryFailure] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -113,16 +129,21 @@ export function ProjectSetupDialog({
 		setName("");
 		setError(null);
 		setSubmitting(false);
+		setRetryingConnection(false);
+		setRetryFailure(null);
+		setReposError(false);
 	}, [open, initialMode, initialEnvironmentId, sourceUrl]);
 
 	useEffect(() => {
 		if (
 			!open ||
+			connected.length === 0 ||
 			(mode !== "create" && (mode !== "clone" || sourceUrl !== undefined))
 		)
 			return;
 		let cancelled = false;
 		setLoadingRepos(true);
+		setReposError(false);
 		void listEnvironmentGithubRepos(environmentId)
 			.then((result) => {
 				if (cancelled) return;
@@ -132,7 +153,7 @@ export function ProjectSetupDialog({
 			.catch(() => {
 				if (!cancelled) {
 					setRepos([]);
-					setGhAuthenticated(false);
+					setReposError(true);
 				}
 			})
 			.finally(() => {
@@ -141,16 +162,36 @@ export function ProjectSetupDialog({
 		return () => {
 			cancelled = true;
 		};
-	}, [open, mode, environmentId, sourceUrl]);
+	}, [open, mode, environmentId, sourceUrl, connected.length, reposRequest]);
+
+	useEffect(() => {
+		if (!open) return;
+		if (connected.some((entry) => entry.environmentId === environmentId))
+			return;
+		const nextEnvironment = connected[0];
+		if (nextEnvironment === undefined) return;
+		setEnvironmentId(nextEnvironment.environmentId);
+		setParent("");
+		setParentReady(false);
+	}, [open, connected, environmentId]);
 
 	const selectedEnvironment = connected.find(
 		(entry) => entry.environmentId === environmentId,
 	);
+	const localEnvironment = entries.find(
+		(entry) => entry.connectionKind === "local",
+	);
+	const unavailableMessage =
+		retryFailure ??
+		localEnvironment?.error ??
+		catalogInitializationError ??
+		"Wait for the local workspace to finish loading.";
 	const local = environmentId === getLocalEnvironmentId();
 	const projectName =
 		mode === "clone" ? (sourceName ?? cloneName(url)) : name.trim();
 	const canSubmit =
 		!submitting &&
+		selectedEnvironment !== undefined &&
 		(mode === "clone"
 			? url.trim().length > 0 && parent.trim().length > 0 && parentReady
 			: mode === "create"
@@ -193,6 +234,20 @@ export function ProjectSetupDialog({
 		onOpenChange(next);
 	};
 
+	const retryConnection = async (): Promise<void> => {
+		if (retryingConnection) return;
+		setRetryingConnection(true);
+		setRetryFailure(null);
+		try {
+			if (localEnvironment === undefined) await initializeCatalog();
+			else await retryEnvironment(localEnvironment.environmentId);
+		} catch (cause) {
+			setRetryFailure(cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setRetryingConnection(false);
+		}
+	};
+
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
 			<DialogPopup className="max-w-2xl">
@@ -217,6 +272,7 @@ export function ProjectSetupDialog({
 							<span>Create on</span>
 							<Select
 								value={environmentId}
+								disabled={connected.length === 0}
 								onValueChange={(value) => {
 									if (value !== null) {
 										setEnvironmentId(value);
@@ -247,6 +303,33 @@ export function ProjectSetupDialog({
 								</SelectPopup>
 							</Select>
 						</div>
+						{connected.length === 0 ? (
+							<div
+								className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-[11px]"
+								role="alert"
+							>
+								<p className="font-medium text-foreground">
+									This computer is unavailable.
+								</p>
+								<p className="mt-1 text-muted-foreground">
+									{unavailableMessage}
+								</p>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="mt-2 min-w-28"
+									disabled={catalogInitializing || retryingConnection}
+									onClick={() => {
+										void retryConnection();
+									}}
+								>
+									{catalogInitializing || retryingConnection
+										? "Retrying…"
+										: "Retry connection"}
+								</Button>
+							</div>
+						) : null}
 
 						{mode === "choose" ? (
 							<div className="grid gap-2 sm:grid-cols-3">
@@ -255,6 +338,7 @@ export function ProjectSetupDialog({
 									label="Quick start"
 									description="Create from a template"
 									accent="violet"
+									disabled={connected.length === 0}
 									onClick={() => setMode("create")}
 								/>
 								<SetupChoice
@@ -262,6 +346,7 @@ export function ProjectSetupDialog({
 									label="Clone repository"
 									description="Clone with Git or GitHub"
 									accent="blue"
+									disabled={connected.length === 0}
 									onClick={() => setMode("clone")}
 								/>
 								<SetupChoice
@@ -269,6 +354,7 @@ export function ProjectSetupDialog({
 									label="Existing folder"
 									description="Open a project on disk"
 									accent="amber"
+									disabled={connected.length === 0}
 									onClick={() => setMode("existing")}
 								/>
 							</div>
@@ -301,12 +387,30 @@ export function ProjectSetupDialog({
 									</div>
 								)}
 								{sourceUrl === undefined &&
-								(loadingRepos || repos.length > 0 || !ghAuthenticated) ? (
-									<div className="max-h-28 overflow-y-auto rounded-lg border border-border">
+								(loadingRepos ||
+									reposError ||
+									repos.length > 0 ||
+									!ghAuthenticated) ? (
+									<div className="max-h-28 min-h-11 overflow-y-auto rounded-lg border border-border">
 										{loadingRepos ? (
 											<p className="p-3 text-xs text-muted-foreground">
 												Loading repositories…
 											</p>
+										) : reposError ? (
+											<div className="flex min-h-11 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+												<span className="min-w-0 flex-1">
+													GitHub is unavailable. You can still paste a
+													repository URL.
+												</span>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() => setReposRequest((value) => value + 1)}
+												>
+													Retry
+												</Button>
+											</div>
 										) : repos.length > 0 ? (
 											repos.map((repo) => (
 												<button
@@ -411,7 +515,7 @@ export function ProjectSetupDialog({
 							</>
 						) : null}
 
-						{mode !== "choose" ? (
+						{mode !== "choose" && selectedEnvironment !== undefined ? (
 							<div className="flex flex-col gap-1.5 text-xs font-medium">
 								<span>
 									{mode === "existing" ? "Project folder" : "Parent folder"}
@@ -489,12 +593,14 @@ function SetupChoice({
 	label,
 	description,
 	accent,
+	disabled,
 	onClick,
 }: {
 	readonly art: "quick" | "github" | "folder";
 	readonly label: string;
 	readonly description: string;
 	readonly accent: "violet" | "blue" | "amber";
+	readonly disabled: boolean;
 	readonly onClick: () => void;
 }) {
 	const accentClass = {
@@ -507,8 +613,9 @@ function SetupChoice({
 	return (
 		<button
 			type="button"
+			disabled={disabled}
 			onClick={onClick}
-			className={`group flex min-h-40 flex-col overflow-hidden rounded-xl border border-border bg-muted/20 text-left outline-none transition-[border-color,background-color] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none ${accentClass}`}
+			className={`group flex min-h-40 flex-col overflow-hidden rounded-xl border border-border bg-muted/20 text-left outline-none transition-[border-color,background-color] duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none ${accentClass}`}
 		>
 			<AsciiProjectArt variant={art} accent={accent} />
 			<span className="flex w-full flex-col gap-0.5 border-t border-border/70 px-3 py-2.5">

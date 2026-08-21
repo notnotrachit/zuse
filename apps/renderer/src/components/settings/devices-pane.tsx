@@ -5,12 +5,11 @@ import type {
 	TailnetShareState,
 } from "@zuse/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-
+import { dispatchLocalDeviceCommand } from "../../lib/local-device-client-bus.ts";
 import {
 	openExternal,
 	rendererPlatformCapabilities,
 } from "../../lib/platform-capabilities.ts";
-import { dispatchLocalDeviceCommand } from "../../lib/local-device-client-bus.ts";
 import { Spinner } from "../ui/spinner.tsx";
 import {
 	AccessConfirmDialogs,
