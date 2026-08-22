@@ -2,28 +2,80 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
+
+import {
+	makeDisabledRelayLinkService,
+	RelayLinkService,
+} from "../../src/relay/relay-link-service.ts";
 
 import {
 	activateServeRuntimeUpdate,
 	foregroundServeOptions,
-	latestPairingLink,
+	readServePairingBootstrap,
 	removeServeRuntime,
 	requiresServeAccountAuthorization,
 	resolveServeDataDir,
+	resolveServeStaticDir,
 	runServePackageCli,
 	SERVE_HELP,
 	shouldAutoLinkForeground,
 } from "../../src/serve/package-cli.ts";
+import {
+	readServeSettings,
+	writeServeSettings,
+} from "../../src/serve/settings.ts";
 
 describe("serve data directory", () => {
+	it("uses the desktop dev profile when run from a Linux source checkout", () => {
+		expect(
+			resolveServeDataDir({ XDG_CONFIG_HOME: "/home/dev/.config" }, undefined, {
+				platform: "linux",
+				homeDir: "/home/dev",
+				cwd: "/home/dev/zuse/packages/serve",
+				pathExists: (path) =>
+					path === "/home/dev/zuse/apps/desktop/package.json" ||
+					path === "/home/dev/zuse/packages/serve/package.json",
+			}),
+		).toBe("/home/dev/.config/Zuse Alpha (Dev)");
+	});
+
+	it("uses the stable desktop profile for an installed Linux CLI", () => {
+		expect(
+			resolveServeDataDir({ XDG_CONFIG_HOME: "/data/config" }, undefined, {
+				platform: "linux",
+				homeDir: "/home/dev",
+				cwd: "/tmp",
+				pathExists: () => false,
+			}),
+		).toBe("/data/config/Zuse Alpha");
+	});
+
 	it("uses the stable desktop profile on macOS", () => {
 		expect(
 			resolveServeDataDir({}, undefined, {
 				platform: "darwin",
 				homeDir: "/Users/dev",
+				cwd: "/tmp",
+				pathExists: () => false,
 			}),
 		).toBe("/Users/dev/Library/Application Support/Zuse Alpha");
+	});
+
+	it("uses the stable desktop profile on Windows", () => {
+		expect(
+			resolveServeDataDir(
+				{ APPDATA: "C:\\Users\\dev\\AppData\\Roaming" },
+				undefined,
+				{
+					platform: "win32",
+					homeDir: "C:\\Users\\dev",
+					cwd: "C:\\tmp",
+					pathExists: () => false,
+				},
+			),
+		).toBe("C:\\Users\\dev\\AppData\\Roaming\\Zuse Alpha");
 	});
 
 	it("preserves explicit data-directory overrides", () => {
@@ -59,43 +111,169 @@ describe("Serve package metadata commands", () => {
 		});
 	});
 
-	it("does not require account authorization for private or SSH-managed access", () => {
+	it("trusts proxy headers for a Tailscale Serve foreground route", () => {
 		expect(
-			requiresServeAccountAuthorization({ sshManaged: false, tailscale: true }),
+			foregroundServeOptions(
+				{},
+				{
+					sshManaged: false,
+					dataDir: "/home/zuse/.zuse-data",
+				},
+				"https://build.example.ts.net",
+			),
+		).toMatchObject({
+			pairingPublicBaseUrl: "https://build.example.ts.net",
+			trustProxy: true,
+		});
+	});
+
+	it("disables persisted account relay state in no-account foreground mode", () => {
+		expect(
+			foregroundServeOptions(
+				{},
+				{
+					sshManaged: false,
+					noAccount: true,
+					dataDir: "/home/zuse/.zuse-data",
+				},
+			),
+		).toMatchObject({ relayEnabled: false });
+	});
+
+	it("exposes only LAN endpoints when the account relay is disabled", async () => {
+		const layer = makeDisabledRelayLinkService({
+			policy: "protected",
+			advertisedHost: "192.168.0.105",
+			port: 4860,
+			pairingBootstrap: false,
+		});
+		const status = await Effect.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* RelayLinkService).status();
+			}).pipe(Effect.provide(layer)),
+		);
+
+		expect(status).toMatchObject({
+			linked: false,
+			heartbeatActive: false,
+		});
+		expect(status.advertisedEndpoints).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					reachability: "lan",
+					httpBaseUrl: "http://192.168.0.105:4860",
+				}),
+			]),
+		);
+		expect(status.advertisedEndpoints).not.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ reachability: "relay" }),
+			]),
+		);
+	});
+
+	it("requires account authorization unless explicitly opted out", () => {
+		expect(
+			requiresServeAccountAuthorization({ sshManaged: false, noAccount: true }),
 		).toBe(false);
 		expect(
-			requiresServeAccountAuthorization({ sshManaged: true, tailscale: false }),
+			requiresServeAccountAuthorization({ sshManaged: true, noAccount: false }),
 		).toBe(false);
 		expect(
 			requiresServeAccountAuthorization({
 				sshManaged: false,
-				tailscale: false,
+				noAccount: false,
 			}),
 		).toBe(true);
+		expect(
+			requiresServeAccountAuthorization({
+				sshManaged: false,
+				noAccount: false,
+				cloudWorkspaceId: "workspace_123",
+			}),
+		).toBe(false);
 	});
 
 	it("does not auto-link a cloud workspace as a persistent computer", () => {
 		expect(
 			shouldAutoLinkForeground({
 				sshManaged: false,
-				tailscale: false,
+				noAccount: false,
 			}),
 		).toBe(true);
 		expect(
 			shouldAutoLinkForeground({
 				sshManaged: false,
-				tailscale: false,
+				noAccount: false,
 				cloudWorkspaceId: "workspace_123",
+			}),
+		).toBe(false);
+		expect(
+			shouldAutoLinkForeground({
+				sshManaged: false,
+				noAccount: true,
 			}),
 		).toBe(false);
 	});
 
-	it("selects the newest pairing link from service output", () => {
-		expect(
-			latestPairingLink(
-				"QR: zuse:///connect/pair?old\nready\nQR: zuse:///connect/pair?new#token=zp_new\n",
-			),
-		).toBe("zuse:///connect/pair?new#token=zp_new");
+	it("reads the daemon's pairing bootstrap and ignores expired ones", async () => {
+		const dataDir = await mkdtemp(join(tmpdir(), "zuse-serve-pairing-"));
+		const future = new Date(Date.now() + 60_000).toISOString();
+		await writeFile(
+			join(dataDir, "pairing.json"),
+			JSON.stringify({
+				browserUrl: "http://192.168.1.50:4859/#pair=ABCDEFGH",
+				qrText: "zuse:///connect/pair?pairingUrl=x#token=ABCDEFGH",
+				code: "ABCDEFGH",
+				expiresAt: future,
+			}),
+		);
+		await expect(readServePairingBootstrap(dataDir)).resolves.toMatchObject({
+			code: "ABCDEFGH",
+			expiresAt: future,
+		});
+
+		await writeFile(
+			join(dataDir, "pairing.json"),
+			JSON.stringify({
+				browserUrl: "http://192.168.1.50:4859/#pair=ABCDEFGH",
+				qrText: "zuse:///connect/pair?pairingUrl=x#token=ABCDEFGH",
+				expiresAt: new Date(Date.now() - 1_000).toISOString(),
+			}),
+		);
+		await expect(readServePairingBootstrap(dataDir)).resolves.toBeNull();
+		await rm(dataDir, { recursive: true, force: true });
+	});
+
+	it("round-trips persisted serve settings", async () => {
+		const dataDir = await mkdtemp(join(tmpdir(), "zuse-serve-settings-"));
+		await writeServeSettings(dataDir, {
+			sshManaged: false,
+			tailscale: true,
+			noAccount: false,
+			lan: true,
+			port: 5000,
+		});
+		await expect(readServeSettings(dataDir)).resolves.toMatchObject({
+			tailscale: true,
+			lan: true,
+			port: 5000,
+		});
+		await rm(dataDir, { recursive: true, force: true });
+	});
+
+	it("resolves the bundled browser client next to the CLI", async () => {
+		const bundleDir = await mkdtemp(join(tmpdir(), "zuse-serve-static-"));
+		await mkdir(join(bundleDir, "client"), { recursive: true });
+		await writeFile(join(bundleDir, "client", "index.html"), "<html></html>");
+		const moduleUrl = `file://${join(bundleDir, "serve-cli.mjs")}`;
+		expect(resolveServeStaticDir({}, moduleUrl)).toBe(
+			join(bundleDir, "client"),
+		);
+		expect(resolveServeStaticDir({ ZUSE_STATIC_DIR: "/elsewhere" })).toBe(
+			"/elsewhere",
+		);
+		await rm(bundleDir, { recursive: true, force: true });
 	});
 
 	it("prints help without starting or mutating the runtime environment", async () => {

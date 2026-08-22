@@ -4,10 +4,11 @@ import type {
 	RelayLinkStatus,
 	TailnetShareState,
 } from "@zuse/contracts";
+import { formatPairingCodeForDisplay } from "@zuse/contracts";
 import { Copy, Link2, QrCode, RefreshCw } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useRef, useState } from "react";
-
+import { dispatchLocalDeviceCommand } from "../../../lib/local-device-client-bus.ts";
 import { accessDeviceKind } from "../../../lib/paired-phones.ts";
 import { copyText } from "../../../lib/platform-capabilities.ts";
 import {
@@ -15,7 +16,6 @@ import {
 	pairingForMethod,
 	readyMethods,
 } from "../../../lib/remote-access.ts";
-import { dispatchLocalDeviceCommand } from "../../../lib/local-device-client-bus.ts";
 import { Button } from "../../ui/button.tsx";
 import { Card } from "../../ui/card.tsx";
 import {
@@ -109,10 +109,10 @@ export function ConnectLinkCard({
 					.filter((token) => token.revokedAt === undefined)
 					.map((token) => token.id),
 			);
-			const next = await dispatchLocalDeviceCommand<{}, PairingStartResult>(
-				"pairing.start",
-				{},
-			);
+			const next = await dispatchLocalDeviceCommand<
+				Record<never, never>,
+				PairingStartResult
+			>("pairing.start", {});
 			if (dialogOpenRef.current) setPairing(next);
 		} catch (cause) {
 			setErrorMessage(messageForError(cause));
@@ -161,7 +161,7 @@ export function ConnectLinkCard({
 		const checkForPairedDevice = async () => {
 			try {
 				const next = await dispatchLocalDeviceCommand<
-					{},
+					Record<never, never>,
 					ReadonlyArray<AuthTokenSummary>
 				>("pairing.listTokens", {});
 				onTokens(next);
@@ -192,19 +192,37 @@ export function ConnectLinkCard({
 			? null
 			: pairingForMethod(pairing, method, status, tailnet);
 	const qrText = activePairing?.qrText ?? "";
+	const browserUrl = activePairing?.browserUrl ?? "";
+	const pairingCode =
+		activePairing === null
+			? ""
+			: formatPairingCodeForDisplay(activePairing.code);
 
-	const copyLink = useCallback(async () => {
-		if (qrText === "") return;
+	const copyBrowserUrl = useCallback(async () => {
+		if (browserUrl === "") return;
 		try {
-			await copyText(qrText);
+			await copyText(browserUrl);
 			toastManager.add({
 				title: "Connect link copied",
-				description: "Paste it into Zuse on the other device within 5 minutes.",
+				description: "Open it in a browser or paste it into Add Computer.",
 			});
 		} catch (cause) {
 			showError("Could not copy the connect link", cause);
 		}
-	}, [qrText]);
+	}, [browserUrl]);
+
+	const copyCode = useCallback(async () => {
+		if (pairingCode === "") return;
+		try {
+			await copyText(pairingCode);
+			toastManager.add({
+				title: "Pairing code copied",
+				description: "Enter it in the browser within five minutes.",
+			});
+		} catch (cause) {
+			showError("Could not copy the pairing code", cause);
+		}
+	}, [pairingCode]);
 
 	const openDialog = useCallback(() => {
 		const best = ready[0];
@@ -265,8 +283,8 @@ export function ConnectLinkCard({
 					<DialogHeader>
 						<DialogTitle>Connect another device</DialogTitle>
 						<DialogDescription>
-							This link expires after five minutes. Choose which connection it
-							should use.
+							Open this link in a browser, paste it into Add Computer, or scan
+							the QR code. Choose which connection it should use.
 						</DialogDescription>
 					</DialogHeader>
 					<DialogPanel className="space-y-3">
@@ -309,23 +327,43 @@ export function ConnectLinkCard({
 							</div>
 						) : (
 							<>
-								<div className="flex items-center gap-1.5">
-									<Input
-										readOnly
-										aria-label="Connect link"
-										className="min-w-0 flex-1 font-mono text-[11px]"
-										value={qrText}
-										placeholder={starting ? "Creating link…" : ""}
-										onFocus={(event) => event.currentTarget.select()}
-									/>
-									<Button
-										size="xs"
-										disabled={activePairing === null || starting}
-										onClick={() => void copyLink()}
-									>
-										<Copy aria-hidden />
-										Copy
-									</Button>
+								<div className="space-y-2">
+									<div className="flex items-center gap-1.5">
+										<Input
+											readOnly
+											aria-label="Connect link"
+											className="min-w-0 flex-1 font-mono text-[11px]"
+											value={browserUrl}
+											placeholder={starting ? "Finding browser address…" : ""}
+											onFocus={(event) => event.currentTarget.select()}
+										/>
+										<Button
+											size="xs"
+											disabled={activePairing === null || starting}
+											onClick={() => void copyBrowserUrl()}
+										>
+											<Copy aria-hidden />
+											Copy link
+										</Button>
+									</div>
+									<div className="flex items-center gap-1.5">
+										<Input
+											readOnly
+											aria-label="Pairing code"
+											className="min-w-0 flex-1 font-mono text-sm tracking-wider"
+											value={pairingCode}
+											placeholder={starting ? "Creating code…" : ""}
+											onFocus={(event) => event.currentTarget.select()}
+										/>
+										<Button
+											size="xs"
+											disabled={activePairing === null || starting}
+											onClick={() => void copyCode()}
+										>
+											<Copy aria-hidden />
+											Copy code
+										</Button>
+									</div>
 								</div>
 								<div className="flex items-center justify-between gap-2">
 									<p

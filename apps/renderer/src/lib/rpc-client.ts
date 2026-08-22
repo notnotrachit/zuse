@@ -213,14 +213,27 @@ function resolveWebSocketUrl(): string {
 	return env?.VITE_ZUSE_WS_URL?.trim() || `${protocol}//${location.host}/rpc`;
 }
 
+const browserWebSocketOptions = () => ({
+	wsUrl: resolveWebSocketUrl(),
+	// Browser sessions authenticate the HTTP request with their cookie, then use
+	// a fresh, single-use ticket for every WebSocket attempt. Refreshing here also
+	// prevents reconnects from reusing a consumed ticket after the socket closes.
+	refreshWsUrl: requestBrowserWebSocketUrl,
+});
+
 export function resolveRendererRpcTransportForTest(): {
 	readonly kind: "electron" | "websocket";
 	readonly wsUrl?: string;
+	readonly refreshesWsUrl?: boolean;
 } {
 	const bridge = globalThis.window?.zuse ?? globalThis.window?.memoize;
-	return bridge
-		? { kind: "electron" }
-		: { kind: "websocket", wsUrl: resolveWebSocketUrl() };
+	if (bridge) return { kind: "electron" };
+	const options = browserWebSocketOptions();
+	return {
+		kind: "websocket",
+		wsUrl: options.wsUrl,
+		refreshesWsUrl: options.refreshWsUrl !== undefined,
+	};
 }
 
 const connectionOptions = (): RendererConnectionOptions => {
@@ -230,7 +243,7 @@ const connectionOptions = (): RendererConnectionOptions => {
 		: {
 				key: rendererConnectionKey(),
 				kind: "websocket",
-				wsUrl: resolveWebSocketUrl(),
+				...browserWebSocketOptions(),
 			};
 };
 
@@ -633,14 +646,8 @@ export const shouldRestartCloudWorkspaceConnection = (
 ): boolean => status === "error" || status === "blockedAuth";
 
 export const registerLocalEnvironment = (environmentId: string): void => {
-	const bridge = globalThis.window?.zuse ?? globalThis.window?.memoize;
-	if (bridge === undefined) return;
 	localEnvironmentId = environmentId;
-	environmentConnections.set(environmentId, {
-		key: `environment:${environmentId}`,
-		kind: "electron",
-		bridge: bridge.rpc,
-	});
+	environmentConnections.set(environmentId, connectionOptions());
 };
 
 export const setActiveEnvironment = (environmentId: string): void => {

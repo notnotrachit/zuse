@@ -65,6 +65,16 @@ describe("Tailnet environment pairing", () => {
 		});
 	});
 
+	it("parses the canonical browser pairing link", () => {
+		expect(
+			parseTailnetPairingLink("https://build.example.ts.net/#pair=zp_once"),
+		).toEqual({
+			code: "zp_once",
+			httpBaseUrl: "https://build.example.ts.net",
+			wsBaseUrl: "wss://build.example.ts.net/rpc",
+		});
+	});
+
 	it("parses secure links to hosts outside the tailnet", () => {
 		expect(
 			parseTailnetPairingLink(
@@ -77,12 +87,24 @@ describe("Tailnet environment pairing", () => {
 		});
 	});
 
+	it("parses plaintext links only on the private local network", () => {
+		expect(
+			parseTailnetPairingLink(
+				"zuse:///connect/pair?pairingUrl=ws%3A%2F%2F192.168.1.50%3A4859#token=ABCDEFGH",
+			),
+		).toEqual({
+			code: "ABCDEFGH",
+			httpBaseUrl: "http://192.168.1.50:4859",
+			wsBaseUrl: "ws://192.168.1.50:4859/rpc",
+		});
+	});
+
 	it("rejects insecure and incomplete links", () => {
 		expect(() =>
 			parseTailnetPairingLink(
-				"zuse:///connect/pair?pairingUrl=ws%3A%2F%2Fbuild.local%3A47837#token=zp_once",
+				"zuse:///connect/pair?pairingUrl=ws%3A%2F%2Fexample.com%3A47837#token=zp_once",
 			),
-		).toThrow(/secure wss/u);
+		).toThrow(/public connect links must use a secure wss/iu);
 		expect(() =>
 			parseTailnetPairingLink(
 				"zuse:///connect/pair?pairingUrl=wss%3A%2F%2Fbuild.example.ts.net%2Frpc",

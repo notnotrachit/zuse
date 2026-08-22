@@ -9,6 +9,8 @@ const link = (pairingUrl: string, withToken = true): string =>
 
 describe("describePairingLinkKind", () => {
 	it.each([
+		["https://build.example.ts.net/#pair=zp_once", "tailscale"],
+		["http://192.168.1.50:4859/#pair=zp_once", "lan"],
 		[link("wss://build.example.ts.net/rpc"), "tailscale"],
 		[link("wss://calm-otter.trycloudflare.com/rpc"), "relay"],
 		[link("wss://example.com/rpc"), "remote"],
@@ -20,6 +22,9 @@ describe("describePairingLinkKind", () => {
 			"tailscale",
 		],
 		[link("ws://build.example.ts.net/rpc"), "invalid"],
+		[link("ws://192.168.1.50:4859"), "lan"],
+		[link("ws://devbox.local:4859"), "lan"],
+		[link("ws://203.0.113.7:4859"), "invalid"],
 		[link("wss://user:pass@example.com/rpc"), "invalid"],
 		[link("wss://example.com/rpc", false), "invalid"],
 		["zuse:///connect/pair#token=zp_once", "invalid"],
