@@ -439,7 +439,7 @@ const appendReferences = (
 export const startCursorSession = (
 	input: StartSessionInput,
 	cwd: string,
-	apiKey: string,
+	apiKey: string | null,
 	sessionId: AgentSessionId,
 	resumeCursor: string | null = null,
 	initialMcpServers: ReadonlyArray<ResolvedMcpServer> = [],
@@ -456,7 +456,7 @@ export const startCursorSession = (
 		);
 		const selection = modelSelection(input.model);
 		const options: AgentOptions = {
-			apiKey,
+			...(apiKey === null ? {} : { apiKey }),
 			model: selection,
 			local: {
 				cwd,

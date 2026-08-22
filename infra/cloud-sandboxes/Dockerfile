@@ -34,20 +34,21 @@ RUN npm install --global \
 # These tarballs are built from this checkout. The current server/serve release
 # is intentionally not fetched from npm: the sandbox external-bind behavior
 # must ship atomically with the relay that depends on it.
-COPY artifacts/zusehq-server-0.1.2.tgz /tmp/zusehq-server.tgz
-COPY artifacts/zusehq-serve-0.1.3.tgz /tmp/zusehq-serve.tgz
+COPY artifacts/zusehq-server.tgz /tmp/zusehq-server.tgz
+COPY artifacts/zusehq-serve.tgz /tmp/zusehq-serve.tgz
 RUN npm install --global /tmp/zusehq-server.tgz \
 	&& mkdir -p /usr/local/lib/zuse-serve \
 	&& tar -xzf /tmp/zusehq-serve.tgz --strip-components=2 -C /usr/local/lib/zuse-serve package/dist \
+	&& ln -s /usr/local/lib/node_modules/@zusehq/server/node_modules /usr/local/lib/zuse-serve/node_modules \
 	&& ln -s /usr/local/lib/zuse-serve/bin.mjs /usr/local/bin/zuse \
 	&& chmod 0755 /usr/local/lib/zuse-serve/bin.mjs \
 	&& rm /tmp/zusehq-server.tgz /tmp/zusehq-serve.tgz \
 	&& npm cache clean --force
 
 RUN useradd --create-home --shell /bin/bash zuse \
-    && mkdir -p /home/zuse/.zuse-data /home/zuse/.ssh /var/cache/zuse/repositories \
+    && mkdir -p /home/zuse/.zuse-data /home/zuse/.ssh /home/repos \
     && chmod 700 /home/zuse/.ssh \
-    && chown -R zuse:zuse /home/zuse /var/cache/zuse
+    && chown -R zuse:zuse /home/zuse /home/repos
 
 # Single-connection sshd config used by the runtime's WebSocket SSH bridge
 # (`sshd -i`, spawned per connection as user zuse — no listening daemon).

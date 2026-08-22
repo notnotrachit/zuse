@@ -13,7 +13,8 @@ import { probeZuseLoopback, setTailnetShareEnabled } from "@zuse/tailnet";
 import { Effect } from "effect";
 
 import { SessionStoreLive } from "../auth/layers/session-store.ts";
-import { refreshSession, type SessionBundle } from "../auth/layers/workos.ts";
+import { refreshStoredSession } from "../auth/layers/stored-session-refresh.ts";
+import type { SessionBundle } from "../auth/layers/workos.ts";
 import { SessionStore } from "../auth/services/session-store.ts";
 import { runHeadlessServer, type ServeOptions } from "../bin.ts";
 import { SUPPORTED_PROVIDER_CLIS } from "../provider/provider-cli-registry.ts";
@@ -364,7 +365,7 @@ const clearServeSession = (): Promise<void> =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			const store = yield* SessionStore;
-			yield* store.clear();
+			yield* store.withLock(store.clear());
 		}).pipe(Effect.provide(SessionStoreLive)),
 	);
 
@@ -389,16 +390,18 @@ const unlinkServeRegistration = async (
 		);
 	}
 	if (session.expiresAt - Date.now() <= 60_000) {
+		const seed = session;
 		const refreshed = await Effect.runPromise(
-			refreshSession(workosClientId(env), session.refreshToken),
-		);
-		session = refreshed;
-		await Effect.runPromise(
 			Effect.gen(function* () {
 				const store = yield* SessionStore;
-				yield* store.write(refreshed);
+				return yield* refreshStoredSession(store, {
+					clientId: workosClientId(env),
+					seed,
+					refreshSkewMs: 60_000,
+				});
 			}).pipe(Effect.provide(SessionStoreLive)),
 		);
+		session = refreshed;
 	}
 	const response = await fetch(
 		`${relay.relayUrl}/v1/client/environment-unlink`,

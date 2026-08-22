@@ -144,7 +144,6 @@ import {
 	startDeepEnergyProfile,
 } from "./deep-energy-profiler.ts";
 import { createBufferedChannel, isPairingDeepLink } from "./deep-link.ts";
-import { listLocalServers } from "./host/local-port-inspector.ts";
 import {
 	executableOnPath,
 	listPortableOpenTargets,
@@ -193,6 +192,7 @@ import {
 	SYNC_MARKER_FILE,
 } from "./sync/cloud-sync-service.ts";
 import { TailnetEnvironmentManager } from "./tailnet/environment-service.ts";
+import { PortForwardManager } from "./tunnels/port-forward-service.ts";
 import {
 	getIsInstallingUpdate,
 	getLastStatus,
@@ -630,6 +630,7 @@ const cloudSyncManager = new CloudSyncManager((status) => {
 	mainWindow?.webContents.send("cloudSync:status", status);
 });
 let sshEnvironmentManager: SshEnvironmentManager | null = null;
+const portForwardManager = new PortForwardManager();
 let tailnetEnvironmentManager: TailnetEnvironmentManager | null = null;
 let runtimeFiber: Fiber.Fiber<void, never> | null = null;
 let notchTray: NotchTrayController | null = null;
@@ -1968,6 +1969,11 @@ async function createMainWindow() {
 		shell.showItemInFolder(rawPath);
 	});
 
+	ipcMain.handle("app:copyText", async (_event, rawText: unknown) => {
+		if (typeof rawText !== "string" || rawText.length > 1_048_576) return;
+		clipboard.writeText(rawText);
+	});
+
 	ipcMain.handle("app:copyPath", async (_event, rawPath: unknown) => {
 		if (typeof rawPath !== "string") return;
 		if (!(await pathExists(rawPath))) return;
@@ -2272,11 +2278,13 @@ async function createMainWindow() {
 		"ssh:disconnectEnvironment",
 		async (_event, profileId: unknown) => {
 			if (typeof profileId !== "string") return;
+			await closeSshProfileForwards(profileId);
 			await sshEnvironmentManager?.disconnect(profileId);
 		},
 	);
 	ipcMain.handle("ssh:removeProfile", async (_event, profileId: unknown) => {
 		if (typeof profileId !== "string") return;
+		await closeSshProfileForwards(profileId);
 		await sshEnvironmentManager?.remove(profileId);
 	});
 	ipcMain.handle(
@@ -2290,6 +2298,55 @@ async function createMainWindow() {
 			}
 			return sshEnvironmentManager.updateLabel(profileId, label);
 		},
+	);
+	ipcMain.handle("tunnels:open", async (_event, input: unknown) => {
+		if (typeof input !== "object" || input === null) {
+			throw new Error("Invalid port forward request.");
+		}
+		const { environmentId, remotePort, cloudWorkspaceId } = input as {
+			environmentId?: unknown;
+			remotePort?: unknown;
+			cloudWorkspaceId?: unknown;
+		};
+		if (
+			typeof environmentId !== "string" ||
+			typeof remotePort !== "number" ||
+			!Number.isInteger(remotePort) ||
+			remotePort <= 0 ||
+			remotePort > 65_535
+		) {
+			throw new Error("Invalid port forward request.");
+		}
+		if (typeof cloudWorkspaceId === "string") {
+			return portForwardManager.open({
+				environmentId,
+				target: { kind: "cloud", workspaceId: cloudWorkspaceId },
+				remotePort,
+			});
+		}
+		const target = sshEnvironmentManager?.resolvedTargetFor(environmentId);
+		if (target === null || target === undefined) {
+			throw new Error("The SSH environment is not connected.");
+		}
+		return portForwardManager.open({
+			environmentId,
+			target: { kind: "ssh", target },
+			remotePort,
+		});
+	});
+	ipcMain.handle(
+		"tunnels:close",
+		async (_event, environmentId: unknown, remotePort: unknown) => {
+			if (typeof environmentId !== "string" || typeof remotePort !== "number") {
+				return;
+			}
+			await portForwardManager.close(environmentId, remotePort);
+		},
+	);
+	ipcMain.handle("tunnels:list", async (_event, environmentId: unknown) =>
+		portForwardManager.list(
+			typeof environmentId === "string" ? environmentId : undefined,
+		),
 	);
 	ipcMain.handle("tailnet:listProfiles", async () =>
 		tailnetEnvironmentManager?.listProfiles(),
@@ -2884,14 +2941,6 @@ async function createMainWindow() {
 			}
 		},
 	);
-
-	ipcMain.handle("browser:listLocalServers", async () => {
-		try {
-			return (await listLocalServers()).slice(0, 50);
-		} catch {
-			return [];
-		}
-	});
 
 	ipcMain.handle(
 		"browser:saveRecording",
@@ -3772,6 +3821,16 @@ function pluralAgents(count: number): string {
 	return count === 1 ? "1 agent is running" : `${count} agents are running`;
 }
 
+/** Close the local port forwards owned by a saved SSH profile's environment. */
+const closeSshProfileForwards = async (profileId: string): Promise<void> => {
+	const environmentId = sshEnvironmentManager
+		?.listProfiles()
+		.find((profile) => profile.profileId === profileId)?.environmentId;
+	if (environmentId !== undefined) {
+		await portForwardManager.closeForEnvironment(environmentId);
+	}
+};
+
 const finishQuitAfterSshCleanup = (event: {
 	preventDefault: () => void;
 }): void => {
@@ -3780,7 +3839,10 @@ const finishQuitAfterSshCleanup = (event: {
 	if (sshQuitCleanupInProgress) return;
 	sshQuitCleanupInProgress = true;
 	const manager = sshEnvironmentManager;
-	void (manager?.close() ?? Promise.resolve()).finally(() => {
+	void Promise.allSettled([
+		portForwardManager.closeAll(),
+		manager?.close() ?? Promise.resolve(),
+	]).finally(() => {
 		if (sshEnvironmentManager === manager) sshEnvironmentManager = null;
 		sshQuitCleanupComplete = true;
 		quitConfirmed = true;

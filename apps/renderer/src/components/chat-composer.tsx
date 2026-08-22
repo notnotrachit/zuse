@@ -109,6 +109,7 @@ import { parseComposerInput } from "../composer/segment-parser.ts";
 import { uploadAttachment } from "../lib/attachments.ts";
 import {
 	cloudChatShowsWorking,
+	cloudWorkspaceIsStarting,
 	deriveCloudChatActivity,
 } from "../lib/cloud-chat-activity.ts";
 import { useCloudChatSummaryForSession } from "../lib/cloud-workspaces.ts";
@@ -130,6 +131,7 @@ import {
 	setSessionGoal,
 	useSessionGoalResource,
 } from "../lib/session-goal-client-bus.ts";
+import { hasPendingTurnStart } from "../lib/session-runtime-state.ts";
 import { useRendererSessionTimeline } from "../lib/session-timeline-hooks.ts";
 import { useActiveWorkspaceRoot } from "../store/active-workspace.ts";
 import {
@@ -282,6 +284,7 @@ export function ChatComposer({
 					connection: cloudShell.connection,
 					runtime: runtimeState,
 				});
+	const turnStartPending = hasPendingTurnStart(timeline.view.pendingCommands);
 	const interrupting =
 		cloudActivity === null
 			? runtimeState === "stopping"
@@ -290,8 +293,9 @@ export function ChatComposer({
 		cloudActivity === null
 			? runtimeState === "running" ||
 				runtimeState === "stopping" ||
-				(isCloudSession && runtimeState === "starting")
-			: cloudChatShowsWorking(cloudActivity);
+				(isCloudSession && runtimeState === "starting") ||
+				turnStartPending
+			: cloudChatShowsWorking(cloudActivity) || turnStartPending;
 	const showActiveTimer =
 		cloudActivity === null
 			? inFlight
@@ -352,8 +356,12 @@ export function ChatComposer({
 	// composer, so put the decision there. Permissions outrank questions
 	// because the agent is already mid-tool-call.
 	const requestsById =
-		useEnvironmentPermissions().data?.requestsById ?? EMPTY_PERMISSION_REQUESTS;
-	const decidePermission = decideEnvironmentPermission;
+		useEnvironmentPermissions(qualifiedEnvironmentId).data?.requestsById ??
+		EMPTY_PERMISSION_REQUESTS;
+	const decidePermission = (
+		requestId: string,
+		decision: Parameters<typeof decideEnvironmentPermission>[1],
+	) => decideEnvironmentPermission(requestId, decision, qualifiedEnvironmentId);
 	const pendingPermissions = useMemo(() => {
 		const out: PermissionRequest[] = [];
 		for (const req of Object.values(requestsById)) {
@@ -1213,6 +1221,7 @@ export function ChatComposer({
 							<PermissionCard
 								head={headPermission}
 								queueSize={pendingPermissions.length}
+								environmentId={qualifiedEnvironmentId}
 							/>
 						) : pendingQuestion !== null ? (
 							<QuestionCard
@@ -1297,6 +1306,10 @@ export function ChatComposer({
 								<QueueTray
 									environmentId={qualifiedEnvironmentId}
 									sessionId={sessionId}
+									waitingForSandbox={
+										cloudSummary !== null &&
+										cloudWorkspaceIsStarting(cloudSummary)
+									}
 								/>
 							</div>
 						) : null}

@@ -64,6 +64,7 @@ export interface AppBridge {
 	) => Promise<ReadonlyArray<OpenTarget>>;
 	readonly openPathInApp?: (path: string, appId: string) => Promise<void>;
 	readonly revealPath?: (path: string) => Promise<void>;
+	readonly copyText?: (text: string) => Promise<void>;
 	readonly copyPath?: (path: string) => Promise<void>;
 	readonly copyFileContents?: (path: string) => Promise<boolean>;
 	/** Stages SSH key material, managed ssh config, and a workspace ticket. */
@@ -300,11 +301,6 @@ export interface BrowserCookieImportStatus {
 	readonly message?: string;
 }
 
-export interface LocalServerSummary {
-	readonly name: string;
-	readonly port: number;
-}
-
 export interface BrowserBridge {
 	/**
 	 * Attach Chrome DevTools Protocol to the embedded webview's webContents so
@@ -349,7 +345,6 @@ export interface BrowserBridge {
 	readonly getDialogState?: (
 		webContentsId: number,
 	) => Promise<BrowserDialogState | null>;
-	readonly listLocalServers?: () => Promise<ReadonlyArray<LocalServerSummary>>;
 	readonly saveRecording?: (
 		bytes: Uint8Array,
 		mimeType: string,
@@ -390,6 +385,24 @@ export interface SshBridge {
 		profileId: string,
 		label: string,
 	) => Promise<RemoteEnvironmentProfile>;
+}
+
+export interface PortForwardSummary {
+	readonly environmentId: string;
+	readonly remotePort: number;
+	readonly localPort: number;
+}
+
+export interface TunnelsBridge {
+	readonly open: (input: {
+		readonly environmentId: string;
+		readonly remotePort: number;
+		readonly cloudWorkspaceId?: string;
+	}) => Promise<PortForwardSummary>;
+	readonly close: (environmentId: string, remotePort: number) => Promise<void>;
+	readonly list: (
+		environmentId?: string,
+	) => Promise<ReadonlyArray<PortForwardSummary>>;
 }
 
 export interface TailnetBridge {
@@ -466,6 +479,8 @@ export interface ZuseBridge {
 	readonly browser?: BrowserBridge;
 	readonly notch?: NotchBridge;
 	readonly ssh?: SshBridge;
+	/** Absent on preload builds that predate remote port forwarding. */
+	readonly tunnels?: TunnelsBridge;
 	readonly tailnet?: TailnetBridge;
 }
 
@@ -489,3 +504,6 @@ export function getBridge(): ZuseBridge {
 
 export const getAppBridge = (): AppBridge | undefined =>
 	(globalThis.window?.zuse ?? globalThis.window?.memoize)?.app;
+
+export const getTunnelsBridge = (): TunnelsBridge | undefined =>
+	(globalThis.window?.zuse ?? globalThis.window?.memoize)?.tunnels;

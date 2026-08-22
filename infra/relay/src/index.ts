@@ -7,8 +7,10 @@ import { maintainCloudBilling } from "./cloud-billing-outbox.ts";
 import { CloudBillingStore } from "./cloud-billing-store.ts";
 import {
 	reconcileCloudBuild,
+	reconcileCloudPool,
 	reconcileCloudResources,
 	reconcileCloudWorkspace,
+	reconcileCloudWorkspaceStartup,
 } from "./cloud-workspace-reconciler.ts";
 import { handleRequest, type RelayContext } from "./handler.ts";
 import { reconcileMachine, reconcileMachines } from "./machine-reconciler.ts";
@@ -21,7 +23,6 @@ export * from "./cloud-billing-outbox.ts";
 export * from "./cloud-billing-provider.ts";
 export * from "./cloud-billing-store.ts";
 export * from "./cloud-billing-store-memory.ts";
-export * from "./cloud-credential-vault.ts";
 export * from "./cloud-workspace-launch-intent.ts";
 export * from "./cloud-workspace-store.ts";
 export * from "./config.ts";
@@ -62,7 +63,11 @@ export const makeRelay = (
 		readonly workspaces: number;
 	}>;
 	readonly reconcileCloudBuild: (buildId: string) => Promise<void>;
+	readonly reconcileCloudPool: (accountId: string) => Promise<void>;
 	readonly reconcileCloudWorkspace: (workspaceId: string) => Promise<void>;
+	readonly reconcileCloudWorkspaceStartup: (
+		workspaceId: string,
+	) => Promise<void>;
 	readonly maintainCloudBilling: (nowMs: number) => Promise<{
 		readonly exported: number;
 		readonly meterReconciled: number;
@@ -87,8 +92,12 @@ export const makeRelay = (
 		reconcileCloud: () => runtime.runPromise(reconcileCloudResources()),
 		reconcileCloudBuild: (buildId) =>
 			runtime.runPromise(reconcileCloudBuild(buildId)),
+		reconcileCloudPool: (accountId) =>
+			runtime.runPromise(reconcileCloudPool(accountId)),
 		reconcileCloudWorkspace: (workspaceId) =>
 			runtime.runPromise(reconcileCloudWorkspace(workspaceId)),
+		reconcileCloudWorkspaceStartup: (workspaceId) =>
+			runtime.runPromise(reconcileCloudWorkspaceStartup(workspaceId)),
 		maintainCloudBilling: (nowMs) =>
 			runtime.runPromise(maintainCloudBilling(nowMs)),
 		hasFinalizedE2bBillingEvent: (eventId, providerExecutionId) =>

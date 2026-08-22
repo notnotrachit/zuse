@@ -27,11 +27,11 @@ export interface ProviderCredentialInput {
  * protected by one cached OS-keychain master key; individual credentials never
  * become Keychain entries. Used by SDK adapters without surfacing keys to the
  * renderer.
- * API keys are set via `agent.setCredential`; the cloud account-access flow can
- * store a sealed Claude OAuth token through the server-side typed methods.
+ * API keys and newly issued machine-purpose tokens are set through typed
+ * target-machine RPCs and never returned to the renderer.
  * Secrets are never returned over the wire — only `listConfigured()` is
  * renderer-visible, surfaced as `hasApiKey` on `AgentAvailability`. Native CLI
- * login stores for GitHub and Codex remain outside this service.
+ * login stores created on this machine remain outside this service.
  */
 export interface CredentialsServiceShape {
 	readonly getProviderCredential: (

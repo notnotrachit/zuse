@@ -29,8 +29,6 @@ import {
 	BetaAccessAllowAll,
 	BetaAccessDenied,
 	CloudBillingStoreMemory,
-	CloudCredentialVault,
-	CloudCredentialVaultLive,
 	CloudWorkspaceLaunchIntentCipher,
 	CloudWorkspaceLaunchIntentCipherLive,
 	CloudWorkspaceStoreMemory,
@@ -151,7 +149,7 @@ const makeLayer = async (
 			JSON.stringify(await exportJWK(mintKey.privateKey)),
 		),
 		mintPublicKey: JSON.stringify(await exportJWK(mintKey.publicKey)),
-		cloudCredentialVaultKey: Redacted.make(
+		cloudDataEncryptionKey: Redacted.make(
 			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		),
 		managedTunnel,
@@ -184,10 +182,6 @@ const makeLayer = async (
 		MachineStoreMemory,
 		CloudWorkspaceStoreMemory,
 		CloudBillingStoreMemory,
-		Layer.effect(CloudCredentialVault, CloudCredentialVaultLive).pipe(
-			Layer.provide(configLayer),
-			Layer.orDie,
-		),
 		Layer.effect(
 			CloudWorkspaceLaunchIntentCipher,
 			CloudWorkspaceLaunchIntentCipherLive,
@@ -345,6 +339,28 @@ beforeEach(async () => {
 });
 
 describe("@zuse/relay", () => {
+	test("serves the GitHub App callback without a WorkOS bearer", async () => {
+		const response = await relay.fetch(
+			new Request(
+				`${RELAY_ISSUER}/v1/cloud/github/callback?installation_id=123`,
+			),
+		);
+
+		expect(response.status).toBe(400);
+		expect(response.headers.get("content-type")).toContain("text/html");
+		expect(await response.text()).toContain("Installation not linked");
+
+		const invalidState = await relay.fetch(
+			new Request(
+				`${RELAY_ISSUER}/v1/cloud/github/callback?installation_id=123&state=invalid`,
+			),
+		);
+		expect(invalidState.status).toBe(400);
+		expect(await invalidState.text()).toContain(
+			"GitHub could not be connected",
+		);
+	});
+
 	test("gates hosted operations without blocking local links or resource cleanup", async () => {
 		const gatedRelay = makeRelay(
 			await makeLayer(
@@ -378,17 +394,6 @@ describe("@zuse/relay", () => {
 		);
 		expect(resume.status).toBe(403);
 
-		const portal = await gatedRelay.fetch(
-			new Request(`${RELAY_ISSUER}${RelayPaths.billingPortal}`, {
-				method: "POST",
-				headers,
-			}),
-		);
-		expect(portal.status).toBe(503);
-		expect(await portal.json()).toEqual({
-			error: "billing_provider_unavailable",
-		});
-
 		for (const action of ["pause", "archive", "delete"] as const) {
 			const cleanup = await gatedRelay.fetch(
 				new Request(`${RELAY_ISSUER}/v1/cloud/workspaces/missing/${action}`, {
@@ -401,22 +406,6 @@ describe("@zuse/relay", () => {
 				error: "cloud_workspace_not_found",
 			});
 		}
-
-		const cancel = await gatedRelay.fetch(
-			new Request(`${RELAY_ISSUER}/v1/machines/missing/cancel`, {
-				method: "POST",
-				headers,
-			}),
-		);
-		expect(cancel.status).toBe(404);
-		const destroy = await gatedRelay.fetch(
-			new Request(`${RELAY_ISSUER}/v1/machines/missing/destroy`, {
-				method: "POST",
-				headers: { ...headers, "content-type": "application/json" },
-				body: JSON.stringify({ machineId: "missing", confirmation: "destroy" }),
-			}),
-		);
-		expect(destroy.status).toBe(404);
 
 		const local = await gatedRelay.fetch(
 			new Request(`${RELAY_ISSUER}/v1/client/environment-link-challenges`, {
@@ -665,79 +654,6 @@ describe("@zuse/relay", () => {
 			expect(checkoutLookups).toHaveLength(1);
 			expect(placeholderPage).toContain("Persistent Standard");
 			expect(placeholderPage).toContain("Awaiting confirmation");
-		} finally {
-			await billingRelay.dispose();
-		}
-	});
-
-	test("claims a checkout-link subscription by verified WorkOS email", async () => {
-		verifiedIdentityEmail = "buyer@example.com";
-		const grantedAccounts: string[] = [];
-		const billing: BillingProviderAdapter = {
-			providerId: "billing-test",
-			checkout: () => Effect.die("unused"),
-			getCheckout: () => Effect.succeed(null),
-			verifyEvent: () => Effect.die("unused"),
-			claimSubscriptions: ({ accountId, verifiedEmail }) => {
-				expect({ accountId, verifiedEmail }).toEqual({
-					accountId: "user_a",
-					verifiedEmail: "buyer@example.com",
-				});
-				return Effect.succeed(["subscription_link"]);
-			},
-			reconcileSubscription: () =>
-				Effect.succeed({
-					accountId: "user_a",
-					providerSubscriptionId: "subscription_link",
-					status: "active",
-					offerId: "cloud-workspace-standard-v1",
-					periodStart: Date.parse("2026-08-01T00:00:00.000Z"),
-					paidThrough: Date.parse("2026-09-01T00:00:00.000Z"),
-				}),
-			cancel: () => Effect.void,
-			customerPortal: () => Effect.die("unused"),
-		};
-		const billingRelay = makeRelay(
-			await makeLayer(
-				undefined,
-				BillingProviders.layer({
-					adapters: [billing],
-					defaultProviderId: billing.providerId,
-				}).pipe(Layer.orDie),
-				false,
-				{},
-				SandboxProvidersFake,
-				Layer.succeed(
-					BetaAccess,
-					BetaAccess.of({
-						check: () => Effect.fail(new BetaAccessDenied()),
-						grant: (accountId) =>
-							Effect.sync(() => {
-								grantedAccounts.push(accountId);
-							}),
-					}),
-				),
-			),
-		);
-
-		try {
-			const response = await billingRelay.fetch(
-				new Request(`${RELAY_ISSUER}${RelayPaths.billingEntitlements}`, {
-					headers: { authorization: "Bearer test-token:user_a" },
-				}),
-			);
-
-			expect(response.status).toBe(200);
-			expect(await response.json()).toMatchObject({
-				entitlements: [
-					{
-						kind: "cloud-workspace",
-						offerId: "cloud-workspace-standard-v1",
-						status: "active",
-					},
-				],
-			});
-			expect(grantedAccounts).toEqual(["user_a"]);
 		} finally {
 			await billingRelay.dispose();
 		}

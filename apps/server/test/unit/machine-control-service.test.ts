@@ -43,6 +43,12 @@ describe("machine control relay URL", () => {
 		).toBe("branch-in-use");
 	});
 
+	it("classifies rejected credentials as auth faults, not generic failures", () => {
+		expect(mapRelayErrorCode(401, undefined).code).toBe("not-allowed");
+		expect(mapRelayErrorCode(403, undefined).code).toBe("not-allowed");
+		expect(mapRelayErrorCode(400, undefined).code).toBe("invalid-request");
+	});
+
 	it("preserves private-beta access failures", () => {
 		expect(mapRelayErrorCode(403, "cloud_beta_access_required").code).toBe(
 			"beta-access-required",

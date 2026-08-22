@@ -2,8 +2,8 @@ import { Effect, Redacted } from "effect";
 import { describe, expect, test } from "vitest";
 
 import {
-	cloudTranscriptObjectKey,
 	cloudTranscriptMessagePageObjectKey,
+	cloudTranscriptObjectKey,
 	createCloudTranscriptKey,
 	openCloudTranscriptKey,
 	putCloudTranscriptObject,
@@ -17,7 +17,7 @@ const makeLayer = (objects: Config.CloudTranscriptObjectStore) =>
 		workosIssuer: "https://unused.test",
 		mintPrivateKey: Redacted.make("{}"),
 		mintPublicKey: "{}",
-		cloudCredentialVaultKey: Redacted.make(
+		cloudDataEncryptionKey: Redacted.make(
 			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		),
 		cloudTranscriptObjects: objects,

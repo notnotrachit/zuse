@@ -1591,6 +1591,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 						desiredState: workspace.desiredState,
 						runtimeState: workspace.runtimeState,
 						statusCode: workspace.statusCode,
+						failureDiagnostic: workspace.failureDiagnostic,
 						startupPhase: workspace.startupPhase,
 						revision: workspace.revision,
 						updatedAt: workspace.updatedAt,

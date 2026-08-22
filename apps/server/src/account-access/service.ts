@@ -1,119 +1,35 @@
 import { execFile, spawn } from "node:child_process";
-import {
-	chmod,
-	lstat,
-	mkdir,
-	readFile,
-	rm,
-	stat,
-	writeFile,
-} from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+
 import { scrubInheritedClaudeMarkers } from "@zuse/agents/drivers/claude-env";
 import type {
-	AccountAccessClaudeTransferContinuation,
-	AccountAccessCreateClaudeTransferRequest,
-	AccountAccessImportRequest,
-	AccountAccessPreparedImport,
+	AccountAccessCustomConfigRequest,
 	AccountAccessProvider,
+	AccountAccessSetCredentialRequest,
 	AccountAccessTransferEvent,
 } from "@zuse/contracts";
 import {
 	AccountAccessProviderStatus,
 	AccountAccessStatus,
-	LocalAccountDescriptor,
-	LocalAccountDescriptorList,
-	RelayEnvironmentList,
-	RelayPaths,
 } from "@zuse/contracts";
-import {
-	Cause,
-	Context,
-	Effect,
-	Layer,
-	Option,
-	Queue,
-	Ref,
-	Schema,
-	Stream,
-} from "effect";
-import * as pty from "node-pty";
+import { Cause, Context, Effect, Layer, Queue, Stream } from "effect";
 
 import { AppPaths } from "../app-paths.ts";
-import { AuthService } from "../auth/services/auth-service.ts";
-import { LanAuthService } from "../lan-auth/services/lan-auth-service.ts";
-import { resolveMachineRelayUrl } from "../machine/machine-control-service.ts";
 import { MachineRuntimeRole } from "../machine/machine-runtime-role.ts";
 import { CredentialsService } from "../provider/services/credentials-service.ts";
-import { ensureNodePtySpawnHelperExecutable } from "../pty/node-pty-helper.ts";
 import {
-	extractClaudeSetupToken,
 	getAccountAccessLoginCommand,
-	parseClaudeSetupFailure,
-	parseClaudeSetupVerification,
 	parseDeviceLoginVerification,
 	redactAccountAccessOutput,
 } from "./adapters.ts";
 import { AccountAccessServiceError } from "./errors.ts";
-import { InteractiveProcessRegistry } from "./interactive-process-registry.ts";
-import {
-	openCredentialTransfer,
-	type PreparedCredentialTransfer,
-	prepareCredentialTransfer,
-	publicPreparedImport,
-	sealCredentialTransfer,
-	signPreparedImport,
-	verifyPreparedImport,
-} from "./sealed-transfer.ts";
 
 const execFileAsync = promisify(execFile);
-const TRANSFER_TTL_MS = 5 * 60 * 1_000;
-const MAX_NATIVE_CREDENTIAL_BYTES = 32_768;
-
-const validateNativeCredential = (
-	providerId: "claude" | "codex",
-	secret: string,
-): string => {
-	if (
-		secret.trim().length < 8 ||
-		Buffer.byteLength(secret, "utf8") > MAX_NATIVE_CREDENTIAL_BYTES
-	)
-		throw new AccountAccessServiceError("credential-export-failed");
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(secret);
-	} catch {
-		throw new AccountAccessServiceError("credential-export-failed");
-	}
-	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
-		throw new AccountAccessServiceError("credential-export-failed");
-	const record = parsed as Record<string, unknown>;
-	const recognized =
-		providerId === "claude"
-			? record.claudeAiOauth !== undefined
-			: record.tokens !== undefined || record.OPENAI_API_KEY !== undefined;
-	if (!recognized)
-		throw new AccountAccessServiceError("credential-export-failed");
-	return secret;
-};
-
-const readNativeCredentialFile = async (
-	providerId: "claude" | "codex",
-	path: string,
-): Promise<string> => {
-	const metadata = await lstat(path);
-	const ownedByCurrentUser =
-		typeof process.getuid !== "function" || metadata.uid === process.getuid();
-	if (
-		!metadata.isFile() ||
-		!ownedByCurrentUser ||
-		(metadata.mode & 0o077) !== 0
-	)
-		throw new AccountAccessServiceError("credential-export-failed");
-	return validateNativeCredential(providerId, await readFile(path, "utf8"));
-};
+const MAX_SECRET_BYTES = 32_768;
+const PROVIDERS = ["claude", "codex", "cursor", "grok"] as const;
 
 export type AccountAccessProcessEvent =
 	| { readonly _tag: "line"; readonly text: string }
@@ -123,6 +39,7 @@ export interface AccountAccessProcessShape {
 	readonly capture: (
 		command: string,
 		args: ReadonlyArray<string>,
+		environment?: Readonly<Record<string, string>>,
 	) => Effect.Effect<
 		{ readonly stdout: string; readonly stderr: string; readonly code: number },
 		AccountAccessServiceError
@@ -131,15 +48,12 @@ export interface AccountAccessProcessShape {
 		command: string,
 		args: ReadonlyArray<string>,
 		environment?: Readonly<Record<string, string>>,
-		sessionId?: string,
 	) => Stream.Stream<AccountAccessProcessEvent, AccountAccessServiceError>;
-	readonly write: (
-		sessionId: string,
+	readonly input: (
+		command: string,
+		args: ReadonlyArray<string>,
 		input: string,
-	) => Effect.Effect<void, AccountAccessServiceError>;
-	readonly cancel: (
-		sessionId: string,
-	) => Effect.Effect<void, AccountAccessServiceError>;
+	) => Effect.Effect<number, AccountAccessServiceError>;
 }
 
 export class AccountAccessProcess extends Context.Service<
@@ -147,13 +61,17 @@ export class AccountAccessProcess extends Context.Service<
 	AccountAccessProcessShape
 >()("zuse/AccountAccessProcess") {}
 
-const captureProcess: AccountAccessProcessShape["capture"] = (command, args) =>
+const captureProcess: AccountAccessProcessShape["capture"] = (
+	command,
+	args,
+	environment,
+) =>
 	Effect.tryPromise({
 		try: async () => {
 			try {
 				const result = await execFileAsync(command, [...args], {
 					cwd: homedir(),
-					env: process.env,
+					env: processEnvironment(environment),
 					timeout: 30_000,
 					maxBuffer: 256 * 1_024,
 				});
@@ -179,142 +97,71 @@ const captureProcess: AccountAccessProcessShape["capture"] = (command, args) =>
 
 const processEnvironment = (
 	overrides: Readonly<Record<string, string>> | undefined,
-): Record<string, string> => ({
-	...Object.fromEntries(
-		Object.entries(scrubInheritedClaudeMarkers(process.env)).filter(
-			(entry): entry is [string, string] => entry[1] !== undefined,
-		),
-	),
+): NodeJS.ProcessEnv => ({
+	...scrubInheritedClaudeMarkers(process.env),
 	...overrides,
 });
-
-const interactiveProcesses = new InteractiveProcessRegistry<pty.IPty>();
-const CLAUDE_CODE_EXCHANGE_TIMEOUT_MS = 90_000;
-// Claude renders the long-lived token through a terminal UI. Keep the PTY
-// wider than any supported token so the terminal does not insert soft wraps;
-// the parser still accepts wrapped output for compatibility and safety.
-const CLAUDE_SETUP_TOKEN_PTY_COLUMNS = 4_096;
-
-export const accountAccessEventFromPtyChunk = (
-	chunk: string,
-): AccountAccessProcessEvent | null =>
-	chunk.length === 0 ? null : { _tag: "line", text: chunk };
-
-const streamPtyProcess: AccountAccessProcessShape["stream"] = (
-	command,
-	args,
-	environment,
-	sessionId,
-) =>
-	Stream.callback<AccountAccessProcessEvent, AccountAccessServiceError>(
-		(queue) =>
-			Effect.gen(function* () {
-				if (sessionId === undefined || interactiveProcesses.get(sessionId)) {
-					return yield* Effect.fail(
-						new AccountAccessServiceError("login-failed"),
-					);
-				}
-				ensureNodePtySpawnHelperExecutable();
-				const child = pty.spawn(command, [...args], {
-					name: "xterm-256color",
-					cols: CLAUDE_SETUP_TOKEN_PTY_COLUMNS,
-					rows: 24,
-					cwd: homedir(),
-					env: processEnvironment(environment),
-				});
-				interactiveProcesses.replace(sessionId, child);
-				const data = child.onData((chunk) => {
-					const event = accountAccessEventFromPtyChunk(chunk);
-					if (event !== null) Queue.offerUnsafe(queue, event);
-				});
-				const exit = child.onExit(({ exitCode }) => {
-					interactiveProcesses.release(sessionId, child);
-					Queue.offerUnsafe(queue, { _tag: "exit", code: exitCode });
-					Queue.endUnsafe(queue);
-				});
-				yield* Effect.addFinalizer(() =>
-					Effect.sync(() => {
-						data.dispose();
-						exit.dispose();
-						interactiveProcesses.release(sessionId, child);
-						try {
-							child.kill();
-						} catch {
-							// The PTY may already have exited.
-						}
-					}),
-				);
-			}),
-	);
 
 const streamProcess: AccountAccessProcessShape["stream"] = (
 	command,
 	args,
 	environment,
-	sessionId,
 ) =>
-	command === "claude" && args[0] === "setup-token"
-		? streamPtyProcess(command, args, environment, sessionId)
-		: Stream.callback<AccountAccessProcessEvent, AccountAccessServiceError>(
-				(queue) =>
-					Effect.gen(function* () {
-						const child = spawn(command, [...args], {
-							cwd: homedir(),
-							env: processEnvironment(environment),
-							stdio: ["ignore", "pipe", "pipe"],
-						});
-						let completed = false;
-						const emit = (chunk: Buffer | string): void => {
-							for (const text of chunk.toString().split(/\r?\n/u)) {
-								if (text.trim().length > 0) {
-									Queue.offerUnsafe(queue, { _tag: "line", text });
-								}
-							}
-						};
-						child.stdout.on("data", emit);
-						child.stderr.on("data", emit);
-						child.once("error", () => {
-							completed = true;
-							Queue.failCauseUnsafe(
-								queue,
-								Cause.fail(new AccountAccessServiceError("tool-not-installed")),
-							);
-						});
-						child.once("exit", (code) => {
-							completed = true;
-							Queue.offerUnsafe(queue, { _tag: "exit", code: code ?? 1 });
-							Queue.endUnsafe(queue);
-						});
-						yield* Effect.addFinalizer(() =>
-							Effect.sync(() => {
-								if (!completed) child.kill("SIGTERM");
-							}),
-						);
+	Stream.callback<AccountAccessProcessEvent, AccountAccessServiceError>(
+		(queue) =>
+			Effect.gen(function* () {
+				const child = spawn(command, [...args], {
+					cwd: homedir(),
+					env: processEnvironment(environment),
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+				let completed = false;
+				const emit = (chunk: Buffer | string): void => {
+					for (const text of chunk.toString().split(/\r?\n/u)) {
+						if (text.trim().length > 0) {
+							Queue.offerUnsafe(queue, { _tag: "line", text });
+						}
+					}
+				};
+				child.stdout.on("data", emit);
+				child.stderr.on("data", emit);
+				child.once("error", () => {
+					completed = true;
+					Queue.failCauseUnsafe(
+						queue,
+						Cause.fail(new AccountAccessServiceError("tool-not-installed")),
+					);
+				});
+				child.once("exit", (code) => {
+					completed = true;
+					Queue.offerUnsafe(queue, { _tag: "exit", code: code ?? 1 });
+					Queue.endUnsafe(queue);
+				});
+				yield* Effect.addFinalizer(() =>
+					Effect.sync(() => {
+						if (!completed) child.kill("SIGTERM");
 					}),
-			);
+				);
+			}),
+	);
 
-const writeProcess: AccountAccessProcessShape["write"] = (sessionId, input) =>
-	Effect.try({
-		try: () => {
-			const child = interactiveProcesses.get(sessionId);
-			if (child === undefined) throw new Error("session_not_found");
-			child.write(input);
-			interactiveProcesses.armTimeout(
-				sessionId,
-				CLAUDE_CODE_EXCHANGE_TIMEOUT_MS,
-			);
-		},
-		catch: () => new AccountAccessServiceError("login-failed"),
-	});
-
-const cancelProcess: AccountAccessProcessShape["cancel"] = (sessionId) =>
-	Effect.try({
-		try: () => {
-			const child = interactiveProcesses.get(sessionId);
-			if (child === undefined) throw new Error("session_not_found");
-			interactiveProcesses.cancel(sessionId, child);
-		},
-		catch: () => new AccountAccessServiceError("login-failed"),
+const inputProcess: AccountAccessProcessShape["input"] = (
+	command,
+	args,
+	input,
+) =>
+	Effect.callback<number, AccountAccessServiceError>((resume) => {
+		const child = spawn(command, [...args], {
+			cwd: homedir(),
+			env: processEnvironment(undefined),
+			stdio: ["pipe", "ignore", "ignore"],
+		});
+		child.once("error", () =>
+			resume(Effect.fail(new AccountAccessServiceError("tool-not-installed"))),
+		);
+		child.once("exit", (code) => resume(Effect.succeed(code ?? 1)));
+		child.stdin.end(`${input}\n`);
+		return Effect.sync(() => child.kill("SIGTERM"));
 	});
 
 export const AccountAccessProcessLive = Layer.succeed(
@@ -322,8 +169,7 @@ export const AccountAccessProcessLive = Layer.succeed(
 	AccountAccessProcess.of({
 		capture: captureProcess,
 		stream: streamProcess,
-		write: writeProcess,
-		cancel: cancelProcess,
+		input: inputProcess,
 	}),
 );
 
@@ -332,40 +178,14 @@ export interface AccountAccessServiceShape {
 		AccountAccessStatus,
 		AccountAccessServiceError
 	>;
-	readonly detectLocal: () => Effect.Effect<
-		LocalAccountDescriptorList,
-		AccountAccessServiceError
-	>;
-	readonly readLocalCredential: (
-		providerId: AccountAccessProvider,
-	) => Effect.Effect<
-		{
-			readonly providerId: AccountAccessProvider;
-			readonly credentialType:
-				| "api-key"
-				| "oauth-token"
-				| "repository-token"
-				| "native-store";
-			readonly secret: string;
-			readonly accountLabel?: string;
-		},
-		AccountAccessServiceError
-	>;
 	readonly startLogin: (
-		providerId: "github" | "codex",
+		providerId: "codex" | "cursor" | "grok",
 	) => Stream.Stream<AccountAccessTransferEvent, AccountAccessServiceError>;
-	readonly prepareImport: (input: {
-		readonly accountId: string;
-		readonly providerId: "claude";
-	}) => Effect.Effect<AccountAccessPreparedImport, AccountAccessServiceError>;
-	readonly createClaudeTransfer: (
-		request: AccountAccessCreateClaudeTransferRequest,
-	) => Stream.Stream<AccountAccessTransferEvent, AccountAccessServiceError>;
-	readonly continueClaudeTransfer: (
-		request: AccountAccessClaudeTransferContinuation,
-	) => Effect.Effect<void, AccountAccessServiceError>;
-	readonly importCredential: (
-		request: AccountAccessImportRequest,
+	readonly setCredential: (
+		request: AccountAccessSetCredentialRequest,
+	) => Effect.Effect<AccountAccessProviderStatus, AccountAccessServiceError>;
+	readonly configureCustom: (
+		request: AccountAccessCustomConfigRequest,
 	) => Effect.Effect<AccountAccessProviderStatus, AccountAccessServiceError>;
 	readonly disconnect: (
 		providerId: AccountAccessProvider,
@@ -385,6 +205,9 @@ export class AccountAccessService extends Context.Service<
 	AccountAccessServiceShape
 >()("zuse/AccountAccessService") {}
 
+const commandFor = (providerId: AccountAccessProvider): string =>
+	providerId === "cursor" ? "cursor-agent" : providerId;
+
 const emptyStatus = (
 	providerId: AccountAccessProvider,
 	installed: boolean,
@@ -395,667 +218,358 @@ const emptyStatus = (
 		installed,
 	});
 
+const validateSecret = (
+	providerId: AccountAccessProvider,
+	method: "subscription" | "api-key",
+	secret: string,
+): string => {
+	const normalized = secret.trim();
+	if (
+		normalized.length < 8 ||
+		Buffer.byteLength(normalized, "utf8") > MAX_SECRET_BYTES ||
+		/[\r\n\0]/u.test(normalized)
+	) {
+		throw new AccountAccessServiceError("invalid-credential");
+	}
+	if (
+		providerId === "claude" &&
+		method === "subscription" &&
+		!normalized.startsWith("sk-ant-oat01-")
+	) {
+		throw new AccountAccessServiceError("invalid-credential");
+	}
+	return normalized;
+};
+
+const validateBaseUrl = (value: string): string => {
+	try {
+		const url = new URL(value.trim());
+		if (
+			url.protocol !== "https:" ||
+			url.username.length > 0 ||
+			url.password.length > 0
+		) {
+			throw new Error("invalid_url");
+		}
+		return url.toString().replace(/\/$/u, "");
+	} catch {
+		throw new AccountAccessServiceError("invalid-configuration");
+	}
+};
+
 export const AccountAccessServiceLive = Layer.effect(
 	AccountAccessService,
 	Effect.gen(function* () {
 		const processRunner = yield* AccountAccessProcess;
-		const auth = yield* AuthService;
-		const lanAuth = yield* LanAuthService;
 		const credentials = yield* CredentialsService;
 		const role = yield* MachineRuntimeRole;
 		const paths = yield* AppPaths;
-		const preparedTransfers = yield* Ref.make(
-			new Map<string, PreparedCredentialTransfer>(),
-		);
 
-		const requireRole = (expected: typeof role) =>
-			role === expected
+		const requireCloudRole = () =>
+			role === "cloud-environment"
 				? Effect.void
 				: Effect.fail(new AccountAccessServiceError("not-allowed"));
 
-		const capture = (command: string, args: ReadonlyArray<string>) =>
-			processRunner.capture(command, args);
+		const capture = (
+			command: string,
+			args: ReadonlyArray<string>,
+			environment?: Readonly<Record<string, string>>,
+		) => processRunner.capture(command, args, environment);
 
-		const commandInstalled = (command: string, versionArgs = ["--version"]) =>
-			capture(command, versionArgs).pipe(
+		const commandInstalled = (command: string) =>
+			capture(command, ["--version"]).pipe(
 				Effect.map((result) => result.code === 0),
 				Effect.orElseSucceed(() => false),
 			);
-		const nativeCredentialPath = (providerId: "github" | "codex") => {
-			const accountHome =
-				process.env.ZUSE_ACCOUNT_ACCESS_HOME?.trim() || homedir();
-			return providerId === "github"
-				? join(accountHome, ".config", "gh", "hosts.yml")
-				: join(accountHome, ".codex", "auth.json");
-		};
 
-		const hardenNativeCredentialStore = (providerId: "github" | "codex") =>
-			Effect.tryPromise({
-				try: async () => {
-					const file = nativeCredentialPath(providerId);
-					const directory = dirname(file);
-					await chmod(directory, 0o700);
-					await chmod(file, 0o600);
-				},
-				catch: () => new AccountAccessServiceError("credential-store-failed"),
-			});
+		const nativeStatus = (
+			providerId: AccountAccessProvider,
+			secret?: string,
+			credentialKind?: "api-key" | "oauth-token",
+		): Effect.Effect<
+			{ readonly connected: boolean; readonly label?: string },
+			never
+		> => {
+			const probe =
+				providerId === "codex"
+					? ["login", "status"]
+					: providerId === "cursor"
+						? ["status"]
+						: providerId === "grok"
+							? ["models"]
+							: ["auth", "status", "--json"];
+			const environment: Readonly<Record<string, string>> | undefined =
+				secret === undefined
+					? undefined
+					: providerId === "claude"
+						? credentialKind === "oauth-token"
+							? { CLAUDE_CODE_OAUTH_TOKEN: secret }
+							: { ANTHROPIC_API_KEY: secret }
+						: providerId === "cursor"
+							? { CURSOR_API_KEY: secret }
+							: providerId === "grok"
+								? { GROK_CODE_XAI_API_KEY: secret, XAI_API_KEY: secret }
+								: undefined;
+			return capture(commandFor(providerId), probe, environment).pipe(
+				Effect.map((result) => ({
+					connected: result.code === 0,
+					...(result.code === 0 && result.stdout.trim().length > 0
+						? {
+								label: redactAccountAccessOutput(result.stdout)
+									.trim()
+									.slice(0, 120),
+							}
+						: {}),
+				})),
+				Effect.orElseSucceed(() => ({ connected: false })),
+			);
+		};
 
 		const providerStatus = Effect.fn("AccountAccess.providerStatus")(function* (
 			providerId: AccountAccessProvider,
 		) {
-			const installed = yield* commandInstalled(
-				providerId === "github" ? "gh" : providerId,
-			);
+			const installed = yield* commandInstalled(commandFor(providerId));
 			if (!installed) return emptyStatus(providerId, false);
-
-			if (providerId === "claude") {
-				const credential = yield* credentials
-					.getProviderCredential("claude")
-					.pipe(
-						Effect.mapError(
-							() => new AccountAccessServiceError("credential-store-failed"),
-						),
-					);
-				return credential === null
-					? emptyStatus("claude", true)
-					: new AccountAccessProviderStatus({
-							providerId: "claude" as const,
-							state: "connected" as const,
-							installed: true,
-							authKind: credential.kind,
-							lastSyncedAt: credential.updatedAt,
-						});
+			const managed = yield* credentials
+				.getProviderCredential(providerId)
+				.pipe(
+					Effect.mapError(
+						() => new AccountAccessServiceError("credential-store-failed"),
+					),
+				);
+			if (managed !== null) {
+				const verified = yield* nativeStatus(
+					providerId,
+					managed.secret,
+					managed.kind,
+				);
+				return new AccountAccessProviderStatus({
+					providerId,
+					state: verified.connected ? "connected" : "expired",
+					installed: true,
+					authMethod:
+						managed.kind === "oauth-token" ? "subscription" : "api-key",
+					...(verified.connected ? { verifiedAt: Date.now() } : {}),
+					...(verified.label === undefined
+						? {}
+						: { accountLabel: verified.label }),
+				});
 			}
-
-			const result =
-				providerId === "github"
-					? yield* capture("gh", ["api", "user", "--jq", ".login"]).pipe(
-							Effect.orElseSucceed(() => ({
-								stdout: "",
-								stderr: "",
-								code: 1,
-							})),
-						)
-					: yield* capture("codex", ["login", "status"]).pipe(
-							Effect.orElseSucceed(() => ({
-								stdout: "",
-								stderr: "",
-								code: 1,
-							})),
-						);
-			if (result.code !== 0) return emptyStatus(providerId, true);
-			const safeLabel =
-				providerId === "github"
-					? result.stdout.trim().slice(0, 120)
-					: "OpenAI account";
-			const lastSyncedAt = yield* Effect.tryPromise({
-				try: async () => (await stat(nativeCredentialPath(providerId))).mtimeMs,
-				catch: () => undefined,
-			}).pipe(Effect.orElseSucceed(() => undefined));
+			const native = yield* nativeStatus(providerId);
+			if (!native.connected) return emptyStatus(providerId, true);
 			return new AccountAccessProviderStatus({
 				providerId,
-				state: "connected" as const,
+				state: "connected",
 				installed: true,
-				accountLabel: safeLabel || undefined,
-				authKind: "device" as const,
-				...(lastSyncedAt === undefined ? {} : { lastSyncedAt }),
+				authMethod: "subscription",
+				verifiedAt: Date.now(),
+				...(native.label === undefined ? {} : { accountLabel: native.label }),
 			});
 		});
 
 		const status = Effect.fn("AccountAccess.status")(function* () {
-			yield* requireRole("cloud-environment");
-			const providers = yield* Effect.all(
-				(["github", "claude", "codex"] as const).map(providerStatus),
-				{ concurrency: 3 },
-			);
+			yield* requireCloudRole();
+			const providers = yield* Effect.all(PROVIDERS.map(providerStatus), {
+				concurrency: PROVIDERS.length,
+			});
 			return new AccountAccessStatus({ providers });
 		});
 
-		const detectLocal = Effect.fn("AccountAccess.detectLocal")(function* () {
-			yield* requireRole("control-plane");
-			const providers = ["github", "claude", "codex"] as const;
-			const accounts = yield* Effect.all(
-				providers.map((providerId) =>
-					Effect.gen(function* () {
-						const installed = yield* commandInstalled(
-							providerId === "github" ? "gh" : providerId,
-						);
-						let accountLabel: string | undefined;
-						let detected = false;
-						if (installed && providerId === "github") {
-							const result = yield* capture("gh", [
-								"api",
-								"user",
-								"--jq",
-								".login",
-							]).pipe(Effect.orElseSucceed(() => null));
-							detected = result?.code === 0;
-							accountLabel = detected
-								? result?.stdout.trim().slice(0, 120)
-								: undefined;
-						} else if (installed) {
-							const result = yield* capture(providerId, [
-								...(providerId === "codex" ? ["login"] : ["auth"]),
-								"status",
-							]).pipe(Effect.orElseSucceed(() => null));
-							detected = result?.code === 0;
-							accountLabel = detected
-								? providerId === "claude"
-									? "Claude account"
-									: "OpenAI account"
-								: undefined;
-						}
-						return new LocalAccountDescriptor({
-							providerId,
-							installed,
-							detected,
-							...(accountLabel !== undefined ? { accountLabel } : {}),
-							action:
-								providerId === "claude" ? "sealed-transfer" : "device-login",
-						});
-					}),
-				),
-				{ concurrency: 3 },
-			);
-			return new LocalAccountDescriptorList({ accounts });
-		});
-
-		const readLocalCredential = Effect.fn("AccountAccess.readLocalCredential")(
-			function* (providerId: AccountAccessProvider) {
-				yield* requireRole("control-plane");
-				const accountHome =
-					process.env.ZUSE_ACCOUNT_ACCESS_HOME?.trim() || homedir();
-				if (providerId === "github") {
-					const result = yield* capture("gh", [
-						"auth",
-						"token",
-						"--hostname",
-						"github.com",
-					]);
-					const secret = result.stdout.trim();
-					if (result.code !== 0 || secret.length < 8)
-						return yield* Effect.fail(
-							new AccountAccessServiceError("credential-export-failed"),
-						);
-					return {
-						providerId,
-						credentialType: "repository-token",
-						secret,
-						accountLabel: "GitHub account",
-					} as const;
-				}
-
-				const nativePath =
-					providerId === "claude"
-						? join(accountHome, ".claude", ".credentials.json")
-						: join(accountHome, ".codex", "auth.json");
-				let secret = yield* Effect.tryPromise({
-					try: () => readNativeCredentialFile(providerId, nativePath),
-					catch: () =>
-						new AccountAccessServiceError("credential-export-failed"),
-				}).pipe(Effect.option);
-				if (secret._tag === "None" && providerId === "claude") {
-					const keychain = yield* capture("security", [
-						"find-generic-password",
-						"-s",
-						"Claude Code-credentials",
-						"-w",
-					]).pipe(Effect.option);
-					if (keychain._tag === "Some" && keychain.value.code === 0) {
-						try {
-							secret = Option.some(
-								validateNativeCredential("claude", keychain.value.stdout),
-							);
-						} catch {
-							secret = Option.none();
-						}
-					}
-				}
-				if (secret._tag === "None")
-					return yield* Effect.fail(
-						new AccountAccessServiceError("credential-export-failed"),
-					);
-				return {
-					providerId,
-					credentialType: "native-store",
-					secret: secret.value,
-					accountLabel:
-						providerId === "claude" ? "Claude account" : "OpenAI account",
-				} as const;
-			},
-		);
-
-		const prepareImport = Effect.fn("AccountAccess.prepareImport")(
-			function* (input: {
-				readonly accountId: string;
-				readonly providerId: "claude";
-			}) {
-				yield* requireRole("cloud-environment");
-				const environmentId = yield* lanAuth
-					.environmentId()
-					.pipe(
-						Effect.mapError(
-							() => new AccountAccessServiceError("transfer-rejected"),
-						),
-					);
-				const transferId = crypto.randomUUID();
-				const prepared = prepareCredentialTransfer({
-					accountId: input.accountId,
-					environmentId,
-					transferId,
-					expiresAt: Date.now() + TRANSFER_TTL_MS,
-				});
-				const [keys, relayConfig] = yield* Effect.all([
-					lanAuth.environmentKeys(),
-					lanAuth.getRelayConfig(),
-				]).pipe(
-					Effect.mapError(
-						() => new AccountAccessServiceError("transfer-rejected"),
-					),
-				);
-				if (
-					relayConfig === null ||
-					keys.envId !== environmentId ||
-					relayConfig.environmentId !== environmentId
-				) {
-					return yield* Effect.fail(
-						new AccountAccessServiceError("transfer-rejected"),
-					);
-				}
-				const environmentProof = yield* Effect.tryPromise({
-					try: () =>
-						signPreparedImport(
-							prepared,
-							keys.privateJwk,
-							relayConfig.relayIssuer,
-						),
-					catch: () => new AccountAccessServiceError("transfer-rejected"),
-				});
-				yield* Ref.update(preparedTransfers, (current) => {
-					const next = new Map(
-						[...current].filter(([, value]) => value.expiresAt > Date.now()),
-					);
-					next.set(transferId, prepared);
-					return next;
-				});
-				return publicPreparedImport(prepared, environmentProof);
-			},
-		);
-
 		const startLogin = (
-			providerId: "github" | "codex",
+			providerId: "codex" | "cursor" | "grok",
 		): Stream.Stream<AccountAccessTransferEvent, AccountAccessServiceError> => {
 			if (role !== "cloud-environment") {
 				return Stream.fail(new AccountAccessServiceError("not-allowed"));
 			}
 			const command = getAccountAccessLoginCommand(providerId);
 			let verificationEmitted = false;
-			let pendingVerificationCode: string | undefined;
-			let pendingVerificationUrl: string | undefined;
-			const loginEvents = processRunner.stream(
-				command.command,
-				command.args,
-				command.environment,
-			);
-			return loginEvents.pipe(
-				Stream.flatMap(
-					(
-						event,
-					): Stream.Stream<
-						AccountAccessTransferEvent,
-						AccountAccessServiceError
-					> => {
+			let pendingCode: string | undefined;
+			let pendingUrl: string | undefined;
+			return processRunner
+				.stream(command.command, command.args, command.environment)
+				.pipe(
+					Stream.flatMap((event) => {
 						if (event._tag === "exit") {
-							if (event.code !== 0) {
-								return Stream.succeed({
-									_tag: "done",
-									ok: false,
-									reason: "login-failed",
-								});
-							}
-							return Stream.fromEffect(
-								Effect.gen(function* () {
-									if (providerId === "github") {
-										const configured = yield* capture("gh", [
-											"auth",
-											"setup-git",
-										]);
-										if (configured.code !== 0) {
-											return yield* Effect.fail(
-												new AccountAccessServiceError("login-failed"),
-											);
-										}
-										const privateAccess = yield* capture("gh", [
-											"api",
-											"user/repos?visibility=private&per_page=1",
-											"--jq",
-											"length",
-										]);
-										if (privateAccess.code !== 0) {
-											return yield* Effect.fail(
-												new AccountAccessServiceError("login-failed"),
-											);
-										}
-									}
-									yield* hardenNativeCredentialStore(providerId);
-									return {
-										_tag: "done" as const,
-										ok: true,
-									};
-								}),
-							);
+							return Stream.succeed<AccountAccessTransferEvent>({
+								_tag: "done",
+								ok: event.code === 0,
+								...(event.code === 0 ? {} : { reason: "login-failed" }),
+							});
 						}
 						const safe = redactAccountAccessOutput(event.text).slice(0, 500);
 						const verification = parseDeviceLoginVerification(providerId, safe);
-						pendingVerificationCode ??= verification.code;
-						pendingVerificationUrl ??= verification.url;
-						if (
-							!verificationEmitted &&
-							pendingVerificationUrl !== undefined &&
-							pendingVerificationCode !== undefined
-						) {
+						pendingCode ??= verification.code;
+						pendingUrl ??= verification.url;
+						if (!verificationEmitted && pendingUrl !== undefined) {
 							verificationEmitted = true;
-							return Stream.succeed({
+							return Stream.succeed<AccountAccessTransferEvent>({
 								_tag: "verification",
-								url: pendingVerificationUrl,
-								code: pendingVerificationCode,
+								url: pendingUrl,
+								...(pendingCode === undefined ? {} : { code: pendingCode }),
 							});
 						}
-						return Stream.succeed({
+						return Stream.succeed<AccountAccessTransferEvent>({
 							_tag: "progress",
 							message: "Waiting for authorization…",
 						});
-					},
-				),
-			);
-		};
-
-		const createClaudeTransfer = (
-			request: AccountAccessCreateClaudeTransferRequest,
-		): Stream.Stream<AccountAccessTransferEvent, AccountAccessServiceError> => {
-			if (role !== "control-plane") {
-				return Stream.fail(new AccountAccessServiceError("not-allowed"));
-			}
-			return Stream.unwrap(
-				Effect.gen(function* () {
-					const session = yield* auth.getSession();
-					if (
-						session._tag !== "SignedIn" ||
-						session.session.user.id !== request.prepared.accountId
-					) {
-						return Stream.fail(new AccountAccessServiceError("not-signed-in"));
-					}
-					const relayUrl = resolveMachineRelayUrl();
-					const accessToken = yield* auth
-						.getAccessToken()
-						.pipe(
-							Effect.mapError(
-								() => new AccountAccessServiceError("not-signed-in"),
-							),
-						);
-					const environments = yield* Effect.tryPromise({
-						try: async () => {
-							const response = await fetch(
-								`${relayUrl}${RelayPaths.environments}`,
-								{
-									headers: { authorization: `Bearer ${accessToken}` },
-									signal: AbortSignal.timeout(10_000),
-								},
-							);
-							if (!response.ok) throw new Error("relay_rejected");
-							return Schema.decodeUnknownSync(RelayEnvironmentList)(
-								await response.json(),
-							);
-						},
-						catch: () => new AccountAccessServiceError("transfer-rejected"),
-					});
-					const destination = environments.environments.find(
-						(environment) =>
-							environment.environmentId === request.prepared.environmentId,
-					);
-					if (destination?.environmentPublicKey === undefined) {
-						return Stream.fail(
-							new AccountAccessServiceError("transfer-rejected"),
-						);
-					}
-					const environmentPublicKey = destination.environmentPublicKey;
-					yield* Effect.tryPromise({
-						try: () =>
-							verifyPreparedImport(
-								request.prepared,
-								environmentPublicKey,
-								relayUrl,
-							),
-						catch: () => new AccountAccessServiceError("transfer-rejected"),
-					});
-					let token: string | null = null;
-					let verificationEmitted = false;
-					let inputReadyEmitted = false;
-					let setupTranscript = "";
-					return processRunner
-						.stream(
-							"claude",
-							["setup-token"],
-							undefined,
-							request.prepared.transferId,
-						)
-						.pipe(
-							Stream.flatMap((event) => {
-								if (event._tag === "line") {
-									setupTranscript = `${setupTranscript}${event.text}`.slice(
-										-32_768,
-									);
-									token ??= extractClaudeSetupToken(setupTranscript);
-									if (token !== null) {
-										const sealed = sealCredentialTransfer(request.prepared, {
-											providerId: "claude",
-											kind: "oauth-token",
-											secret: token,
-										});
-										return Stream.fromIterable<AccountAccessTransferEvent>([
-											{ _tag: "sealed", sealed },
-											{ _tag: "done", ok: true },
-										]);
-									}
-									const safeTranscript =
-										redactAccountAccessOutput(setupTranscript);
-									const failure = parseClaudeSetupFailure(safeTranscript);
-									if (failure !== null) {
-										return Stream.succeed<AccountAccessTransferEvent>({
-											_tag: "done",
-											ok: false,
-											reason: failure,
-										});
-									}
-									const events: AccountAccessTransferEvent[] = [];
-									const verification =
-										parseClaudeSetupVerification(setupTranscript);
-									if (!verificationEmitted && verification.url !== undefined) {
-										verificationEmitted = true;
-										events.push({
-											_tag: "verification",
-											url: verification.url,
-											...(verification.code === undefined
-												? {}
-												: { code: verification.code }),
-										});
-									}
-									if (
-										!inputReadyEmitted &&
-										/Paste code here if prompted\s*>/iu.test(safeTranscript)
-									) {
-										inputReadyEmitted = true;
-										events.push({ _tag: "input-ready" });
-									}
-									return Stream.fromIterable<AccountAccessTransferEvent>(
-										events.length > 0
-											? events
-											: [
-													{
-														_tag: "progress",
-														message: "Waiting for Claude authorization…",
-													},
-												],
-									);
-								}
-								return Stream.succeed<AccountAccessTransferEvent>({
-									_tag: "done",
-									ok: false,
-									reason:
-										parseClaudeSetupFailure(setupTranscript) ??
-										(event.code === 0 ? "token-not-captured" : "login-failed"),
-								});
-							}),
-							Stream.takeUntil((event) => event._tag === "done"),
-						);
-				}),
-			);
-		};
-
-		const continueClaudeTransfer = Effect.fn(
-			"AccountAccess.continueClaudeTransfer",
-		)(function* (request: AccountAccessClaudeTransferContinuation) {
-			yield* requireRole("control-plane");
-			const session = yield* auth.getSession();
-			if (session._tag !== "SignedIn") {
-				return yield* Effect.fail(
-					new AccountAccessServiceError("not-signed-in"),
+					}),
 				);
-			}
-			if (request._tag === "cancel") {
-				yield* processRunner.cancel(request.transferId);
-				return;
-			}
-			const code = request.code.trim();
-			const containsControlCharacter = [...code].some((character) => {
-				const value = character.charCodeAt(0);
-				return value < 32 || value === 127;
-			});
+		};
+
+		const setCredential = Effect.fn("AccountAccess.setCredential")(function* (
+			request: AccountAccessSetCredentialRequest,
+		) {
+			yield* requireCloudRole();
 			if (
-				code.length === 0 ||
-				code.length > 4_096 ||
-				containsControlCharacter
+				request.method === "subscription" &&
+				request.providerId !== "claude"
 			) {
 				return yield* Effect.fail(
-					new AccountAccessServiceError("transfer-rejected"),
+					new AccountAccessServiceError("invalid-configuration"),
 				);
 			}
-			yield* processRunner.write(request.transferId, `${code}\r`);
+			const secret = validateSecret(
+				request.providerId,
+				request.method,
+				request.secret,
+			);
+			if (request.providerId === "codex" && request.method === "api-key") {
+				const exitCode = yield* processRunner.input(
+					"codex",
+					["login", "--with-api-key"],
+					secret,
+				);
+				if (exitCode !== 0) {
+					return yield* Effect.fail(
+						new AccountAccessServiceError("login-failed"),
+					);
+				}
+			}
+			yield* credentials
+				.setProviderCredential(request.providerId, {
+					kind: request.method === "subscription" ? "oauth-token" : "api-key",
+					secret,
+				})
+				.pipe(
+					Effect.mapError(
+						() => new AccountAccessServiceError("credential-store-failed"),
+					),
+				);
+			return yield* providerStatus(request.providerId);
 		});
 
-		const importCredential = Effect.fn("AccountAccess.importCredential")(
-			function* (request: AccountAccessImportRequest) {
-				yield* requireRole("cloud-environment");
-				const entry = yield* Ref.modify(preparedTransfers, (current) => {
-					const found = current.get(request.transferId);
-					if (found === undefined) return [found, current];
-					const next = new Map(current);
-					next.delete(request.transferId);
-					return [found, next];
-				});
-				if (entry === undefined) {
+		const configureCustom = Effect.fn("AccountAccess.configureCustom")(
+			function* (request: AccountAccessCustomConfigRequest) {
+				yield* requireCloudRole();
+				const baseUrl = validateBaseUrl(request.baseUrl);
+				const secret = validateSecret(
+					request.providerId,
+					"api-key",
+					request.secret,
+				);
+				const modelProvider = request.modelProvider?.trim();
+				if (
+					modelProvider !== undefined &&
+					!/^[a-zA-Z0-9_-]{1,64}$/u.test(modelProvider)
+				) {
 					return yield* Effect.fail(
-						new AccountAccessServiceError("transfer-replayed"),
-					);
-				}
-				if (Date.now() > entry.expiresAt) {
-					return yield* Effect.fail(
-						new AccountAccessServiceError("transfer-expired"),
-					);
-				}
-				let payload: ReturnType<typeof openCredentialTransfer>;
-				try {
-					payload = openCredentialTransfer(entry, request.sealed, Date.now());
-				} catch {
-					return yield* Effect.fail(
-						new AccountAccessServiceError("transfer-rejected"),
+						new AccountAccessServiceError("invalid-configuration"),
 					);
 				}
 				yield* credentials
-					.setProviderCredential("claude", {
-						kind: payload.kind,
-						secret: payload.secret,
+					.setProviderCredential(request.providerId, {
+						kind: "api-key",
+						secret,
 					})
 					.pipe(
 						Effect.mapError(
 							() => new AccountAccessServiceError("credential-store-failed"),
 						),
 					);
-				return yield* providerStatus("claude");
+				const configDirectory = join(paths.userData, "provider-config");
+				yield* Effect.tryPromise({
+					try: async () => {
+						await mkdir(configDirectory, { recursive: true, mode: 0o700 });
+						await writeFile(
+							join(configDirectory, `${request.providerId}.json`),
+							`${JSON.stringify({
+								baseUrl,
+								...(modelProvider === undefined ? {} : { modelProvider }),
+							})}\n`,
+							{ mode: 0o600 },
+						);
+					},
+					catch: () => new AccountAccessServiceError("credential-store-failed"),
+				});
+				return new AccountAccessProviderStatus({
+					providerId: request.providerId,
+					state: "connected",
+					installed: true,
+					authMethod: "custom",
+					verifiedAt: Date.now(),
+				});
 			},
 		);
 
 		const disconnect = Effect.fn("AccountAccess.disconnect")(function* (
 			providerId: AccountAccessProvider,
 		) {
-			yield* requireRole("cloud-environment");
-			if (providerId === "claude") {
-				yield* credentials
-					.remove("claude")
-					.pipe(
-						Effect.mapError(
-							() => new AccountAccessServiceError("credential-store-failed"),
-						),
-					);
-			} else {
-				const result = yield* capture(
-					providerId === "github" ? "gh" : "codex",
-					providerId === "github"
-						? ["auth", "logout", "--hostname", "github.com"]
-						: ["logout"],
-				).pipe(
-					Effect.orElseSucceed(() => ({
-						stdout: "",
-						stderr: "",
-						code: 1,
-					})),
+			yield* requireCloudRole();
+			yield* credentials
+				.remove(providerId)
+				.pipe(
+					Effect.mapError(
+						() => new AccountAccessServiceError("credential-store-failed"),
+					),
 				);
-				if (result.code !== 0) {
-					return yield* Effect.fail(
-						new AccountAccessServiceError("login-failed"),
-					);
-				}
-			}
+			const logoutArgs =
+				providerId === "codex"
+					? ["logout"]
+					: providerId === "cursor"
+						? ["logout"]
+						: providerId === "grok"
+							? ["logout"]
+							: ["auth", "logout"];
+			yield* capture(commandFor(providerId), logoutArgs).pipe(Effect.ignore);
+			yield* Effect.tryPromise({
+				try: () =>
+					rm(join(paths.userData, "provider-config", `${providerId}.json`), {
+						force: true,
+					}),
+				catch: () => new AccountAccessServiceError("credential-store-failed"),
+			});
 			return yield* providerStatus(providerId);
 		});
 
 		const sanitizeCredentials = Effect.fn("AccountAccess.sanitizeCredentials")(
 			function* () {
-				yield* requireRole("cloud-environment");
+				yield* requireCloudRole();
+				for (const providerId of PROVIDERS) {
+					yield* credentials.remove(providerId).pipe(Effect.ignore);
+				}
 				const accountHome =
 					process.env.ZUSE_ACCOUNT_ACCESS_HOME?.trim() || homedir();
 				const credentialPaths = [
 					join(paths.userData, "secrets", "credentials.json"),
-					join(accountHome, ".config", "gh", "hosts.yml"),
+					join(paths.userData, "provider-config"),
 					join(accountHome, ".codex", "auth.json"),
 					join(accountHome, ".claude", ".credentials.json"),
+					join(accountHome, ".cursor", "auth.json"),
+					join(accountHome, ".grok", "auth.json"),
 				];
 				yield* Effect.all(
-					[
-						capture("gh", ["auth", "logout", "--hostname", "github.com"]),
-						capture("codex", ["logout"]),
-					].map((effect) => Effect.ignore(effect)),
-					{ concurrency: 2 },
+					PROVIDERS.map((providerId) =>
+						capture(
+							commandFor(providerId),
+							providerId === "claude" ? ["auth", "logout"] : ["logout"],
+						).pipe(Effect.ignore),
+					),
+					{ concurrency: PROVIDERS.length },
 				);
 				yield* Effect.tryPromise({
 					try: async () => {
 						for (const credentialPath of credentialPaths) {
-							await rm(credentialPath, { force: true });
-						}
-						for (const credentialPath of credentialPaths) {
-							try {
-								await lstat(credentialPath);
-								throw new Error("credential_path_remains");
-							} catch (cause) {
-								if (
-									cause instanceof Error &&
-									"code" in cause &&
-									cause.code === "ENOENT"
-								) {
-									continue;
-								}
-								throw cause;
-							}
+							await rm(credentialPath, { recursive: true, force: true });
 						}
 					},
 					catch: () => new AccountAccessServiceError("cleanup-failed"),
@@ -1065,7 +579,7 @@ export const AccountAccessServiceLive = Layer.effect(
 
 		const requestRuntimeStop = Effect.fn("AccountAccess.requestRuntimeStop")(
 			function* () {
-				yield* requireRole("cloud-environment");
+				yield* requireCloudRole();
 				const marker = join(paths.userData, "credential-cleanup-ready");
 				yield* Effect.tryPromise({
 					try: async () => {
@@ -1079,13 +593,9 @@ export const AccountAccessServiceLive = Layer.effect(
 
 		return AccountAccessService.of({
 			status,
-			detectLocal,
-			readLocalCredential,
 			startLogin,
-			prepareImport,
-			createClaudeTransfer,
-			continueClaudeTransfer,
-			importCredential,
+			setCredential,
+			configureCustom,
 			disconnect,
 			sanitizeCredentials,
 			requestRuntimeStop,

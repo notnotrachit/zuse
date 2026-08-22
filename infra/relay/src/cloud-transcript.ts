@@ -29,7 +29,7 @@ const transcriptKeyAad = (accountId: string, workspaceId: string): Uint8Array =>
 	);
 
 const wrappingKey = Effect.fn("cloudTranscriptWrappingKey")(function* () {
-	const encoded = (yield* RelayConfiguration).cloudCredentialVaultKey;
+	const encoded = (yield* RelayConfiguration).cloudDataEncryptionKey;
 	if (encoded === undefined)
 		return yield* Effect.fail(fail("transcript_key_not_configured"));
 	return yield* Effect.tryPromise({

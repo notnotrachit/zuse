@@ -12,6 +12,8 @@ import { generateKeyPair, jwtVerify } from "jose";
 import { describe, expect, it, vi } from "vitest";
 import {
 	bufferWorkspaceLocalFrame,
+	cloudGatewayCloseReason,
+	decodeImageProviderSecrets,
 	makeCloudRuntimeCheckpointPublisher,
 	makeCloudRuntimeSummaryPublisher,
 	retryCloudWorkspaceBootstrap,
@@ -22,6 +24,32 @@ import {
 } from "../../src/relay/cloud-workspace-runtime.ts";
 
 describe("cloud workspace bootstrap", () => {
+	it("accepts a partial image provider configuration", async () => {
+		const decoded = await Effect.runPromise(
+			decodeImageProviderSecrets(
+				JSON.stringify({
+					claude: { method: "subscription", secret: "machine-token" },
+				}),
+			),
+		);
+
+		expect(decoded).toEqual({
+			claude: { method: "subscription", secret: "machine-token" },
+		});
+	});
+
+	it("rejects unknown image provider keys", async () => {
+		const result = await Effect.runPromiseExit(
+			decodeImageProviderSecrets(
+				JSON.stringify({
+					unknown: { method: "api-key", secret: "machine-token" },
+				}),
+			),
+		);
+
+		expect(result._tag).toBe("Failure");
+	});
+
 	it("publishes bounded older transcript pages only for an urgent checkpoint", async () => {
 		const sessionId = AgentSessionId.make("session-pages");
 		const older = Message.make({
@@ -162,6 +190,21 @@ describe("cloud workspace bootstrap", () => {
 		expect(runtimeReadyPhaseOnGatewayOpen(true)).toBe("repository-ready");
 	});
 
+	it("does not retry a gateway fence or authorization rejection", () => {
+		expect(cloudGatewayCloseReason(4101)).toBe(
+			"workspace_gateway_generation_changed",
+		);
+		expect(cloudGatewayCloseReason(4102)).toBe(
+			"workspace_gateway_authorization_expired",
+		);
+		expect(cloudGatewayCloseReason(4103)).toBe(
+			"workspace_gateway_update_required",
+		);
+		expect(cloudGatewayCloseReason(1006)).toBe(
+			"workspace_gateway_disconnected",
+		);
+	});
+
 	it("buffers the localhost RPC handshake only within a bounded handoff", () => {
 		const queue = { frames: [] as Array<string | ArrayBuffer>, bytes: 0 };
 		expect(bufferWorkspaceLocalFrame(queue, "handshake")).toBe(true);
@@ -245,7 +288,9 @@ describe("cloud workspace bootstrap", () => {
 		);
 		const workspaces = {
 			list: () =>
-				Effect.succeed([{ id: "folder-1", path: "/home/zuse/workspace" }]),
+				Effect.succeed([
+					{ id: "folder-1", path: "/home/repos/example/project" },
+				]),
 			add: vi.fn(),
 		} as never;
 		const chats = { createChat } as never;
@@ -266,6 +311,7 @@ describe("cloud workspace bootstrap", () => {
 					chats,
 					chatId: "chat-1",
 					sessionId: "session-1",
+					workspaceRoot: "/home/repos/example/project",
 					launchIntent,
 				}),
 			);

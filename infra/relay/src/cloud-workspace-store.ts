@@ -1,5 +1,4 @@
 import type {
-	CloudCredentialKind,
 	CloudProjectBuildState,
 	CloudProjectState,
 	CloudWorkspaceDesiredState,
@@ -21,8 +20,22 @@ export interface CloudProjectRecord {
 	readonly secretBindings: ReadonlyArray<string>;
 	readonly configurationDigest: string;
 	readonly state: CloudProjectState;
+	readonly included?: boolean;
 	readonly lastErrorCode?: string;
 	readonly idempotencyKey: string;
+	readonly createdAtMs: number;
+	readonly updatedAtMs: number;
+}
+
+export interface CloudGithubInstallationRecord {
+	readonly accountId: string;
+	readonly installationId: number;
+	readonly githubAccountId: number;
+	readonly accountLogin: string;
+	readonly accountType: "User" | "Organization";
+	readonly avatarUrl?: string;
+	readonly repositorySelection: "all" | "selected";
+	readonly suspended: boolean;
 	readonly createdAtMs: number;
 	readonly updatedAtMs: number;
 }
@@ -37,6 +50,8 @@ export interface CloudProjectBuildRecord {
 	readonly sourceCommit?: string;
 	readonly templateVersion: string;
 	readonly configurationDigest: string;
+	readonly settings?: Readonly<Record<string, unknown>>;
+	readonly logText?: string;
 	readonly state: CloudProjectBuildState;
 	readonly lastErrorCode?: string;
 	readonly idempotencyKey: string;
@@ -44,6 +59,18 @@ export interface CloudProjectBuildRecord {
 	readonly leaseOwner?: string;
 	readonly leaseExpiresAtMs?: number;
 	readonly revision: number;
+	readonly createdAtMs: number;
+	readonly updatedAtMs: number;
+}
+
+export interface CloudWorkspacePoolRecord {
+	readonly poolId: string;
+	readonly accountId: string;
+	readonly provider: string;
+	readonly imageGeneration: string;
+	readonly providerSandboxId: string;
+	readonly state: "available" | "claimed" | "deleting";
+	readonly claimedWorkspaceId?: string;
 	readonly createdAtMs: number;
 	readonly updatedAtMs: number;
 }
@@ -66,7 +93,6 @@ export interface CloudWorkspaceRecord {
 	readonly state: CloudWorkspaceState;
 	readonly desiredState: CloudWorkspaceDesiredState;
 	readonly statusCode: string;
-	readonly credentialEpoch: number;
 	readonly wrappedTranscriptKey?: string;
 	readonly archiveRequestedAtMs?: number;
 	readonly archiveDeleteAtMs?: number;
@@ -158,21 +184,6 @@ export interface RuntimeCredentialRenewalReceipt {
 	readonly gatewayEpoch: number;
 }
 
-const RuntimeBootstrapCredentialEnvelopeSchema = Schema.Struct({
-	kind: Schema.Literals(["github", "claude", "codex"]),
-	credentialType: Schema.Literals([
-		"api-key",
-		"oauth-token",
-		"repository-token",
-		"native-store",
-	]),
-	sealedSecret: Schema.String,
-	version: Schema.Number,
-});
-
-export type RuntimeBootstrapCredentialEnvelope =
-	typeof RuntimeBootstrapCredentialEnvelopeSchema.Type;
-
 const RuntimeBootstrapReceiptSchema = Schema.Struct({
 	workspaceId: Schema.String,
 	bootTokenHash: Schema.String,
@@ -183,7 +194,6 @@ const RuntimeBootstrapReceiptSchema = Schema.Struct({
 	runtimeCredentialExpiresAtMs: Schema.Number,
 	generation: Schema.Number,
 	gatewayEpoch: Schema.Number,
-	cloudCredentials: Schema.Array(RuntimeBootstrapCredentialEnvelopeSchema),
 	sealedTranscriptKey: Schema.String,
 	enrolledAtMs: Schema.Number,
 	acknowledgedAtMs: Schema.optional(Schema.Number),
@@ -204,6 +214,7 @@ export type RuntimeBootstrapEnrollmentOutcome = {
 	readonly kind: "created" | "replay";
 	readonly workspace: CloudWorkspaceRecord;
 	readonly receipt: RuntimeBootstrapReceipt;
+	readonly launchIntent: CloudWorkspaceLaunchIntentRecord | null;
 };
 
 export interface RuntimeBootstrapEnrollmentInput {
@@ -216,7 +227,6 @@ export interface RuntimeBootstrapEnrollmentInput {
 	readonly runtimeCredentialExpiresAtMs: number;
 	readonly generation: number;
 	readonly gatewayEpoch: number;
-	readonly cloudCredentials: ReadonlyArray<RuntimeBootstrapCredentialEnvelope>;
 	readonly sealedTranscriptKey: string;
 	readonly nowMs: number;
 }
@@ -242,20 +252,6 @@ const renewalReceiptFromConfig = (
 	gatewayEpoch: Number(receipt.gatewayEpoch),
 });
 
-export interface CloudCredentialRecord {
-	readonly connectionId: string;
-	readonly accountId: string;
-	readonly kind: CloudCredentialKind;
-	readonly state: "connected" | "disconnected" | "error";
-	readonly accountLabel?: string;
-	readonly encryptedPayload?: string;
-	readonly encryptionKeyVersion?: string;
-	readonly credentialVersion: number;
-	readonly createdAtMs: number;
-	readonly updatedAtMs: number;
-	readonly disconnectedAtMs?: number;
-}
-
 export type CreateCloudWorkspaceOutcome =
 	| {
 			readonly kind: "created" | "existing";
@@ -267,6 +263,16 @@ export type CreateCloudWorkspaceOutcome =
 	  };
 
 export interface CloudWorkspaceStoreApi {
+	readonly listGithubInstallations: (
+		accountId: string,
+	) => Effect.Effect<ReadonlyArray<CloudGithubInstallationRecord>>;
+	readonly saveGithubInstallation: (
+		installation: CloudGithubInstallationRecord,
+	) => Effect.Effect<void>;
+	readonly removeGithubInstallation: (
+		accountId: string,
+		installationId: number,
+	) => Effect.Effect<void>;
 	readonly connectProject: (
 		project: CloudProjectRecord,
 	) => Effect.Effect<CloudProjectRecord>;
@@ -277,6 +283,10 @@ export interface CloudWorkspaceStoreApi {
 		projectId: string,
 	) => Effect.Effect<CloudProjectRecord | null>;
 	readonly saveProject: (project: CloudProjectRecord) => Effect.Effect<void>;
+	readonly removeProject: (
+		projectId: string,
+		nowMs: number,
+	) => Effect.Effect<CloudProjectRecord | null>;
 	readonly createBuild: (
 		build: CloudProjectBuildRecord,
 	) => Effect.Effect<CloudProjectBuildRecord>;
@@ -309,6 +319,19 @@ export interface CloudWorkspaceStoreApi {
 		nowMs: number,
 		limit: number,
 	) => Effect.Effect<ReadonlyArray<CloudProjectBuildRecord>>;
+	readonly listPool: (
+		accountId: string,
+		provider: string,
+	) => Effect.Effect<ReadonlyArray<CloudWorkspacePoolRecord>>;
+	readonly savePool: (record: CloudWorkspacePoolRecord) => Effect.Effect<void>;
+	readonly claimPool: (
+		accountId: string,
+		provider: string,
+		imageGeneration: string,
+		workspaceId: string,
+		nowMs: number,
+	) => Effect.Effect<CloudWorkspacePoolRecord | null>;
+	readonly removePool: (poolId: string) => Effect.Effect<void>;
 	readonly createWorkspace: (
 		workspace: CloudWorkspaceRecord,
 		launchIntent: CloudWorkspaceLaunchIntentRecord,
@@ -360,6 +383,12 @@ export interface CloudWorkspaceStoreApi {
 	readonly enrollRuntimeBoot: (
 		input: RuntimeBootstrapEnrollmentInput,
 	) => Effect.Effect<RuntimeBootstrapEnrollmentOutcome | null>;
+	readonly markRuntimeRepositoryReady: (input: {
+		readonly workspaceId: string;
+		readonly currentCredentialHash: string;
+		readonly nowMs: number;
+		readonly nextIdleAtMs: number;
+	}) => Effect.Effect<CloudWorkspaceRecord | null>;
 	readonly acknowledgeRuntimeBoot: (
 		input: RuntimeBootstrapAcknowledgementInput,
 	) => Effect.Effect<boolean>;
@@ -405,22 +434,6 @@ export interface CloudWorkspaceStoreApi {
 	readonly deleteTranscriptCheckpoints: (
 		workspaceId: string,
 	) => Effect.Effect<void>;
-	readonly listCredentials: (
-		accountId: string,
-	) => Effect.Effect<ReadonlyArray<CloudCredentialRecord>>;
-	readonly getCredential: (
-		accountId: string,
-		kind: CloudCredentialKind,
-	) => Effect.Effect<CloudCredentialRecord | null>;
-	readonly saveCredential: (
-		credential: CloudCredentialRecord,
-	) => Effect.Effect<CloudCredentialRecord>;
-	readonly disconnectCredential: (
-		accountId: string,
-		kind: CloudCredentialKind,
-		nowMs: number,
-	) => Effect.Effect<CloudCredentialRecord | null>;
-	readonly credentialEpoch: (accountId: string) => Effect.Effect<number>;
 	readonly deleteAccountData: (accountId: string) => Effect.Effect<void>;
 	readonly recordUsage: (event: {
 		readonly eventId: string;
@@ -440,10 +453,11 @@ export class CloudWorkspaceStore extends Context.Service<
 >()("@zuse/relay/CloudWorkspaceStore") {}
 
 interface MemoryState {
+	readonly githubInstallations: Map<string, CloudGithubInstallationRecord>;
 	readonly projects: Map<string, CloudProjectRecord>;
 	readonly builds: Map<string, CloudProjectBuildRecord>;
+	readonly pool: Map<string, CloudWorkspacePoolRecord>;
 	readonly workspaces: Map<string, CloudWorkspaceRecord>;
-	readonly credentials: Map<string, CloudCredentialRecord>;
 	readonly usage: Set<string>;
 	readonly launchIntents: Map<string, CloudWorkspaceLaunchIntentRecord>;
 	readonly runtimeRenewals: Map<string, RuntimeCredentialRenewalReceipt>;
@@ -458,7 +472,7 @@ const activeBranch = (workspace: CloudWorkspaceRecord): boolean =>
 const workspaceRuntimeGeneration = (workspace: CloudWorkspaceRecord): number =>
 	typeof workspace.requestConfig.runtimeGeneration === "number"
 		? workspace.requestConfig.runtimeGeneration
-		: Math.max(1, workspace.credentialEpoch + 1);
+		: 1;
 
 const transcriptCheckpointKey = (
 	workspaceId: string,
@@ -475,6 +489,8 @@ const completeLaunchWorkspace = (
 	input: CompleteLaunchIntentInput,
 ): CloudWorkspaceRecord => {
 	const startupTimings = recordOrEmpty(workspace.requestConfig.startupTimings);
+	const { runtimeSessionRecoveryPending: _, ...requestConfig } =
+		workspace.requestConfig;
 	const requestedAt =
 		typeof startupTimings.requestedAt === "number"
 			? startupTimings.requestedAt
@@ -485,7 +501,7 @@ const completeLaunchWorkspace = (
 		state: "ready",
 		statusCode: "agent-running",
 		requestConfig: {
-			...workspace.requestConfig,
+			...requestConfig,
 			sessionHeadVersion: Math.max(
 				typeof workspace.requestConfig.sessionHeadVersion === "number"
 					? workspace.requestConfig.sessionHeadVersion
@@ -497,6 +513,7 @@ const completeLaunchWorkspace = (
 				connectedAt: startupTimings.connectedAt ?? input.nowMs,
 				repositoryReadyAt: startupTimings.repositoryReadyAt ?? input.nowMs,
 				agentStartedAt: startupTimings.agentStartedAt ?? input.nowMs,
+				messageAcceptedAt: startupTimings.messageAcceptedAt ?? input.nowMs,
 				...(requestedAt === undefined
 					? {}
 					: {
@@ -525,10 +542,11 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 	CloudWorkspaceStore,
 	Effect.gen(function* () {
 		const state = yield* Ref.make<MemoryState>({
+			githubInstallations: new Map(),
 			projects: new Map(),
 			builds: new Map(),
+			pool: new Map(),
 			workspaces: new Map(),
-			credentials: new Map(),
 			usage: new Set(),
 			launchIntents: new Map(),
 			runtimeRenewals: new Map(),
@@ -537,12 +555,35 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 			lifecycleCommands: new Map(),
 		});
 		return CloudWorkspaceStore.of({
+			listGithubInstallations: (accountId) =>
+				Ref.get(state).pipe(
+					Effect.map((current) =>
+						[...current.githubInstallations.values()].filter(
+							(installation) => installation.accountId === accountId,
+						),
+					),
+				),
+			saveGithubInstallation: (installation) =>
+				Ref.update(state, (current) => ({
+					...current,
+					githubInstallations: new Map(current.githubInstallations).set(
+						`${installation.accountId}:${installation.installationId}`,
+						installation,
+					),
+				})),
+			removeGithubInstallation: (accountId, installationId) =>
+				Ref.update(state, (current) => {
+					const githubInstallations = new Map(current.githubInstallations);
+					githubInstallations.delete(`${accountId}:${installationId}`);
+					return { ...current, githubInstallations };
+				}),
 			connectProject: (project) =>
 				Ref.modify(state, (current) => {
 					const retry = [...current.projects.values()].find(
 						(candidate) =>
 							candidate.accountId === project.accountId &&
-							candidate.idempotencyKey === project.idempotencyKey,
+							candidate.idempotencyKey === project.idempotencyKey &&
+							candidate.included !== false,
 					);
 					if (retry !== undefined) return [retry, current] as const;
 					const existing = [...current.projects.values()].find(
@@ -575,7 +616,7 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 				Ref.get(state).pipe(
 					Effect.map((current) =>
 						[...current.projects.values()].filter(
-							(item) => item.accountId === accountId,
+							(item) => item.accountId === accountId && item.included !== false,
 						),
 					),
 				),
@@ -588,6 +629,19 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 					...current,
 					projects: new Map(current.projects).set(project.projectId, project),
 				})),
+			removeProject: (projectId, nowMs) =>
+				Ref.modify(state, (current) => {
+					const project = current.projects.get(projectId);
+					if (project === undefined) return [null, current] as const;
+					const removed = { ...project, included: false, updatedAtMs: nowMs };
+					return [
+						removed,
+						{
+							...current,
+							projects: new Map(current.projects).set(projectId, removed),
+						},
+					] as const;
+				}),
 			createBuild: (build) =>
 				Ref.modify(state, (current) => {
 					const existing = [...current.builds.values()].find(
@@ -696,6 +750,50 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 							.slice(0, limit),
 					),
 				),
+			listPool: (accountId, provider) =>
+				Ref.get(state).pipe(
+					Effect.map((current) =>
+						[...current.pool.values()].filter(
+							(item) =>
+								item.accountId === accountId && item.provider === provider,
+						),
+					),
+				),
+			savePool: (record) =>
+				Ref.update(state, (current) => ({
+					...current,
+					pool: new Map(current.pool).set(record.poolId, record),
+				})),
+			claimPool: (accountId, provider, imageGeneration, workspaceId, nowMs) =>
+				Ref.modify(state, (current) => {
+					const available = [...current.pool.values()].find(
+						(item) =>
+							item.accountId === accountId &&
+							item.provider === provider &&
+							item.imageGeneration === imageGeneration &&
+							item.state === "available",
+					);
+					if (available === undefined) return [null, current] as const;
+					const claimed: CloudWorkspacePoolRecord = {
+						...available,
+						state: "claimed",
+						claimedWorkspaceId: workspaceId,
+						updatedAtMs: nowMs,
+					};
+					return [
+						claimed,
+						{
+							...current,
+							pool: new Map(current.pool).set(claimed.poolId, claimed),
+						},
+					] as const;
+				}),
+			removePool: (poolId) =>
+				Ref.update(state, (current) => {
+					const pool = new Map(current.pool);
+					pool.delete(poolId);
+					return { ...current, pool };
+				}),
 			createWorkspace: (workspace, launchIntent) =>
 				Ref.modify<MemoryState, CreateCloudWorkspaceOutcome>(
 					state,
@@ -860,6 +958,12 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 											kind: "replay" as const,
 											workspace,
 											receipt: prior,
+											launchIntent:
+												(current.launchIntents.get(input.workspaceId)
+													?.expiresAtMs ?? 0) > input.nowMs
+													? (current.launchIntents.get(input.workspaceId) ??
+														null)
+													: null,
 										}
 									: null,
 								current,
@@ -898,7 +1002,6 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 							runtimeCredentialExpiresAtMs: input.runtimeCredentialExpiresAtMs,
 							generation: input.generation,
 							gatewayEpoch: input.gatewayEpoch,
-							cloudCredentials: input.cloudCredentials,
 							sealedTranscriptKey: input.sealedTranscriptKey,
 							enrolledAtMs: input.nowMs,
 						};
@@ -933,7 +1036,16 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 							updatedAtMs: input.nowMs,
 						};
 						return [
-							{ kind: "created" as const, workspace: updated, receipt },
+							{
+								kind: "created" as const,
+								workspace: updated,
+								receipt,
+								launchIntent:
+									(current.launchIntents.get(input.workspaceId)?.expiresAtMs ??
+										0) > input.nowMs
+										? (current.launchIntents.get(input.workspaceId) ?? null)
+										: null,
+							},
 							{
 								...current,
 								workspaces: new Map(current.workspaces).set(
@@ -944,6 +1056,59 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 						] as const;
 					},
 				),
+			markRuntimeRepositoryReady: (input) =>
+				Ref.modify(state, (current) => {
+					const workspace = current.workspaces.get(input.workspaceId);
+					if (
+						workspace === undefined ||
+						workspace.runtimeCredentialHash !== input.currentCredentialHash ||
+						typeof workspace.requestConfig.runtimeCredentialExpiresAtMs !==
+							"number" ||
+						workspace.requestConfig.runtimeCredentialExpiresAtMs <=
+							input.nowMs ||
+						workspace.state === "deleted"
+					)
+						return [null, current] as const;
+					const timings =
+						(workspace.requestConfig.startupTimings as
+							| Readonly<Record<string, number>>
+							| undefined) ?? {};
+					const launchPending =
+						typeof workspace.requestConfig.sessionHeadVersion !== "number" ||
+						workspace.requestConfig.runtimeSessionRecoveryPending === true;
+					const updated: CloudWorkspaceRecord = {
+						...workspace,
+						runtimeState: "online",
+						state: launchPending ? "setup" : "ready",
+						statusCode: launchPending ? "agent-starting" : "agent-running",
+						requestConfig: {
+							...workspace.requestConfig,
+							runtimeProcessManaged: true,
+							startupTimings: {
+								...timings,
+								connectedAt: timings.connectedAt ?? input.nowMs,
+								repositoryReadyAt: timings.repositoryReadyAt ?? input.nowMs,
+							},
+						},
+						nextActionAtMs: launchPending
+							? input.nowMs + 30_000
+							: input.nextIdleAtMs,
+						runningSinceMs: workspace.runningSinceMs ?? input.nowMs,
+						revision: workspace.revision + 1,
+						updatedAtMs: input.nowMs,
+						lastActivityAtMs: input.nowMs,
+					};
+					return [
+						updated,
+						{
+							...current,
+							workspaces: new Map(current.workspaces).set(
+								input.workspaceId,
+								updated,
+							),
+						},
+					] as const;
+				}),
 			acknowledgeRuntimeBoot: (input) =>
 				Ref.modify(state, (current) => {
 					const workspace = current.workspaces.get(input.workspaceId);
@@ -966,7 +1131,6 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 						return [true, current] as const;
 					const acknowledged: RuntimeBootstrapReceipt = {
 						...receipt,
-						cloudCredentials: [],
 						acknowledgedAtMs: input.nowMs,
 					};
 					const updated: CloudWorkspaceRecord = {
@@ -1267,6 +1431,7 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 					if (
 						previous !== undefined &&
 						(previous.runtimeGeneration > checkpoint.runtimeGeneration ||
+							previous.streamVersion > checkpoint.streamVersion ||
 							(previous.runtimeGeneration === checkpoint.runtimeGeneration &&
 								(previous.streamEpoch !== checkpoint.streamEpoch ||
 									previous.streamVersion >= checkpoint.streamVersion)))
@@ -1292,68 +1457,13 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 						),
 					),
 				})),
-			listCredentials: (accountId) =>
-				Ref.get(state).pipe(
-					Effect.map((current) =>
-						[...current.credentials.values()].filter(
-							(item) => item.accountId === accountId,
-						),
-					),
-				),
-			getCredential: (accountId, kind) =>
-				Ref.get(state).pipe(
-					Effect.map(
-						(current) =>
-							[...current.credentials.values()].find(
-								(item) => item.accountId === accountId && item.kind === kind,
-							) ?? null,
-					),
-				),
-			saveCredential: (credential) =>
-				Ref.modify(state, (current) => {
-					const key = `${credential.accountId}:${credential.kind}`;
-					return [
-						credential,
-						{
-							...current,
-							credentials: new Map(current.credentials).set(key, credential),
-						},
-					] as const;
-				}),
-			disconnectCredential: (accountId, kind, nowMs) =>
-				Ref.modify(state, (current) => {
-					const key = `${accountId}:${kind}`;
-					const existing = current.credentials.get(key);
-					if (existing === undefined) return [null, current] as const;
-					const updated: CloudCredentialRecord = {
-						...existing,
-						state: "disconnected",
-						encryptedPayload: undefined,
-						credentialVersion: existing.credentialVersion + 1,
-						updatedAtMs: nowMs,
-						disconnectedAtMs: nowMs,
-					};
-					return [
-						updated,
-						{
-							...current,
-							credentials: new Map(current.credentials).set(key, updated),
-						},
-					] as const;
-				}),
-			credentialEpoch: (accountId) =>
-				Ref.get(state).pipe(
-					Effect.map((current) =>
-						[...current.credentials.values()]
-							.filter(
-								(item) =>
-									item.accountId === accountId && item.state === "connected",
-							)
-							.reduce((sum, item) => sum + item.credentialVersion, 0),
-					),
-				),
 			deleteAccountData: (accountId) =>
 				Ref.update(state, (current) => {
+					const githubInstallations = new Map(
+						[...current.githubInstallations].filter(
+							([, installation]) => installation.accountId !== accountId,
+						),
+					);
 					const projects = new Map(
 						[...current.projects].filter(
 							([, project]) => project.accountId !== accountId,
@@ -1366,11 +1476,6 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 					);
 					const workspaces = new Map(
 						[...current.workspaces].filter(
-							([, item]) => item.accountId !== accountId,
-						),
-					);
-					const credentials = new Map(
-						[...current.credentials].filter(
 							([, item]) => item.accountId !== accountId,
 						),
 					);
@@ -1391,10 +1496,10 @@ export const CloudWorkspaceStoreMemory = Layer.effect(
 					);
 					return {
 						...current,
+						githubInstallations,
 						projects,
 						builds,
 						workspaces,
-						credentials,
 						launchIntents,
 						runtimeSummaries,
 						transcriptCheckpoints,
@@ -1419,6 +1524,20 @@ const optionalNumber = (value: unknown): number | undefined =>
 	value == null ? undefined : numberValue(value);
 const optionalString = (value: unknown): string | undefined =>
 	typeof value === "string" ? value : undefined;
+const githubInstallationFromRow = (
+	row: Row,
+): CloudGithubInstallationRecord => ({
+	accountId: String(row.account_id),
+	installationId: numberValue(row.installation_id),
+	githubAccountId: numberValue(row.github_account_id),
+	accountLogin: String(row.account_login),
+	accountType: row.account_type as "User" | "Organization",
+	avatarUrl: optionalString(row.avatar_url),
+	repositorySelection: row.repository_selection as "all" | "selected",
+	suspended: row.suspended === true,
+	createdAtMs: numberValue(row.created_at),
+	updatedAtMs: numberValue(row.updated_at),
+});
 const projectFromRow = (row: Row): CloudProjectRecord => ({
 	projectId: String(row.project_id),
 	accountId: String(row.account_id),
@@ -1432,6 +1551,7 @@ const projectFromRow = (row: Row): CloudProjectRecord => ({
 	secretBindings: (row.secret_bindings ?? []) as string[],
 	configurationDigest: String(row.configuration_digest),
 	state: row.state as CloudProjectState,
+	included: row.included !== false,
 	lastErrorCode: optionalString(row.last_error_code),
 	idempotencyKey: String(row.idempotency_key),
 	createdAtMs: numberValue(row.created_at),
@@ -1447,6 +1567,8 @@ const buildFromRow = (row: Row): CloudProjectBuildRecord => ({
 	sourceCommit: optionalString(row.source_commit),
 	templateVersion: String(row.template_version),
 	configurationDigest: String(row.configuration_digest),
+	settings: (row.settings ?? {}) as Record<string, unknown>,
+	logText: optionalString(row.log_text),
 	state: row.state as CloudProjectBuildState,
 	lastErrorCode: optionalString(row.last_error_code),
 	idempotencyKey: String(row.idempotency_key),
@@ -1454,6 +1576,17 @@ const buildFromRow = (row: Row): CloudProjectBuildRecord => ({
 	leaseOwner: optionalString(row.lease_owner),
 	leaseExpiresAtMs: optionalNumber(row.lease_expires_at),
 	revision: numberValue(row.revision),
+	createdAtMs: numberValue(row.created_at),
+	updatedAtMs: numberValue(row.updated_at),
+});
+const poolFromRow = (row: Row): CloudWorkspacePoolRecord => ({
+	poolId: String(row.pool_id),
+	accountId: String(row.account_id),
+	provider: String(row.provider),
+	imageGeneration: String(row.image_generation),
+	providerSandboxId: String(row.provider_sandbox_id),
+	state: row.state as CloudWorkspacePoolRecord["state"],
+	claimedWorkspaceId: optionalString(row.claimed_workspace_id),
 	createdAtMs: numberValue(row.created_at),
 	updatedAtMs: numberValue(row.updated_at),
 });
@@ -1477,7 +1610,6 @@ const workspaceFromRow = (row: Row): CloudWorkspaceRecord => ({
 	state: row.state as CloudWorkspaceState,
 	desiredState: row.desired_state as CloudWorkspaceDesiredState,
 	statusCode: String(row.status_code),
-	credentialEpoch: numberValue(row.credential_epoch),
 	wrappedTranscriptKey: optionalString(row.wrapped_transcript_key),
 	archiveRequestedAtMs: optionalNumber(row.archive_requested_at),
 	archiveDeleteAtMs: optionalNumber(row.archive_delete_at),
@@ -1496,6 +1628,22 @@ const workspaceFromRow = (row: Row): CloudWorkspaceRecord => ({
 	runningSinceMs: optionalNumber(row.running_since),
 	deletedAtMs: optionalNumber(row.deleted_at),
 });
+const launchIntentFromRow = (
+	row: Row | null | undefined,
+): CloudWorkspaceLaunchIntentRecord | null =>
+	row === null || row === undefined
+		? null
+		: {
+				workspaceId: String(row.workspace_id),
+				accountId: String(row.account_id),
+				chatId: String(row.chat_id),
+				sessionId: String(row.session_id),
+				turnId: String(row.turn_id),
+				commandId: String(row.command_id),
+				ciphertext: String(row.ciphertext),
+				expiresAtMs: numberValue(row.expires_at),
+				createdAtMs: numberValue(row.created_at),
+			};
 
 const runtimeSummaryFromRow = (
 	row: Row,
@@ -1535,19 +1683,19 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 			effect.pipe(Effect.orDie);
 		const saveProject = (p: CloudProjectRecord) =>
 			orDie(
-				sql`UPDATE relay_cloud_projects SET repository_url=${p.repositoryUrl}, display_name=${p.displayName}, default_branch=${p.defaultBranch}, visibility=${p.visibility}, cloud_environment=${JSON.stringify(p.cloudEnvironment)}::jsonb, secret_bindings=${JSON.stringify(p.secretBindings)}::jsonb, configuration_digest=${p.configurationDigest}, state=${p.state}, last_error_code=${p.lastErrorCode ?? null}, updated_at=${p.updatedAtMs} WHERE project_id=${p.projectId}`.pipe(
+				sql`UPDATE relay_cloud_projects SET repository_url=${p.repositoryUrl}, display_name=${p.displayName}, default_branch=${p.defaultBranch}, visibility=${p.visibility}, cloud_environment=${JSON.stringify(p.cloudEnvironment)}::jsonb, secret_bindings=${JSON.stringify(p.secretBindings)}::jsonb, configuration_digest=${p.configurationDigest}, state=${p.state}, included=${p.included !== false}, last_error_code=${p.lastErrorCode ?? null}, updated_at=${p.updatedAtMs} WHERE project_id=${p.projectId}`.pipe(
 					Effect.asVoid,
 				),
 			);
 		const saveBuild = (b: CloudProjectBuildRecord) =>
 			orDie(
-				sql`UPDATE relay_cloud_project_builds SET provider_sandbox_id=${b.providerSandboxId ?? null}, snapshot_id=${b.snapshotId ?? null}, source_commit=${b.sourceCommit ?? null}, state=${b.state}, last_error_code=${b.lastErrorCode ?? null}, next_action_at=${b.nextActionAtMs}, lease_owner=NULL, lease_expires_at=NULL, revision=${b.revision}, updated_at=${b.updatedAtMs} WHERE build_id=${b.buildId}`.pipe(
+				sql`UPDATE relay_cloud_project_builds SET provider_sandbox_id=${b.providerSandboxId ?? null}, snapshot_id=${b.snapshotId ?? null}, source_commit=${b.sourceCommit ?? null}, settings=${JSON.stringify(b.settings ?? {})}::jsonb, log_text=${b.logText ?? null}, state=${b.state}, last_error_code=${b.lastErrorCode ?? null}, next_action_at=${b.nextActionAtMs}, lease_owner=NULL, lease_expires_at=NULL, revision=${b.revision}, updated_at=${b.updatedAtMs} WHERE build_id=${b.buildId}`.pipe(
 					Effect.asVoid,
 				),
 			);
 		const saveWorkspace = (w: CloudWorkspaceRecord) =>
 			orDie(
-				sql`UPDATE relay_cloud_workspaces SET provider_sandbox_id=${w.providerSandboxId ?? null}, runtime_boot_token_hash=${w.runtimeBootTokenHash ?? null}, runtime_boot_token_expires_at=${w.runtimeBootTokenExpiresAtMs ?? null}, runtime_credential_hash=${w.runtimeCredentialHash ?? null}, runtime_state=${w.runtimeState}, state=${w.state}, desired_state=${w.desiredState}, status_code=${w.statusCode}, credential_epoch=${w.credentialEpoch}, wrapped_transcript_key=${w.wrappedTranscriptKey ?? null}, archive_requested_at=${w.archiveRequestedAtMs ?? null}, archive_delete_at=${w.archiveDeleteAtMs ?? null}, deletion_tombstone_expires_at=${w.deletionTombstoneExpiresAtMs ?? null}, request_config=${JSON.stringify(w.requestConfig)}::jsonb, next_action_at=${w.nextActionAtMs}, revision=${w.revision}, updated_at=${w.updatedAtMs}, last_activity_at=${w.lastActivityAtMs}, running_since=${w.runningSinceMs ?? null}, deleted_at=${w.deletedAtMs ?? null} WHERE workspace_id=${w.workspaceId} AND (revision < ${w.revision} OR (revision = ${w.revision} AND updated_at < ${w.updatedAtMs}))`.pipe(
+				sql`UPDATE relay_cloud_workspaces SET provider_sandbox_id=${w.providerSandboxId ?? null}, runtime_boot_token_hash=${w.runtimeBootTokenHash ?? null}, runtime_boot_token_expires_at=${w.runtimeBootTokenExpiresAtMs ?? null}, runtime_credential_hash=${w.runtimeCredentialHash ?? null}, runtime_state=${w.runtimeState}, state=${w.state}, desired_state=${w.desiredState}, status_code=${w.statusCode}, wrapped_transcript_key=${w.wrappedTranscriptKey ?? null}, archive_requested_at=${w.archiveRequestedAtMs ?? null}, archive_delete_at=${w.archiveDeleteAtMs ?? null}, deletion_tombstone_expires_at=${w.deletionTombstoneExpiresAtMs ?? null}, request_config=${JSON.stringify(w.requestConfig)}::jsonb, next_action_at=${w.nextActionAtMs}, revision=${w.revision}, updated_at=${w.updatedAtMs}, last_activity_at=${w.lastActivityAtMs}, running_since=${w.runningSinceMs ?? null}, deleted_at=${w.deletedAtMs ?? null} WHERE workspace_id=${w.workspaceId} AND (revision < ${w.revision} OR (revision = ${w.revision} AND updated_at < ${w.updatedAtMs}))`.pipe(
 					Effect.asVoid,
 				),
 			);
@@ -1559,27 +1707,47 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 		}) => {
 			const w = input.workspace;
 			return orDie(
-				sql`UPDATE relay_cloud_workspaces SET provider_sandbox_id=${w.providerSandboxId ?? null}, runtime_boot_token_hash=${w.runtimeBootTokenHash ?? null}, runtime_boot_token_expires_at=${w.runtimeBootTokenExpiresAtMs ?? null}, runtime_credential_hash=${w.runtimeCredentialHash ?? null}, runtime_state=${w.runtimeState}, state=${w.state}, desired_state=${w.desiredState}, status_code=${w.statusCode}, credential_epoch=${w.credentialEpoch}, wrapped_transcript_key=${w.wrappedTranscriptKey ?? null}, archive_requested_at=${w.archiveRequestedAtMs ?? null}, archive_delete_at=${w.archiveDeleteAtMs ?? null}, deletion_tombstone_expires_at=${w.deletionTombstoneExpiresAtMs ?? null}, request_config=${JSON.stringify(w.requestConfig)}::jsonb, next_action_at=${w.nextActionAtMs}, revision=${w.revision}, updated_at=${w.updatedAtMs}, last_activity_at=${w.lastActivityAtMs}, running_since=${w.runningSinceMs ?? null}, deleted_at=${w.deletedAtMs ?? null} WHERE workspace_id=${w.workspaceId} AND lease_owner=${input.leaseOwner} AND revision=${input.expectedRevision} AND updated_at=${input.expectedUpdatedAtMs} RETURNING workspace_id`.pipe(
+				sql`UPDATE relay_cloud_workspaces SET provider_sandbox_id=${w.providerSandboxId ?? null}, runtime_boot_token_hash=${w.runtimeBootTokenHash ?? null}, runtime_boot_token_expires_at=${w.runtimeBootTokenExpiresAtMs ?? null}, runtime_credential_hash=${w.runtimeCredentialHash ?? null}, runtime_state=${w.runtimeState}, state=${w.state}, desired_state=${w.desiredState}, status_code=${w.statusCode}, wrapped_transcript_key=${w.wrappedTranscriptKey ?? null}, archive_requested_at=${w.archiveRequestedAtMs ?? null}, archive_delete_at=${w.archiveDeleteAtMs ?? null}, deletion_tombstone_expires_at=${w.deletionTombstoneExpiresAtMs ?? null}, request_config=${JSON.stringify(w.requestConfig)}::jsonb, next_action_at=${w.nextActionAtMs}, revision=${w.revision}, updated_at=${w.updatedAtMs}, last_activity_at=${w.lastActivityAtMs}, running_since=${w.runningSinceMs ?? null}, deleted_at=${w.deletedAtMs ?? null} WHERE workspace_id=${w.workspaceId} AND lease_owner=${input.leaseOwner} AND revision=${input.expectedRevision} AND updated_at=${input.expectedUpdatedAtMs} RETURNING workspace_id`.pipe(
 					Effect.map((rows) => rows.length === 1),
 				),
 			);
 		};
 		return CloudWorkspaceStore.of({
+			listGithubInstallations: (accountId) =>
+				orDie(
+					sql`SELECT * FROM relay_cloud_github_installations WHERE account_id=${accountId} ORDER BY created_at`.pipe(
+						Effect.map((rows) =>
+							rows.map((row) => githubInstallationFromRow(row as Row)),
+						),
+					),
+				),
+			saveGithubInstallation: (installation) =>
+				orDie(
+					sql`INSERT INTO relay_cloud_github_installations (account_id, installation_id, github_account_id, account_login, account_type, avatar_url, repository_selection, suspended, created_at, updated_at) VALUES (${installation.accountId}, ${installation.installationId}, ${installation.githubAccountId}, ${installation.accountLogin}, ${installation.accountType}, ${installation.avatarUrl ?? null}, ${installation.repositorySelection}, ${installation.suspended}, ${installation.createdAtMs}, ${installation.updatedAtMs}) ON CONFLICT (account_id, installation_id) DO UPDATE SET github_account_id=EXCLUDED.github_account_id, account_login=EXCLUDED.account_login, account_type=EXCLUDED.account_type, avatar_url=EXCLUDED.avatar_url, repository_selection=EXCLUDED.repository_selection, suspended=EXCLUDED.suspended, updated_at=EXCLUDED.updated_at`.pipe(
+						Effect.asVoid,
+					),
+				),
+			removeGithubInstallation: (accountId, installationId) =>
+				orDie(
+					sql`DELETE FROM relay_cloud_github_installations WHERE account_id=${accountId} AND installation_id=${installationId}`.pipe(
+						Effect.asVoid,
+					),
+				),
 			connectProject: (p) =>
 				orDie(
 					Effect.gen(function* () {
 						yield* sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${p.accountId}:${p.repositoryIdentity}`}, 0))`;
 						const retry =
-							yield* sql`SELECT * FROM relay_cloud_projects WHERE account_id=${p.accountId} AND idempotency_key=${p.idempotencyKey} LIMIT 1`;
+							yield* sql`SELECT * FROM relay_cloud_projects WHERE account_id=${p.accountId} AND idempotency_key=${p.idempotencyKey} AND included=true LIMIT 1`;
 						if (retry[0]) return projectFromRow(retry[0] as Row);
 						const rows =
-							yield* sql`INSERT INTO relay_cloud_projects (project_id, account_id, repository_identity, repository_url, display_name, default_branch, visibility, git_connection_kind, cloud_environment, secret_bindings, configuration_digest, state, last_error_code, idempotency_key, created_at, updated_at) VALUES (${p.projectId}, ${p.accountId}, ${p.repositoryIdentity}, ${p.repositoryUrl}, ${p.displayName}, ${p.defaultBranch}, ${p.visibility}, ${p.gitConnectionKind}, ${JSON.stringify(p.cloudEnvironment)}::jsonb, ${JSON.stringify(p.secretBindings)}::jsonb, ${p.configurationDigest}, ${p.state}, ${p.lastErrorCode ?? null}, ${p.idempotencyKey}, ${p.createdAtMs}, ${p.updatedAtMs}) ON CONFLICT (account_id, repository_identity) DO UPDATE SET repository_url=EXCLUDED.repository_url, display_name=EXCLUDED.display_name, default_branch=EXCLUDED.default_branch, visibility=EXCLUDED.visibility, cloud_environment=EXCLUDED.cloud_environment, secret_bindings=EXCLUDED.secret_bindings, configuration_digest=EXCLUDED.configuration_digest, state='connected', last_error_code=NULL, idempotency_key=EXCLUDED.idempotency_key, updated_at=EXCLUDED.updated_at RETURNING *`;
+							yield* sql`INSERT INTO relay_cloud_projects (project_id, account_id, repository_identity, repository_url, display_name, default_branch, visibility, git_connection_kind, cloud_environment, secret_bindings, configuration_digest, state, included, last_error_code, idempotency_key, created_at, updated_at) VALUES (${p.projectId}, ${p.accountId}, ${p.repositoryIdentity}, ${p.repositoryUrl}, ${p.displayName}, ${p.defaultBranch}, ${p.visibility}, ${p.gitConnectionKind}, ${JSON.stringify(p.cloudEnvironment)}::jsonb, ${JSON.stringify(p.secretBindings)}::jsonb, ${p.configurationDigest}, ${p.state}, true, ${p.lastErrorCode ?? null}, ${p.idempotencyKey}, ${p.createdAtMs}, ${p.updatedAtMs}) ON CONFLICT (account_id, repository_identity) DO UPDATE SET repository_url=EXCLUDED.repository_url, display_name=EXCLUDED.display_name, default_branch=EXCLUDED.default_branch, visibility=EXCLUDED.visibility, cloud_environment=EXCLUDED.cloud_environment, secret_bindings=EXCLUDED.secret_bindings, configuration_digest=EXCLUDED.configuration_digest, state='connected', included=true, last_error_code=NULL, idempotency_key=EXCLUDED.idempotency_key, updated_at=EXCLUDED.updated_at RETURNING *`;
 						return projectFromRow(rows[0] as Row);
 					}).pipe(sql.withTransaction),
 				),
 			listProjects: (accountId) =>
 				orDie(
-					sql`SELECT * FROM relay_cloud_projects WHERE account_id=${accountId} ORDER BY created_at`.pipe(
+					sql`SELECT * FROM relay_cloud_projects WHERE account_id=${accountId} AND included=true ORDER BY created_at`.pipe(
 						Effect.map((rows) => rows.map((row) => projectFromRow(row as Row))),
 					),
 				),
@@ -1591,10 +1759,18 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 						),
 					),
 				),
+			removeProject: (id, nowMs) =>
+				orDie(
+					sql`UPDATE relay_cloud_projects SET included=false, updated_at=${nowMs} WHERE project_id=${id} RETURNING *`.pipe(
+						Effect.map((rows) =>
+							rows[0] ? projectFromRow(rows[0] as Row) : null,
+						),
+					),
+				),
 			saveProject,
 			createBuild: (b) =>
 				orDie(
-					sql`INSERT INTO relay_cloud_project_builds (build_id, project_id, account_id, provider, provider_sandbox_id, snapshot_id, source_commit, template_version, configuration_digest, state, last_error_code, idempotency_key, next_action_at, revision, created_at, updated_at) VALUES (${b.buildId}, ${b.projectId}, ${b.accountId}, ${b.provider}, ${b.providerSandboxId ?? null}, ${b.snapshotId ?? null}, ${b.sourceCommit ?? null}, ${b.templateVersion}, ${b.configurationDigest}, ${b.state}, ${b.lastErrorCode ?? null}, ${b.idempotencyKey}, ${b.nextActionAtMs}, ${b.revision}, ${b.createdAtMs}, ${b.updatedAtMs}) ON CONFLICT DO NOTHING RETURNING *`.pipe(
+					sql`INSERT INTO relay_cloud_project_builds (build_id, project_id, account_id, provider, provider_sandbox_id, snapshot_id, source_commit, template_version, configuration_digest, settings, log_text, state, last_error_code, idempotency_key, next_action_at, revision, created_at, updated_at) VALUES (${b.buildId}, ${b.projectId}, ${b.accountId}, ${b.provider}, ${b.providerSandboxId ?? null}, ${b.snapshotId ?? null}, ${b.sourceCommit ?? null}, ${b.templateVersion}, ${b.configurationDigest}, ${JSON.stringify(b.settings ?? {})}::jsonb, ${b.logText ?? null}, ${b.state}, ${b.lastErrorCode ?? null}, ${b.idempotencyKey}, ${b.nextActionAtMs}, ${b.revision}, ${b.createdAtMs}, ${b.updatedAtMs}) ON CONFLICT DO NOTHING RETURNING *`.pipe(
 						Effect.flatMap((rows) =>
 							rows.length > 0
 								? Effect.succeed(buildFromRow(rows[0] as Row))
@@ -1655,6 +1831,32 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 						Effect.map((rows) => rows.map((row) => buildFromRow(row as Row))),
 					),
 				),
+			listPool: (accountId, provider) =>
+				orDie(
+					sql`SELECT * FROM relay_cloud_workspace_pool WHERE account_id=${accountId} AND provider=${provider} ORDER BY created_at`.pipe(
+						Effect.map((rows) => rows.map((row) => poolFromRow(row as Row))),
+					),
+				),
+			savePool: (record) =>
+				orDie(
+					sql`INSERT INTO relay_cloud_workspace_pool (pool_id, account_id, provider, image_generation, provider_sandbox_id, state, claimed_workspace_id, created_at, updated_at) VALUES (${record.poolId}, ${record.accountId}, ${record.provider}, ${record.imageGeneration}, ${record.providerSandboxId}, ${record.state}, ${record.claimedWorkspaceId ?? null}, ${record.createdAtMs}, ${record.updatedAtMs}) ON CONFLICT (pool_id) DO UPDATE SET state=EXCLUDED.state, claimed_workspace_id=EXCLUDED.claimed_workspace_id, updated_at=EXCLUDED.updated_at`.pipe(
+						Effect.asVoid,
+					),
+				),
+			claimPool: (accountId, provider, imageGeneration, workspaceId, nowMs) =>
+				orDie(
+					sql`WITH candidate AS (SELECT pool_id FROM relay_cloud_workspace_pool WHERE account_id=${accountId} AND provider=${provider} AND image_generation=${imageGeneration} AND state='available' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) UPDATE relay_cloud_workspace_pool AS pool SET state='claimed', claimed_workspace_id=${workspaceId}, updated_at=${nowMs} FROM candidate WHERE pool.pool_id=candidate.pool_id RETURNING pool.*`.pipe(
+						Effect.map((rows) =>
+							rows[0] ? poolFromRow(rows[0] as Row) : null,
+						),
+					),
+				),
+			removePool: (poolId) =>
+				orDie(
+					sql`DELETE FROM relay_cloud_workspace_pool WHERE pool_id=${poolId}`.pipe(
+						Effect.asVoid,
+					),
+				),
 			createWorkspace: (w, launchIntent) =>
 				orDie(
 					Effect.gen(function* () {
@@ -1676,7 +1878,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							} satisfies CreateCloudWorkspaceOutcome;
 						}
 						const created =
-							yield* sql`INSERT INTO relay_cloud_workspaces (workspace_id, account_id, project_id, build_id, provider, runtime_state, chat_id, initial_session_id, branch, base_ref, state, desired_state, status_code, credential_epoch, wrapped_transcript_key, idempotency_key, request_config, next_action_at, revision, created_at, updated_at, last_activity_at) VALUES (${w.workspaceId}, ${w.accountId}, ${w.projectId}, ${w.buildId}, ${w.provider}, ${w.runtimeState}, ${w.chatId}, ${w.initialSessionId}, ${w.branch}, ${w.baseRef}, ${w.state}, ${w.desiredState}, ${w.statusCode}, ${w.credentialEpoch}, ${w.wrappedTranscriptKey ?? null}, ${w.idempotencyKey}, ${JSON.stringify(w.requestConfig)}::jsonb, ${w.nextActionAtMs}, ${w.revision}, ${w.createdAtMs}, ${w.updatedAtMs}, ${w.lastActivityAtMs}) RETURNING *`;
+							yield* sql`INSERT INTO relay_cloud_workspaces (workspace_id, account_id, project_id, build_id, provider, runtime_state, chat_id, initial_session_id, branch, base_ref, state, desired_state, status_code, wrapped_transcript_key, idempotency_key, request_config, next_action_at, revision, created_at, updated_at, last_activity_at) VALUES (${w.workspaceId}, ${w.accountId}, ${w.projectId}, ${w.buildId}, ${w.provider}, ${w.runtimeState}, ${w.chatId}, ${w.initialSessionId}, ${w.branch}, ${w.baseRef}, ${w.state}, ${w.desiredState}, ${w.statusCode}, ${w.wrappedTranscriptKey ?? null}, ${w.idempotencyKey}, ${JSON.stringify(w.requestConfig)}::jsonb, ${w.nextActionAtMs}, ${w.revision}, ${w.createdAtMs}, ${w.updatedAtMs}, ${w.lastActivityAtMs}) RETURNING *`;
 						yield* sql`INSERT INTO relay_cloud_workspace_launch_intents (workspace_id, account_id, chat_id, session_id, turn_id, command_id, ciphertext, expires_at, created_at) VALUES (${launchIntent.workspaceId}, ${launchIntent.accountId}, ${launchIntent.chatId}, ${launchIntent.sessionId}, ${launchIntent.turnId}, ${launchIntent.commandId}, ${launchIntent.ciphertext}, ${launchIntent.expiresAtMs}, ${launchIntent.createdAtMs})`;
 						return {
 							kind: "created",
@@ -1736,30 +1938,34 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 				),
 			getLaunchIntent: (workspaceId, nowMs) =>
 				orDie(
-					Effect.gen(function* () {
-						const expired =
-							yield* sql`DELETE FROM relay_cloud_workspace_launch_intents WHERE workspace_id=${workspaceId} AND expires_at <= ${nowMs} RETURNING workspace_id`;
-						if (expired.length > 0) {
-							yield* sql`UPDATE relay_cloud_workspaces SET state='failed', status_code='launch-intent-expired', revision=revision+1, updated_at=${nowMs} WHERE workspace_id=${workspaceId} AND state <> 'deleted'`;
-							return null;
-						}
-						const rows =
-							yield* sql`SELECT * FROM relay_cloud_workspace_launch_intents WHERE workspace_id=${workspaceId}`;
-						const row = rows[0];
-						return row === undefined
-							? null
-							: {
-									workspaceId: String(row.workspace_id),
-									accountId: String(row.account_id),
-									chatId: String(row.chat_id),
-									sessionId: String(row.session_id),
-									turnId: String(row.turn_id),
-									commandId: String(row.command_id),
-									ciphertext: String(row.ciphertext),
-									expiresAtMs: numberValue(row.expires_at),
-									createdAtMs: numberValue(row.created_at),
-								};
-					}).pipe(sql.withTransaction),
+					sql`WITH expired AS (
+						DELETE FROM relay_cloud_workspace_launch_intents
+						WHERE workspace_id=${workspaceId} AND expires_at <= ${nowMs}
+						RETURNING workspace_id
+					), mark_expired AS (
+						UPDATE relay_cloud_workspaces
+						SET state='failed', status_code='launch-intent-expired', revision=revision+1, updated_at=${nowMs}
+						WHERE workspace_id IN (SELECT workspace_id FROM expired) AND state <> 'deleted'
+					)
+					SELECT * FROM relay_cloud_workspace_launch_intents
+					WHERE workspace_id=${workspaceId} AND expires_at > ${nowMs}`.pipe(
+						Effect.map((rows) => {
+							const row = rows[0];
+							return row === undefined
+								? null
+								: {
+										workspaceId: String(row.workspace_id),
+										accountId: String(row.account_id),
+										chatId: String(row.chat_id),
+										sessionId: String(row.session_id),
+										turnId: String(row.turn_id),
+										commandId: String(row.command_id),
+										ciphertext: String(row.ciphertext),
+										expiresAtMs: numberValue(row.expires_at),
+										createdAtMs: numberValue(row.created_at),
+									};
+						}),
+					),
 				),
 			deleteLaunchIntent: (workspaceId) =>
 				orDie(
@@ -1796,53 +2002,6 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 			enrollRuntimeBoot: (input) =>
 				orDie(
 					Effect.gen(function* () {
-						yield* sql`SELECT pg_advisory_xact_lock(hashtextextended(${`runtime-bootstrap:${input.workspaceId}`}, 0))`;
-						const rows =
-							yield* sql`SELECT * FROM relay_cloud_workspaces WHERE workspace_id=${input.workspaceId} FOR UPDATE`;
-						const row = rows[0];
-						if (row === undefined) return null;
-						const workspace = workspaceFromRow(row as Row);
-						const prior = runtimeBootstrapReceiptFromConfig(
-							workspace.requestConfig,
-						);
-						if (
-							prior !== null &&
-							workspace.runtimeBootTokenHash === input.bootTokenHash
-						) {
-							const matches =
-								prior.bootTokenHash === input.bootTokenHash &&
-								prior.credentialKeyThumbprint ===
-									input.credentialKeyThumbprint &&
-								prior.signingKeyThumbprint === input.signingKeyThumbprint &&
-								prior.generation === input.generation &&
-								prior.gatewayEpoch === input.gatewayEpoch;
-							return matches &&
-								(workspace.runtimeBootTokenExpiresAtMs ?? 0) > input.nowMs &&
-								workspace.desiredState === "ready" &&
-								workspace.providerSandboxId !== undefined &&
-								workspace.state !== "deleted"
-								? { kind: "replay" as const, workspace, receipt: prior }
-								: null;
-						}
-						const currentGeneration = workspaceRuntimeGeneration(workspace);
-						const currentGatewayEpoch =
-							typeof workspace.requestConfig.gatewayEpoch === "number"
-								? workspace.requestConfig.gatewayEpoch
-								: currentGeneration;
-						if (
-							workspace.runtimeBootTokenHash !== input.bootTokenHash ||
-							(workspace.runtimeBootTokenExpiresAtMs ?? 0) <= input.nowMs ||
-							workspace.desiredState !== "ready" ||
-							workspace.providerSandboxId === undefined ||
-							workspace.state === "deleted" ||
-							input.generation !== currentGeneration ||
-							input.gatewayEpoch !== currentGatewayEpoch
-						)
-							return null;
-						const timings =
-							(workspace.requestConfig.startupTimings as
-								| Readonly<Record<string, number>>
-								| undefined) ?? {};
 						const receipt: RuntimeBootstrapReceipt = {
 							workspaceId: input.workspaceId,
 							bootTokenHash: input.bootTokenHash,
@@ -1853,12 +2012,10 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							runtimeCredentialExpiresAtMs: input.runtimeCredentialExpiresAtMs,
 							generation: input.generation,
 							gatewayEpoch: input.gatewayEpoch,
-							cloudCredentials: input.cloudCredentials,
 							sealedTranscriptKey: input.sealedTranscriptKey,
 							enrolledAtMs: input.nowMs,
 						};
-						const nextConfig = {
-							...workspace.requestConfig,
+						const configPatch = {
 							runtimeSigningPublicJwk: input.signingPublicJwk,
 							runtimeSigningKeyThumbprint: input.signingKeyThumbprint,
 							runtimeCredentialKeyThumbprint: input.credentialKeyThumbprint,
@@ -1866,25 +2023,114 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							gatewayEpoch: input.gatewayEpoch,
 							runtimeCredentialExpiresAtMs: input.runtimeCredentialExpiresAtMs,
 							runtimeBootstrapReceipt: receipt,
-							startupTimings: {
-								...timings,
-								enrolledAt: input.nowMs,
-								runtimeReadyAt: input.nowMs,
-								enrollmentDurationMs:
-									timings.allocatedAt === undefined
-										? undefined
-										: input.nowMs - timings.allocatedAt,
-							},
 						};
-						const updated =
-							yield* sql`UPDATE relay_cloud_workspaces SET runtime_credential_hash=${input.runtimeCredentialHash}, runtime_state='connecting', state='setup', status_code='runtime-authenticating', request_config=${JSON.stringify(nextConfig)}::jsonb, next_action_at=${input.nowMs + 30_000}, revision=revision+1, updated_at=${input.nowMs} WHERE workspace_id=${input.workspaceId} RETURNING *`;
-						const enrolled = workspaceFromRow(updated[0] as Row);
+						const rows = yield* sql`WITH current AS MATERIALIZED (
+							SELECT * FROM relay_cloud_workspaces
+							WHERE workspace_id=${input.workspaceId}
+							FOR UPDATE
+						), updated AS (
+							UPDATE relay_cloud_workspaces AS target
+							SET runtime_credential_hash=${input.runtimeCredentialHash},
+								runtime_state='connecting',
+								state='setup',
+								status_code='runtime-authenticating',
+								request_config=current.request_config || ${JSON.stringify(configPatch)}::jsonb || jsonb_build_object(
+									'startupTimings',
+									COALESCE(current.request_config->'startupTimings', '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+										'enrolledAt', ${input.nowMs}::bigint,
+										'runtimeReadyAt', ${input.nowMs}::bigint,
+										'enrollmentDurationMs', CASE
+											WHEN jsonb_typeof(current.request_config #> '{startupTimings,allocatedAt}') = 'number'
+											THEN ${input.nowMs}::bigint - (current.request_config #>> '{startupTimings,allocatedAt}')::bigint
+											ELSE NULL
+										END
+									))
+								),
+								next_action_at=${input.nowMs + 30_000},
+								revision=current.revision+1,
+								updated_at=${input.nowMs}
+							FROM current
+							WHERE target.workspace_id=current.workspace_id
+								AND current.runtime_boot_token_hash=${input.bootTokenHash}
+								AND current.runtime_boot_token_expires_at > ${input.nowMs}
+								AND current.desired_state='ready'
+								AND current.provider_sandbox_id IS NOT NULL
+								AND current.state <> 'deleted'
+								AND COALESCE((current.request_config->>'runtimeGeneration')::bigint, 0)=${input.generation}
+								AND COALESCE((current.request_config->>'gatewayEpoch')::bigint, COALESCE((current.request_config->>'runtimeGeneration')::bigint, 0))=${input.gatewayEpoch}
+								AND current.request_config->'runtimeBootstrapReceipt' IS NULL
+							RETURNING target.*, 'created'::text AS enrollment_kind
+						), replayed AS (
+							SELECT current.*, 'replay'::text AS enrollment_kind
+							FROM current
+							WHERE NOT EXISTS (SELECT 1 FROM updated)
+								AND current.runtime_boot_token_hash=${input.bootTokenHash}
+								AND current.runtime_boot_token_expires_at > ${input.nowMs}
+								AND current.desired_state='ready'
+								AND current.provider_sandbox_id IS NOT NULL
+								AND current.state <> 'deleted'
+								AND current.request_config #>> '{runtimeBootstrapReceipt,bootTokenHash}'=${input.bootTokenHash}
+								AND current.request_config #>> '{runtimeBootstrapReceipt,credentialKeyThumbprint}'=${input.credentialKeyThumbprint}
+								AND current.request_config #>> '{runtimeBootstrapReceipt,signingKeyThumbprint}'=${input.signingKeyThumbprint}
+								AND (current.request_config #>> '{runtimeBootstrapReceipt,generation}')::bigint=${input.generation}
+								AND (current.request_config #>> '{runtimeBootstrapReceipt,gatewayEpoch}')::bigint=${input.gatewayEpoch}
+								AND current.request_config #>> '{runtimeBootstrapReceipt,runtimeCredentialHash}'=${input.runtimeCredentialHash}
+						)
+						SELECT enrollment.*, to_jsonb(intent) AS launch_intent
+						FROM (
+							SELECT * FROM updated
+							UNION ALL
+							SELECT * FROM replayed
+						) AS enrollment
+						LEFT JOIN relay_cloud_workspace_launch_intents AS intent
+							ON intent.workspace_id=enrollment.workspace_id AND intent.expires_at > ${input.nowMs}`;
+						const row = rows[0];
+						if (row === undefined) return null;
+						const enrolled = workspaceFromRow(row as Row);
+						const enrolledReceipt = runtimeBootstrapReceiptFromConfig(
+							enrolled.requestConfig,
+						);
+						if (enrolledReceipt === null) return null;
 						return {
-							kind: "created" as const,
+							kind:
+								row.enrollment_kind === "replay"
+									? ("replay" as const)
+									: ("created" as const),
 							workspace: enrolled,
-							receipt,
+							receipt: enrolledReceipt,
+							launchIntent: launchIntentFromRow(
+								(row.launch_intent as Row | null | undefined) ?? null,
+							),
 						};
-					}).pipe(sql.withTransaction),
+					}),
+				),
+			markRuntimeRepositoryReady: (input) =>
+				orDie(
+					sql`UPDATE relay_cloud_workspaces
+					SET runtime_state='online',
+						state=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' AND COALESCE((request_config->>'runtimeSessionRecoveryPending')::boolean, false)=false THEN 'ready' ELSE 'setup' END,
+						status_code=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' AND COALESCE((request_config->>'runtimeSessionRecoveryPending')::boolean, false)=false THEN 'agent-running' ELSE 'agent-starting' END,
+						request_config=request_config || jsonb_build_object(
+							'runtimeProcessManaged', true,
+							'startupTimings', COALESCE(request_config->'startupTimings', '{}'::jsonb) || jsonb_build_object(
+								'connectedAt', COALESCE(request_config #> '{startupTimings,connectedAt}', to_jsonb(${input.nowMs}::bigint)),
+								'repositoryReadyAt', COALESCE(request_config #> '{startupTimings,repositoryReadyAt}', to_jsonb(${input.nowMs}::bigint))
+							)
+						),
+						next_action_at=CASE WHEN jsonb_typeof(request_config->'sessionHeadVersion')='number' AND COALESCE((request_config->>'runtimeSessionRecoveryPending')::boolean, false)=false THEN ${input.nextIdleAtMs}::bigint ELSE ${input.nowMs + 30_000}::bigint END,
+						running_since=COALESCE(running_since, ${input.nowMs}),
+						revision=revision+1,
+						updated_at=${input.nowMs},
+						last_activity_at=${input.nowMs}
+					WHERE workspace_id=${input.workspaceId}
+						AND runtime_credential_hash=${input.currentCredentialHash}
+						AND (request_config->>'runtimeCredentialExpiresAtMs')::bigint > ${input.nowMs}
+						AND state <> 'deleted'
+					RETURNING *`.pipe(
+						Effect.map((rows) =>
+							rows[0] === undefined ? null : workspaceFromRow(rows[0] as Row),
+						),
+					),
 				),
 			acknowledgeRuntimeBoot: (input) =>
 				orDie(
@@ -1914,7 +2160,6 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							...workspace.requestConfig,
 							runtimeBootstrapReceipt: {
 								...receipt,
-								cloudCredentials: [],
 								acknowledgedAtMs: input.nowMs,
 							},
 						};
@@ -1999,7 +2244,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							SELECT ${input.workspaceId}, ${input.runtimeGeneration}, ${input.summaryRevision}, ${input.title}, ${input.lastActivityAtMs}, ${input.sessionHeadVersion}, ${input.updatedAtMs}
 							FROM relay_cloud_workspaces AS workspace
 							WHERE workspace.workspace_id=${input.workspaceId}
-								AND COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, GREATEST(1, workspace.credential_epoch + 1))=${input.runtimeGeneration}
+								AND COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, 1)=${input.runtimeGeneration}
 							ON CONFLICT (workspace_id) DO UPDATE SET
 								runtime_generation=EXCLUDED.runtime_generation,
 								summary_revision=EXCLUDED.summary_revision,
@@ -2029,7 +2274,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							};
 						const existingRows = yield* sql`
 							SELECT summary.*,
-								COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, GREATEST(1, workspace.credential_epoch + 1)) AS current_runtime_generation
+								COALESCE((workspace.request_config->>'runtimeGeneration')::bigint, 1) AS current_runtime_generation
 							FROM relay_cloud_workspaces AS workspace
 							LEFT JOIN relay_cloud_workspace_runtime_summaries AS summary USING (workspace_id)
 							WHERE workspace.workspace_id=${input.workspaceId}
@@ -2071,7 +2316,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 						FROM relay_cloud_workspaces AS workspace
 						WHERE workspace.workspace_id=${checkpoint.workspaceId}
 							AND COALESCE((workspace.request_config->>'runtimeGeneration')::bigint,
-								GREATEST(1, workspace.credential_epoch + 1))=${checkpoint.runtimeGeneration}
+								1)=${checkpoint.runtimeGeneration}
 						ON CONFLICT (workspace_id, session_id) DO UPDATE SET
 							runtime_generation=EXCLUDED.runtime_generation,
 							stream_epoch=EXCLUDED.stream_epoch,
@@ -2080,7 +2325,8 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 							ciphertext_sha256=EXCLUDED.ciphertext_sha256,
 							ciphertext_bytes=EXCLUDED.ciphertext_bytes,
 							created_at=EXCLUDED.created_at
-						WHERE EXCLUDED.runtime_generation > relay_cloud_transcript_checkpoints.runtime_generation
+						WHERE (EXCLUDED.runtime_generation > relay_cloud_transcript_checkpoints.runtime_generation
+							AND EXCLUDED.stream_version >= relay_cloud_transcript_checkpoints.stream_version)
 							OR (EXCLUDED.runtime_generation = relay_cloud_transcript_checkpoints.runtime_generation
 								AND EXCLUDED.stream_epoch = relay_cloud_transcript_checkpoints.stream_epoch
 								AND EXCLUDED.stream_version > relay_cloud_transcript_checkpoints.stream_version)
@@ -2093,103 +2339,6 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 						Effect.asVoid,
 					),
 				),
-			listCredentials: (accountId) =>
-				orDie(
-					sql`SELECT * FROM relay_cloud_credential_connections WHERE account_id=${accountId} ORDER BY kind`.pipe(
-						Effect.map((rows) =>
-							rows.map((row) => ({
-								connectionId: String(row.connection_id),
-								accountId: String(row.account_id),
-								kind: row.kind as CloudCredentialKind,
-								state: row.state as "connected" | "disconnected" | "error",
-								accountLabel: optionalString(row.account_label),
-								encryptedPayload: optionalString(row.encrypted_payload),
-								encryptionKeyVersion: optionalString(
-									row.encryption_key_version,
-								),
-								credentialVersion: numberValue(row.credential_version),
-								createdAtMs: numberValue(row.created_at),
-								updatedAtMs: numberValue(row.updated_at),
-								disconnectedAtMs: optionalNumber(row.disconnected_at),
-							})),
-						),
-					),
-				),
-			getCredential: (accountId, kind) =>
-				orDie(
-					sql`SELECT * FROM relay_cloud_credential_connections WHERE account_id=${accountId} AND kind=${kind} LIMIT 1`.pipe(
-						Effect.map((rows) => {
-							const row = rows[0];
-							return row
-								? {
-										connectionId: String(row.connection_id),
-										accountId: String(row.account_id),
-										kind: row.kind as CloudCredentialKind,
-										state: row.state as "connected" | "disconnected" | "error",
-										accountLabel: optionalString(row.account_label),
-										encryptedPayload: optionalString(row.encrypted_payload),
-										encryptionKeyVersion: optionalString(
-											row.encryption_key_version,
-										),
-										credentialVersion: numberValue(row.credential_version),
-										createdAtMs: numberValue(row.created_at),
-										updatedAtMs: numberValue(row.updated_at),
-										disconnectedAtMs: optionalNumber(row.disconnected_at),
-									}
-								: null;
-						}),
-					),
-				),
-			saveCredential: (credential) =>
-				orDie(
-					sql`INSERT INTO relay_cloud_credential_connections (connection_id, account_id, kind, state, account_label, encrypted_payload, encryption_key_version, credential_version, created_at, updated_at, disconnected_at) VALUES (${credential.connectionId}, ${credential.accountId}, ${credential.kind}, ${credential.state}, ${credential.accountLabel ?? null}, ${credential.encryptedPayload ?? null}, ${credential.encryptionKeyVersion ?? null}, ${credential.credentialVersion}, ${credential.createdAtMs}, ${credential.updatedAtMs}, ${credential.disconnectedAtMs ?? null}) ON CONFLICT (account_id, kind) DO UPDATE SET state=EXCLUDED.state, account_label=EXCLUDED.account_label, encrypted_payload=EXCLUDED.encrypted_payload, encryption_key_version=EXCLUDED.encryption_key_version, credential_version=EXCLUDED.credential_version, updated_at=EXCLUDED.updated_at, disconnected_at=EXCLUDED.disconnected_at RETURNING *`.pipe(
-						Effect.map((rows) => {
-							const row = rows[0] as Row;
-							return {
-								connectionId: String(row.connection_id),
-								accountId: String(row.account_id),
-								kind: row.kind as CloudCredentialKind,
-								state: row.state as "connected" | "disconnected" | "error",
-								accountLabel: optionalString(row.account_label),
-								encryptedPayload: optionalString(row.encrypted_payload),
-								encryptionKeyVersion: optionalString(
-									row.encryption_key_version,
-								),
-								credentialVersion: numberValue(row.credential_version),
-								createdAtMs: numberValue(row.created_at),
-								updatedAtMs: numberValue(row.updated_at),
-								disconnectedAtMs: optionalNumber(row.disconnected_at),
-							};
-						}),
-					),
-				),
-			disconnectCredential: (accountId, kind, nowMs) =>
-				orDie(
-					sql`UPDATE relay_cloud_credential_connections SET state='disconnected', encrypted_payload=NULL, credential_version=credential_version+1, updated_at=${nowMs}, disconnected_at=${nowMs} WHERE account_id=${accountId} AND kind=${kind} RETURNING *`.pipe(
-						Effect.map((rows) => {
-							const row = rows[0];
-							return row
-								? {
-										connectionId: String(row.connection_id),
-										accountId: String(row.account_id),
-										kind: row.kind as CloudCredentialKind,
-										state: "disconnected" as const,
-										accountLabel: optionalString(row.account_label),
-										credentialVersion: numberValue(row.credential_version),
-										createdAtMs: numberValue(row.created_at),
-										updatedAtMs: numberValue(row.updated_at),
-										disconnectedAtMs: optionalNumber(row.disconnected_at),
-									}
-								: null;
-						}),
-					),
-				),
-			credentialEpoch: (accountId) =>
-				orDie(
-					sql`SELECT COALESCE(SUM(credential_version), 0) AS epoch FROM relay_cloud_credential_connections WHERE account_id=${accountId} AND state='connected'`.pipe(
-						Effect.map((rows) => numberValue(rows[0]?.epoch ?? 0)),
-					),
-				),
 			deleteAccountData: (accountId) =>
 				orDie(
 					Effect.gen(function* () {
@@ -2197,7 +2346,7 @@ export const CloudWorkspaceStorePg: Layer.Layer<
 						yield* sql`DELETE FROM relay_cloud_workspaces WHERE account_id=${accountId}`;
 						yield* sql`DELETE FROM relay_cloud_project_builds WHERE account_id=${accountId}`;
 						yield* sql`DELETE FROM relay_cloud_projects WHERE account_id=${accountId}`;
-						yield* sql`DELETE FROM relay_cloud_credential_connections WHERE account_id=${accountId}`;
+						yield* sql`DELETE FROM relay_cloud_github_installations WHERE account_id=${accountId}`;
 					}).pipe(sql.withTransaction),
 				),
 			recordUsage: (event) =>

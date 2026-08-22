@@ -11,7 +11,10 @@ import {
 	resolveAgentStarting,
 	shouldRenderGenericAgentStartup,
 } from "../../src/components/chat-view.tsx";
-import { SetupCardView } from "../../src/components/worktree-setup-card.tsx";
+import {
+	CloudWorkspaceSetupView,
+	SetupCardView,
+} from "../../src/components/worktree-setup-card.tsx";
 import { selectChatSurface } from "../../src/lib/chat-surface-selection.ts";
 import {
 	chatStoreErrorMessage,
@@ -154,5 +157,21 @@ describe("chat creation handoff", () => {
 		expect(html).toContain("<summary");
 		expect(html.match(/Starting agent/g)).toHaveLength(1);
 		expect(html).not.toContain("rounded-xl");
+	});
+
+	it("uses the compact lifecycle accordion for cloud creation", () => {
+		const preparing = renderToStaticMarkup(
+			createElement(CloudWorkspaceSetupView, { phase: "syncing-repository" }),
+		);
+		const startingAgent = renderToStaticMarkup(
+			createElement(CloudWorkspaceSetupView, { phase: "starting-agent" }),
+		);
+
+		expect(preparing).toContain("<details");
+		expect(preparing).not.toContain("<details open");
+		expect(preparing).toContain("Preparing repository…");
+		expect(preparing).not.toContain("Fetching the latest Git changes");
+		expect(startingAgent).toContain("Cloud workspace ready");
+		expect(startingAgent).not.toContain("Starting agent");
 	});
 });

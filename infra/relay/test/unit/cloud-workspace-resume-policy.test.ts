@@ -35,7 +35,7 @@ describe("failed cloud workspace resume policy", () => {
 		).toBe(false);
 	});
 
-	test("restarts the runtime inside an existing sandbox after a connection timeout", () => {
+	test("restarts the same sandbox after a connection timeout", () => {
 		expect(
 			failedWorkspaceResumeTarget({
 				providerSandboxId: "sandbox-preserve",
@@ -79,6 +79,9 @@ describe("failed cloud workspace resume policy", () => {
 					providerSandboxId: "sandbox-incomplete",
 					statusCode,
 				}),
-			).toEqual({ state: "queued", providerSandboxId: undefined });
+			).toEqual({
+				state: "queued",
+				providerSandboxId: "sandbox-incomplete",
+			});
 	});
 });

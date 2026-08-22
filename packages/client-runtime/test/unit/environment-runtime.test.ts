@@ -140,6 +140,51 @@ describe("EnvironmentRuntimeRegistry", () => {
 		await registry.dispose();
 	});
 
+	it("coalesces duplicate stream faults for one connection generation", async () => {
+		const scheduled: Array<{ task: () => void }> = [];
+		const registry = new EnvironmentRuntimeRegistry<{ id: number }>(
+			{
+				resolve: () =>
+					Effect.succeed({
+						client: { id: 1 },
+						dispose: async () => undefined,
+					}),
+			},
+			{
+				schedule: (_delay, task) => {
+					scheduled.push({ task });
+					return () => undefined;
+				},
+			},
+		);
+		const runtime = registry.get(EnvironmentId.make("environment-duplicate"));
+		const lease = runtime.retain("connect");
+		await lease.activate("connect");
+		const generation = runtime.snapshot().generation;
+
+		expect(
+			runtime.reportFault(
+				{ phase: "failed", message: "socket closed" },
+				generation,
+			),
+		).toBe(true);
+		expect(
+			runtime.reportFault(
+				{ phase: "failed", message: "stream ended" },
+				generation,
+			),
+		).toBe(true);
+		expect(runtime.snapshot()).toMatchObject({
+			phase: "reconnecting",
+			generation,
+			error: null,
+		});
+		expect(scheduled).toHaveLength(1);
+
+		lease.release();
+		await registry.dispose();
+	});
+
 	it("does not reconnect when a live connection escalates from connect to wake", async () => {
 		const activations: string[] = [];
 		let disposals = 0;
@@ -262,6 +307,65 @@ describe("EnvironmentRuntimeRegistry", () => {
 		expect(scheduled[1]?.cancelled).toBe(false);
 		second.release();
 		expect(scheduled[1]?.cancelled).toBe(true);
+		await registry.dispose();
+	});
+
+	it("shows one stable reconnecting phase and fails only after retry exhaustion", async () => {
+		let resolves = 0;
+		const phases: string[] = [];
+		const scheduled: Array<{ task: () => void; cancelled: boolean }> = [];
+		const registry = new EnvironmentRuntimeRegistry<{ id: number }>(
+			{
+				resolve: () => {
+					resolves += 1;
+					return Effect.fail({
+						phase: "failed" as const,
+						message: "gateway closed",
+					});
+				},
+			},
+			{
+				random: () => 0.5,
+				schedule: (_delay, task) => {
+					const item = { task, cancelled: false };
+					scheduled.push(item);
+					return () => {
+						item.cancelled = true;
+					};
+				},
+			},
+		);
+		const runtime = registry.get(EnvironmentId.make("environment-flap"));
+		runtime.subscribe((view) => phases.push(view.phase));
+		const lease = runtime.retain("connect");
+		await waitUntil(() => scheduled.length === 1);
+		// The user-driven first attempt shows progress before failing.
+		expect(phases).toContain("connecting");
+		const failuresBeforeRetries = resolves;
+
+		expect(runtime.snapshot().phase).toBe("reconnecting");
+		// Drain the automatic ladder: each fired retry remains reconnecting until
+		// the final attempt exhausts the bounded retry policy.
+		phases.length = 0;
+		for (let index = 0; index < 6; index += 1) {
+			scheduled[index]?.task();
+			await waitUntil(() => resolves === failuresBeforeRetries + index + 1);
+			// Let the failure handling settle before inspecting the schedule.
+			for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+		}
+		expect(scheduled.length).toBe(6);
+		expect(runtime.snapshot().phase).toBe("failed");
+		expect(phases).not.toContain("connecting");
+		expect(phases).toContain("reconnecting");
+
+		// An explicit retry starts a fresh, visible episode with new backoff.
+		const beforeManualRetry = resolves;
+		await runtime.retryNow().catch(() => undefined);
+		await waitUntil(() => resolves === beforeManualRetry + 1);
+		expect(phases).toContain("connecting");
+		expect(scheduled.length).toBe(7);
+
+		lease.release();
 		await registry.dispose();
 	});
 

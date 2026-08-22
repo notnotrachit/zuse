@@ -10,6 +10,8 @@ export default defineConfig({
 	deps: {
 		alwaysBundle: [
 			/.*/u,
+			"effect",
+			"effect/**",
 			"@zuse/client-runtime",
 			"@zuse/client-runtime/**",
 			"@zuse/contracts",

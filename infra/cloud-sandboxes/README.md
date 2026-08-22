@@ -3,12 +3,12 @@
 For the surrounding control plane, lifecycle, cache, and security model, start
 with the [Zuse Cloud documentation](../../docs/cloud/README.md).
 
-This credential-free image contains the Zuse runtime and supported developer
-toolchain. Its inert `sleep infinity` command is deliberate. Project builders
-start `zuse-project-builder`; workspace forks start `zuse-workspace-bootstrap`
-with a one-time workspace boot token. The runtime binds only to loopback and
-opens an authenticated outbound connection to the workspace gateway, so no
-provider endpoint is exposed to clients.
+The credential-free base template contains the Zuse runtime and supported
+developer toolchain. An account-image build adds the user's selected normal Git
+checkouts below `/home/repos/<owner>/<repository>` and provider authentication.
+Each chat forks that account image, starts the runtime from `/home/zuse`, and
+selects one existing checkout without cloning, fetching, copying, or creating a
+worktree. Its inert `sleep infinity` base command is deliberate.
 
 SSH access does not run a listening daemon. The runtime's `/ssh` WebSocket
 route (ticket-gated, cloud-environment role only) spawns `sshd -i` per
@@ -35,13 +35,13 @@ Authenticate the provider CLI with a team access token, then create the current
 Dockerfile-based template:
 
 ```sh
-node infra/cloud-sandboxes/publish-template.mjs staging
+npx --yes @e2b/cli@latest template create zuse-cloud-sandbox \
+  --path infra/cloud-sandboxes \
+  --cmd "sleep infinity" \
+  --ready-cmd "true" \
+  --cpu-count 2 \
+  --memory-mb 4096
 ```
-
-Use `production` instead of `staging` only from the exact release commit. The
-reviewed resource shape is recorded in `template-resources.json`; both the
-publisher and Relay's billing reservation use it, and deployment tests reject
-drift.
 
 The current CLI's `template create` command is used instead of the legacy
 `e2b.toml` workflow. This provider's template ID stays inside its adapter
@@ -65,15 +65,13 @@ Managed-server runtime manifests are intentionally not reused by cloud
 workspaces. A cloud-specific signed manifest may be configured separately after
 its workspace protocol has passed staging compatibility checks; otherwise the
 workspace uses the runtime baked into the published template.
-The optional fast-start cache clones the selected repository as a bare mirror,
-removes credentials and runtime identity, validates the result, and creates a
-snapshot. It does
-not evaluate repository environment configuration, install dependencies, or run
-the project setup command. Install dependencies later from the workspace terminal
-or through the agent when the task requires them.
+The explicit account-image build synchronizes every selected repository, removes
+transient GitHub credentials and runtime identity, validates the result, and
+creates one private snapshot. Normal workspace launch performs no Git network
+operation. Repository freshness changes only through Update image.
 
 The runtime exchanges the one-time token for a renewable workspace credential,
-installs account credentials, removes the boot token, fetches the latest base,
-checks out the task branch, and acknowledges the durable start command. The
-prepared snapshot contains no repository token, agent credential, runtime
+installs any runtime-scoped credential grant, opens the selected local branch,
+and acknowledges the durable start command. The account snapshot contains
+provider authentication by design, but no GitHub installation token, runtime
 identity, shell history, or authenticated process.

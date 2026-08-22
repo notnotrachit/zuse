@@ -263,6 +263,7 @@ export const relayCloudProjects = pgTable(
 		secretBindings: jsonb("secret_bindings").notNull().default([]),
 		configurationDigest: text("configuration_digest").notNull(),
 		state: text("state").notNull(),
+		included: boolean("included").notNull().default(true),
 		lastErrorCode: text("last_error_code"),
 		idempotencyKey: text("idempotency_key").notNull(),
 		createdAt: bigint("created_at", { mode: "number" }).notNull(),
@@ -289,6 +290,34 @@ export const relayCloudProjects = pgTable(
 	],
 );
 
+export const relayCloudGithubInstallations = pgTable(
+	"relay_cloud_github_installations",
+	{
+		accountId: text("account_id").notNull(),
+		installationId: bigint("installation_id", { mode: "number" }).notNull(),
+		githubAccountId: bigint("github_account_id", { mode: "number" }).notNull(),
+		accountLogin: text("account_login").notNull(),
+		accountType: text("account_type").notNull(),
+		avatarUrl: text("avatar_url"),
+		repositorySelection: text("repository_selection").notNull(),
+		suspended: boolean("suspended").default(false).notNull(),
+		createdAt: bigint("created_at", { mode: "number" }).notNull(),
+		updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.accountId, table.installationId] }),
+		index("relay_cloud_github_installations_account_idx").on(table.accountId),
+		check(
+			"relay_cloud_github_account_type_check",
+			sql`${table.accountType} IN ('User', 'Organization')`,
+		),
+		check(
+			"relay_cloud_github_repository_selection_check",
+			sql`${table.repositorySelection} IN ('all', 'selected')`,
+		),
+	],
+);
+
 export const relayCloudProjectBuilds = pgTable(
 	"relay_cloud_project_builds",
 	{
@@ -303,7 +332,10 @@ export const relayCloudProjectBuilds = pgTable(
 		sourceCommit: text("source_commit"),
 		templateVersion: text("template_version").notNull(),
 		configurationDigest: text("configuration_digest").notNull(),
+		settings: jsonb("settings").notNull().default({}),
+		logText: text("log_text"),
 		state: text("state").notNull(),
+		included: boolean("included").notNull().default(true),
 		lastErrorCode: text("last_error_code"),
 		idempotencyKey: text("idempotency_key").notNull(),
 		nextActionAt: bigint("next_action_at", { mode: "number" }).notNull(),
@@ -337,6 +369,37 @@ export const relayCloudProjectBuilds = pgTable(
 	],
 );
 
+export const relayCloudWorkspacePool = pgTable(
+	"relay_cloud_workspace_pool",
+	{
+		poolId: text("pool_id").primaryKey(),
+		accountId: text("account_id").notNull(),
+		provider: text("provider").notNull(),
+		imageGeneration: text("image_generation").notNull(),
+		providerSandboxId: text("provider_sandbox_id").notNull(),
+		state: text("state").notNull(),
+		claimedWorkspaceId: text("claimed_workspace_id"),
+		createdAt: bigint("created_at", { mode: "number" }).notNull(),
+		updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+	},
+	(table) => [
+		uniqueIndex("relay_cloud_pool_provider_sandbox_idx").on(
+			table.provider,
+			table.providerSandboxId,
+		),
+		index("relay_cloud_pool_available_idx").on(
+			table.accountId,
+			table.provider,
+			table.imageGeneration,
+			table.state,
+		),
+		check(
+			"relay_cloud_pool_state_check",
+			sql`${table.state} IN ('available', 'claimed', 'deleting')`,
+		),
+	],
+);
+
 export const relayCloudWorkspaces = pgTable(
 	"relay_cloud_workspaces",
 	{
@@ -363,9 +426,6 @@ export const relayCloudWorkspaces = pgTable(
 		state: text("state").notNull(),
 		desiredState: text("desired_state").notNull(),
 		statusCode: text("status_code").notNull(),
-		credentialEpoch: bigint("credential_epoch", { mode: "number" })
-			.notNull()
-			.default(0),
 		wrappedTranscriptKey: text("wrapped_transcript_key"),
 		archiveRequestedAt: bigint("archive_requested_at", { mode: "number" }),
 		archiveDeleteAt: bigint("archive_delete_at", { mode: "number" }),
@@ -523,39 +583,6 @@ export const relayCloudTranscriptCheckpoints = pgTable(
 	(table) => [
 		primaryKey({ columns: [table.workspaceId, table.sessionId] }),
 		index("relay_cloud_transcript_checkpoint_created_idx").on(table.createdAt),
-	],
-);
-
-export const relayCloudCredentialConnections = pgTable(
-	"relay_cloud_credential_connections",
-	{
-		connectionId: text("connection_id").primaryKey(),
-		accountId: text("account_id").notNull(),
-		kind: text("kind").notNull(),
-		state: text("state").notNull(),
-		accountLabel: text("account_label"),
-		encryptedPayload: text("encrypted_payload"),
-		encryptionKeyVersion: text("encryption_key_version"),
-		credentialVersion: bigint("credential_version", { mode: "number" })
-			.notNull()
-			.default(1),
-		createdAt: bigint("created_at", { mode: "number" }).notNull(),
-		updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
-		disconnectedAt: bigint("disconnected_at", { mode: "number" }),
-	},
-	(table) => [
-		uniqueIndex("relay_cloud_credentials_account_kind_idx").on(
-			table.accountId,
-			table.kind,
-		),
-		check(
-			"relay_cloud_credentials_kind_check",
-			sql`${table.kind} IN ('github', 'claude', 'codex')`,
-		),
-		check(
-			"relay_cloud_credentials_state_check",
-			sql`${table.state} IN ('connected', 'disconnected', 'error')`,
-		),
 	],
 );
 

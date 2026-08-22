@@ -102,6 +102,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 				createdAt: Date.now(),
 			});
 			bus.overlay(key, { update: () => ({ state: receipt.result }) });
+			if (receipt.result._tag === "SignedIn") {
+				// Auth faults park cloud runtimes and their durable command outboxes.
+				// A successful sign-in is the shared recovery edge regardless of which
+				// UI initiated it (banner, sidebar, onboarding, or settings).
+				bus.retryRetainedConnections();
+			}
 			set({ signingIn: false, error: null });
 		} catch (err) {
 			const message = signInFailureMessage(err);

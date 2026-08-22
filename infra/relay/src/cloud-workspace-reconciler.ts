@@ -4,10 +4,14 @@ import {
 	SandboxProviders,
 } from "@zuse/sandbox-providers";
 import { Clock, Data, Duration, Effect } from "effect";
+import PROJECT_BUILDER_SOURCE from "../../cloud-sandboxes/project-builder.sh";
+import WORKSPACE_BOOTSTRAP_SOURCE from "../../cloud-sandboxes/workspace-bootstrap.sh";
+import { snapshotCloudAuthAuthority } from "./cloud-auth-authority.ts";
 import { allocatedComputeCostMicros } from "./cloud-billing.ts";
 import { CloudBillingStore } from "./cloud-billing-store.ts";
-import { CloudCredentialVault } from "./cloud-credential-vault.ts";
+import { githubInstallationGrants } from "./cloud-github-app.ts";
 import { deleteCloudTranscriptObjects } from "./cloud-transcript.ts";
+import { cloudRepositoryWorkspacePath } from "./cloud-workspace-paths.ts";
 import {
 	type CloudProjectBuildRecord,
 	type CloudWorkspaceRecord,
@@ -18,18 +22,55 @@ import { randomToken, sha256Hex } from "./crypto.ts";
 import { SandboxOfferConfiguration } from "./sandbox-provider-module.ts";
 
 const RETRY_MS = 5_000;
-const WORKSPACE_START_TIMEOUT_MS = 5 * 60 * 1_000;
+const ACCOUNT_POOL_SIZE = 2;
+// Provider allocation happens before `allocatedAt`. Once compute exists, the
+// baked runtime must enroll promptly; leaving this at minutes turns a broken
+// runtime into a permanently spinning composer until the recovery cron runs.
+export const RUNTIME_CONNECTION_TIMEOUT_MS = 10_000;
 const RECONCILE_LEASE_MS = 2 * 60 * 1_000;
 const PROJECT_BUILD_TIMEOUT_MS = 15 * 60 * 1_000;
 export const ARCHIVED_WORKSPACE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const WORKSPACE_RUNTIME_BOOT_TTL_MS = 30 * 60 * 1_000;
-const WARM_RUNTIME_RECONNECT_GRACE_MS = 5_000;
+const WARM_RUNTIME_RECONNECT_GRACE_MS = 500;
 const ARCHIVE_QUIESCE_GRACE_MS = 1_500;
 const BILLING_RESERVATION_REFRESH_MS = 60_000;
-const WORKSPACE_RUNTIME_BOOT_TOKEN_FILE =
-	"/run/zuse-secrets/workspace-runtime-boot-token";
-const PROJECT_BUILD_DIAGNOSTIC_FILE = "/tmp/zuse-project-builder-diagnostic";
+const RUNTIME_SIGNING_PUBLIC_JWK_FILE =
+	"/home/zuse/.zuse-runtime-signing-public.jwk";
 const PROJECT_BUILD_DIAGNOSTIC_MAX_LENGTH = 2_048;
+const PROJECT_BUILD_LOG_FILE = "/var/lib/zuse/project-build/build.log";
+const PROJECT_BUILD_LOG_MAX_LENGTH = 256 * 1_024;
+const PROJECT_BUILDER_FILE = "/var/lib/zuse/project-build/builder.sh";
+const WORKSPACE_BOOTSTRAP_FILE =
+	"/var/lib/zuse/project-build/workspace-bootstrap.sh";
+const WORKSPACE_REPOSITORY_READY_MARKER =
+	"/var/lib/zuse/workspace/repository-ready";
+const WORKSPACE_START_OBSERVATION_MS = 10_000;
+const WORKSPACE_START_OBSERVATION_INTERVAL_MS = 250;
+
+const ensureWorkspaceRepositoryReadyMarker = Effect.fn(
+	"ensureWorkspaceRepositoryReadyMarker",
+)(function* (
+	provider: SandboxProviderAdapter,
+	providerSandboxId: string,
+	workspaceRoot: string,
+) {
+	if (
+		yield* provider.pathExists(
+			providerSandboxId,
+			WORKSPACE_REPOSITORY_READY_MARKER,
+			"zuse",
+		)
+	)
+		return;
+	if (!(yield* provider.pathExists(providerSandboxId, workspaceRoot, "zuse")))
+		return;
+	yield* provider.writeTextFile(
+		providerSandboxId,
+		WORKSPACE_REPOSITORY_READY_MARKER,
+		"ready\n",
+		"zuse",
+	);
+});
 
 const reserveProviderCost = Effect.fn("reserveProviderCost")(function* (input: {
 	readonly accountId: string;
@@ -41,8 +82,13 @@ const reserveProviderCost = Effect.fn("reserveProviderCost")(function* (input: {
 	readonly vcpuCount: number;
 	readonly memoryMib: number;
 }) {
-	const billingStore = yield* CloudBillingStore;
 	const config = yield* RelayConfiguration;
+	if (
+		!config.cloudBillingEnforcementEnabled &&
+		!config.cloudBillingExportEnabled
+	)
+		return false;
+	const billingStore = yield* CloudBillingStore;
 	const period = yield* billingStore.currentPeriod(
 		input.accountId,
 		input.nowMs,
@@ -109,8 +155,8 @@ const reserveProviderCost = Effect.fn("reserveProviderCost")(function* (input: {
 	return config.cloudBillingEnforcementEnabled && !reservation.accepted;
 });
 
-export const sanitizeProjectBuildDiagnostic = (value: string): string => {
-	const sanitized = value
+const sanitizeProjectBuildOutput = (value: string): string =>
+	value
 		.replaceAll(/\b(?:https?|ssh):\/\/\S+/giu, "[redacted-url]")
 		.replaceAll(/\bBearer\s+\S+/giu, "Bearer [redacted]")
 		.replaceAll(
@@ -122,14 +168,61 @@ export const sanitizeProjectBuildDiagnostic = (value: string): string => {
 			"$1[redacted]",
 		)
 		.trim();
+
+export const sanitizeProjectBuildDiagnostic = (value: string): string => {
+	const sanitized = sanitizeProjectBuildOutput(value);
 	return sanitized.slice(-PROJECT_BUILD_DIAGNOSTIC_MAX_LENGTH);
 };
+
+export const sanitizeProjectBuildLog = (value: string): string =>
+	sanitizeProjectBuildOutput(value).slice(-PROJECT_BUILD_LOG_MAX_LENGTH);
+
+export const snapshotSanitizationFailures = (input: {
+	readonly forbiddenPaths: ReadonlyArray<string>;
+	readonly forbiddenResults: ReadonlyArray<boolean>;
+	readonly sourceCommit: string;
+	readonly templateVersion: string;
+	readonly expectedTemplateVersion: string;
+	readonly configurationDigest: string;
+	readonly expectedConfigurationDigest: string;
+}): ReadonlyArray<string> => {
+	const failures = input.forbiddenPaths.filter(
+		(_path, index) => input.forbiddenResults[index] === true,
+	);
+	if (!/^[0-9a-f]{40,64}$/u.test(input.sourceCommit))
+		failures.push("invalid source manifest digest");
+	if (input.templateVersion !== input.expectedTemplateVersion)
+		failures.push("runtime version mismatch");
+	if (input.configurationDigest !== input.expectedConfigurationDigest)
+		failures.push("configuration digest mismatch");
+	return failures;
+};
+
+const readProjectBuildLog = (
+	provider: SandboxProviderAdapter,
+	providerSandboxId: string,
+): Effect.Effect<string> =>
+	provider.readTextFile(providerSandboxId, PROJECT_BUILD_LOG_FILE, "zuse").pipe(
+		Effect.map(sanitizeProjectBuildLog),
+		Effect.catchTag("SandboxProviderError", () => Effect.succeed("")),
+	);
 
 export const reusableAccountBuildSnapshot = (
 	build: CloudProjectBuildRecord | null,
 	templateVersion: string,
 ): string | undefined =>
 	build?.templateVersion === templateVersion ? build.snapshotId : undefined;
+
+export const cloudWorkspaceStartupNeedsObservation = (
+	workspace: Pick<CloudWorkspaceRecord, "state" | "runtimeState"> | null,
+): boolean =>
+	workspace !== null &&
+	((workspace.runtimeState === "offline" &&
+		(workspace.state === "queued" ||
+			workspace.state === "provisioning" ||
+			workspace.state === "setup")) ||
+		(workspace.state === "resuming" &&
+			workspace.runtimeState === "connecting"));
 
 class CloudWorkspaceLeaseLostError extends Data.TaggedError(
 	"CloudWorkspaceLeaseLostError",
@@ -138,19 +231,23 @@ class CloudWorkspaceLeaseLostError extends Data.TaggedError(
 type SaveClaimedWorkspace = (
 	workspace: CloudWorkspaceRecord,
 ) => Effect.Effect<void, CloudWorkspaceLeaseLostError>;
-export const WORKSPACE_RUNTIME_PROCESS_SELECTOR = {
+const WORKSPACE_RUNTIME_PROCESS = {
 	tag: "zuse-runtime",
 	legacyCommandMarkers: [
 		"zuse-workspace-bootstrap",
 		"/opt/zuse/current/bin.mjs serve",
 		"/usr/local/bin/zuse serve",
 	],
-	// E2B tags the process started through envd, but the bootstrap process can
-	// leave an untagged runtime child behind when it is killed. Always sweep the
-	// matching command tree before binding the replacement gateway port.
-	legacyCleanup: "matching-command",
 } as const;
-export const WORKSPACE_RUNTIME_RESUME_SCRIPT = `set -e; runtime=/opt/zuse/current/bin.mjs; fallback=/usr/local/bin/zuse; rm -f /var/lib/zuse/workspace/failed; if [ -n "\${ZUSE_RUNTIME_MANIFEST_URL:-}" ] && [ -f "\${ZUSE_RUNTIME_PUBLIC_KEY_FILE:-}" ]; then ZUSE_RUNTIME_INSTALL_ONLY=1 ZUSE_RUNTIME_SKIP_TOOLCHAIN=1 ZUSE_RUNTIME_WIRE_PROTOCOL="\${ZUSE_RUNTIME_WIRE_PROTOCOL:?}" node /usr/local/lib/zuse/runtime-updater.mjs >/var/lib/zuse/workspace/runtime-update.log 2>&1; fi; if [ -f "$runtime" ]; then exec node "$runtime" serve; else exec "$fallback" serve; fi`;
+export const workspaceRuntimeProcessSelector = () => ({
+	...WORKSPACE_RUNTIME_PROCESS,
+	// E2B preserves processes across a memory pause but does not preserve their
+	// envd process tags. Always scan the narrow legacy markers before replacement
+	// so a live untagged runtime cannot retain the control port and make resume
+	// fail with EADDRINUSE.
+	legacyCleanup: "matching-command" as const,
+});
+export const WORKSPACE_RUNTIME_RESUME_SCRIPT = `set -e; runtime=/opt/zuse/current/bin.mjs; fallback=/usr/local/bin/zuse; log=/var/lib/zuse/workspace/runtime.log; rm -f /var/lib/zuse/workspace/failed; if [ -n "\${ZUSE_RUNTIME_MANIFEST_URL:-}" ] && [ -f "\${ZUSE_RUNTIME_PUBLIC_KEY_FILE:-}" ]; then installed_wire=$(node -e 'try { process.stdout.write(String(require("/opt/zuse/current/runtime-metadata.json").wireProtocolVersion ?? "")) } catch {}'); if [ "$installed_wire" != "$ZUSE_RUNTIME_WIRE_PROTOCOL" ]; then ZUSE_RUNTIME_INSTALL_ONLY=1 ZUSE_RUNTIME_SKIP_TOOLCHAIN=1 node /usr/local/lib/zuse/runtime-updater.mjs >> "$log" 2>&1; fi; fi; if [ -f "$runtime" ]; then exec node "$runtime" serve >> "$log" 2>&1; else exec "$fallback" serve --foreground >> "$log" 2>&1 </dev/null; fi`;
 const providerLabel = (kind: "build" | "workspace", id: string): string =>
 	`zuse-cloud-${kind}-${id.replace(/[^A-Za-z0-9-]/gu, "-")}`.slice(0, 63);
 
@@ -167,10 +264,14 @@ const nextRuntimeFence = (
 			: 0) + 1,
 });
 
-const withoutRuntimeBootstrapReceipt = (
+export const withoutRuntimeBootstrapReceipt = (
 	config: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> => {
-	const { runtimeBootstrapReceipt: _receipt, ...rest } = config;
+	const {
+		runtimeBootstrapReceipt: _receipt,
+		startupFailureDiagnostic: _failure,
+		...rest
+	} = config;
 	return rest;
 };
 
@@ -189,441 +290,613 @@ const workspaceStartupTimedOut = (
 		(workspace.state === "queued" ||
 			workspace.state === "provisioning" ||
 			workspace.state === "setup") &&
-		nowMs - allocatedAt >= WORKSPACE_START_TIMEOUT_MS
+		nowMs - allocatedAt >= RUNTIME_CONNECTION_TIMEOUT_MS
 	);
 };
 
 const issueWorkspaceRuntimeBoot = Effect.fn("issueWorkspaceRuntimeBoot")(
-	function* (
-		provider: SandboxProviderAdapter,
-		providerSandboxId: string,
-		nowMs: number,
-	) {
+	function* (nowMs: number) {
 		const token = yield* randomToken("workspace_enroll", 32);
-		yield* provider.writeTextFile(
-			providerSandboxId,
-			WORKSPACE_RUNTIME_BOOT_TOKEN_FILE,
-			token,
-			"zuse",
-		);
-		yield* provider.startProcess(providerSandboxId, {
-			command: "/usr/bin/chmod",
-			args: ["0600", WORKSPACE_RUNTIME_BOOT_TOKEN_FILE],
-			user: "zuse",
-		});
 		return {
+			token,
 			tokenHash: yield* sha256Hex(token),
 			expiresAtMs: nowMs + WORKSPACE_RUNTIME_BOOT_TTL_MS,
 		};
 	},
 );
 
-const reconcileBuildRecord = Effect.fn("reconcileCloudProjectBuild")(function* (
-	build: CloudProjectBuildRecord,
+const saveAccountProjectState = Effect.fn("saveAccountProjectState")(function* (
+	accountId: string,
+	state: "ready" | "failed",
+	lastErrorCode: string,
+	nowMs: number,
 ) {
 	const store = yield* CloudWorkspaceStore;
-	const project = yield* store.getProject(build.projectId);
-	if (project === null) return;
-	const provider = yield* (yield* SandboxProviders)
-		.get(build.provider)
-		.pipe(Effect.orDie);
-	const config = yield* SandboxOfferConfiguration;
-	const nowMs = yield* Clock.currentTimeMillis;
-	const buildBillingHold = yield* reserveProviderCost({
-		accountId: build.accountId,
-		resourceKind: "build",
-		resourceId: build.buildId,
-		provider: build.provider,
-		runningSinceMs: build.state === "queued" ? nowMs : build.updatedAtMs,
-		nowMs,
-		vcpuCount: config.vcpuCount,
-		memoryMib: config.memoryMib,
-	});
-	if (buildBillingHold) {
-		if (build.providerSandboxId !== undefined)
-			yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
-		yield* store.saveBuild({
-			...build,
-			providerSandboxId: undefined,
-			state: "failed",
-			lastErrorCode: "billing-hold",
-			nextActionAtMs: Number.MAX_SAFE_INTEGER,
-			revision: build.revision + 1,
-			updatedAtMs: nowMs,
-		});
-		return;
-	}
-	if (
-		(build.state === "building" || build.state === "sanitizing") &&
-		(build.providerSandboxId === undefined ||
-			(yield* provider.inspect(build.providerSandboxId).pipe(Effect.orDie)) ===
-				null)
-	) {
-		const previous = yield* store.getActiveBuild(
-			build.projectId,
-			build.provider,
-		);
-		yield* store.saveBuild({
-			...build,
-			providerSandboxId: undefined,
-			state: "failed",
-			lastErrorCode: "provider-sandbox-missing",
-			nextActionAtMs: Number.MAX_SAFE_INTEGER,
-			revision: build.revision + 1,
-			updatedAtMs: nowMs,
-		});
+	for (const project of yield* store.listProjects(accountId))
 		yield* store.saveProject({
 			...project,
-			state: previous === null ? "failed" : "ready",
-			lastErrorCode: "provider-sandbox-missing",
+			state,
+			lastErrorCode,
 			updatedAtMs: nowMs,
 		});
-		return;
-	}
-	if (build.state === "queued") {
-		const accountBuilds = yield* store.listAccountBuilds(
-			build.accountId,
-			build.provider,
-		);
-		const earlierPending = accountBuilds.some(
-			(candidate) =>
-				candidate.buildId !== build.buildId &&
-				candidate.createdAtMs < build.createdAtMs &&
-				(candidate.state === "queued" ||
-					candidate.state === "building" ||
-					candidate.state === "sanitizing"),
-		);
-		if (earlierPending) {
+});
+
+const reconcileBuildRecord = Effect.fn("reconcileCloudAccountImageBuild")(
+	function* (build: CloudProjectBuildRecord) {
+		const store = yield* CloudWorkspaceStore;
+		const project = yield* store.getProject(build.projectId);
+		if (project === null) return;
+		const provider = yield* (yield* SandboxProviders)
+			.get(build.provider)
+			.pipe(Effect.orDie);
+		const config = yield* SandboxOfferConfiguration;
+		const nowMs = yield* Clock.currentTimeMillis;
+		const buildBillingHold = yield* reserveProviderCost({
+			accountId: build.accountId,
+			resourceKind: "build",
+			resourceId: build.buildId,
+			provider: build.provider,
+			runningSinceMs: build.state === "queued" ? nowMs : build.updatedAtMs,
+			nowMs,
+			vcpuCount: config.vcpuCount,
+			memoryMib: config.memoryMib,
+		});
+		if (buildBillingHold) {
+			if (build.providerSandboxId !== undefined)
+				yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
 			yield* store.saveBuild({
 				...build,
-				nextActionAtMs: nowMs + RETRY_MS,
-				updatedAtMs: nowMs,
-			});
-			return;
-		}
-		const gitCredential =
-			project.visibility === "private"
-				? yield* store.getCredential(project.accountId, "github")
-				: null;
-		const gitPayload =
-			gitCredential?.state === "connected" &&
-			gitCredential.encryptedPayload !== undefined
-				? yield* (yield* CloudCredentialVault).decrypt(
-						project.accountId,
-						"github",
-						gitCredential.credentialVersion,
-						gitCredential.encryptedPayload,
-					)
-				: null;
-		if (project.visibility === "private" && gitPayload === null) {
-			yield* store.saveBuild({
-				...build,
+				providerSandboxId: undefined,
 				state: "failed",
-				lastErrorCode: "git-credential-required",
+				lastErrorCode: "billing-hold",
 				nextActionAtMs: Number.MAX_SAFE_INTEGER,
 				revision: build.revision + 1,
 				updatedAtMs: nowMs,
 			});
+			const previous = yield* store.getActiveAccountBuild(
+				build.accountId,
+				build.provider,
+			);
+			yield* saveAccountProjectState(
+				build.accountId,
+				previous === null ? "failed" : "ready",
+				"billing-hold",
+				nowMs,
+			);
 			return;
 		}
-		const label = providerLabel("build", build.buildId);
-		const relayConfig = yield* RelayConfiguration;
-		const existing = yield* provider.recoverByLabel(label).pipe(Effect.orDie);
-		const previousAccountBuild = yield* store.getActiveAccountBuild(
-			build.accountId,
-			build.provider,
-		);
-		const reusableSnapshotId = reusableAccountBuildSnapshot(
-			previousAccountBuild,
-			build.templateVersion,
-		);
-		const sandbox =
-			existing ??
-			(reusableSnapshotId === undefined
-				? yield* provider
-						.create({
-							sandboxId: build.buildId,
-							providerLabel: label,
-							metadata: {
-								"zuse-account-id": build.accountId,
-								"zuse-resource-kind": "build",
-								"zuse-project-id": build.projectId,
-								"zuse-build-id": build.buildId,
-							},
-							timeoutSeconds: config.createTimeoutSeconds,
-							env: {},
-							network: { kind: "open" },
-							onTimeout: "terminate",
-						})
-						.pipe(Effect.orDie)
-				: yield* provider
-						.fork({
-							sandboxId: build.buildId,
-							providerLabel: label,
-							metadata: {
-								"zuse-account-id": build.accountId,
-								"zuse-resource-kind": "build",
-								"zuse-project-id": build.projectId,
-								"zuse-build-id": build.buildId,
-							},
-							snapshotId: reusableSnapshotId,
-							timeoutSeconds: config.createTimeoutSeconds,
-							env: {},
-							onTimeout: "terminate",
-						})
-						.pipe(Effect.orDie));
-		yield* provider
-			.setNetwork(sandbox.providerSandboxId, { kind: "open" })
-			.pipe(Effect.orDie);
-		if (gitPayload !== null) {
-			yield* provider.writeTextFile(
-				sandbox.providerSandboxId,
-				"/run/zuse-secrets/github-token",
-				gitPayload.secret,
-				"zuse",
-			);
-			yield* provider.startProcess(sandbox.providerSandboxId, {
-				command: "/usr/bin/chmod",
-				args: ["0600", "/run/zuse-secrets/github-token"],
-				user: "zuse",
-			});
-		}
-		yield* provider
-			.startProcess(sandbox.providerSandboxId, {
-				command: "/bin/bash",
-				args: [
-					"-lc",
-					`set +e; /usr/local/bin/zuse-project-builder >/var/lib/zuse/project-build/build.log 2>&1; code=$?; tail -c 4096 /var/lib/zuse/project-build/build.log >${PROJECT_BUILD_DIAGNOSTIC_FILE} 2>/dev/null || true; printf '%s\\n' "$code" >/tmp/zuse-project-builder-exit-code; touch /tmp/zuse-project-builder-exited; exit "$code"`,
-				],
-				env: {
-					ZUSE_REPOSITORY_URL: project.repositoryUrl,
-					ZUSE_PROJECT_CACHE_ID: project.projectId,
-					ZUSE_DEFAULT_BRANCH: project.defaultBranch,
-					ZUSE_TEMPLATE_VERSION: build.templateVersion,
-					ZUSE_CONFIGURATION_DIGEST: build.configurationDigest,
-					ZUSE_REPOSITORY_CACHE_MAX_BYTES: String(
-						relayConfig.cloudRepositoryCacheMaxBytes,
-					),
-				},
-				user: "zuse",
-			})
-			.pipe(Effect.orDie);
-		yield* store.saveBuild({
-			...build,
-			providerSandboxId: sandbox.providerSandboxId,
-			state: "building",
-			nextActionAtMs: nowMs + RETRY_MS,
-			revision: build.revision + 1,
-			updatedAtMs: nowMs,
-		});
-		return;
-	}
-	if (build.state === "building" && build.providerSandboxId !== undefined) {
-		const buildTimedOut = nowMs - build.createdAtMs >= PROJECT_BUILD_TIMEOUT_MS;
-		const builderExited = yield* provider
-			.pathExists(
-				build.providerSandboxId,
-				"/tmp/zuse-project-builder-exited",
-				"zuse",
-			)
-			.pipe(Effect.orDie);
-		const ready = yield* provider
-			.pathExists(
-				build.providerSandboxId,
-				"/var/lib/zuse/project-build/ready",
-				"zuse",
-			)
-			.pipe(Effect.orDie);
 		if (
-			buildTimedOut ||
-			(builderExited && !ready) ||
-			(yield* provider
-				.pathExists(
-					build.providerSandboxId,
-					"/var/lib/zuse/project-build/failed",
-					"zuse",
-				)
-				.pipe(Effect.orDie))
+			(build.state === "building" || build.state === "sanitizing") &&
+			(build.providerSandboxId === undefined ||
+				(yield* provider
+					.inspect(build.providerSandboxId)
+					.pipe(Effect.orDie)) === null)
 		) {
-			const reportedFailurePhase = buildTimedOut
-				? ""
-				: yield* provider
-						.readTextFile(
-							build.providerSandboxId,
-							"/var/lib/zuse/project-build/failure-phase",
-							"zuse",
-						)
-						.pipe(
-							Effect.map((phase) => phase.trim()),
-							Effect.catchTag("SandboxProviderError", () => Effect.succeed("")),
+			const previous = yield* store.getActiveAccountBuild(
+				build.accountId,
+				build.provider,
+			);
+			yield* store.saveBuild({
+				...build,
+				providerSandboxId: undefined,
+				state: "failed",
+				lastErrorCode: "provider-sandbox-missing",
+				nextActionAtMs: Number.MAX_SAFE_INTEGER,
+				revision: build.revision + 1,
+				updatedAtMs: nowMs,
+			});
+			yield* saveAccountProjectState(
+				build.accountId,
+				previous === null ? "failed" : "ready",
+				"provider-sandbox-missing",
+				nowMs,
+			);
+			return;
+		}
+		if (build.state === "queued") {
+			const accountBuilds = yield* store.listAccountBuilds(
+				build.accountId,
+				build.provider,
+			);
+			const earlierPending = accountBuilds.some(
+				(candidate) =>
+					candidate.buildId !== build.buildId &&
+					candidate.createdAtMs < build.createdAtMs &&
+					(candidate.state === "queued" ||
+						candidate.state === "building" ||
+						candidate.state === "sanitizing"),
+			);
+			if (earlierPending) {
+				yield* store.saveBuild({
+					...build,
+					nextActionAtMs: nowMs + RETRY_MS,
+					updatedAtMs: nowMs,
+				});
+				return;
+			}
+			const label = providerLabel("build", build.buildId);
+			const relayConfig = yield* RelayConfiguration;
+			const existing = yield* provider.recoverByLabel(label).pipe(Effect.orDie);
+			const previousAccountBuild = yield* store.getActiveAccountBuild(
+				build.accountId,
+				build.provider,
+			);
+			const cleanRebuild = build.idempotencyKey.startsWith(
+				"account-image:rebuild:",
+			);
+			const authSnapshotId =
+				cleanRebuild ||
+				previousAccountBuild === null ||
+				previousAccountBuild.templateVersion !== build.templateVersion
+					? yield* snapshotCloudAuthAuthority(
+							build.accountId,
+							`account-auth-${build.buildId}`,
+						).pipe(Effect.orElseSucceed(() => undefined))
+					: undefined;
+			const reusableSnapshotId =
+				authSnapshotId ??
+				(cleanRebuild
+					? undefined
+					: reusableAccountBuildSnapshot(
+							previousAccountBuild,
+							build.templateVersion,
+						));
+			const sandbox =
+				existing ??
+				(reusableSnapshotId === undefined
+					? yield* provider
+							.create({
+								sandboxId: build.buildId,
+								providerLabel: label,
+								metadata: {
+									"zuse-account-id": build.accountId,
+									"zuse-resource-kind": "build",
+									"zuse-project-id": build.projectId,
+									"zuse-build-id": build.buildId,
+								},
+								timeoutSeconds: config.createTimeoutSeconds,
+								env: {},
+								network: { kind: "open" },
+								onTimeout: "terminate",
+							})
+							.pipe(Effect.orDie)
+					: yield* provider
+							.fork({
+								sandboxId: build.buildId,
+								providerLabel: label,
+								metadata: {
+									"zuse-account-id": build.accountId,
+									"zuse-resource-kind": "build",
+									"zuse-project-id": build.projectId,
+									"zuse-build-id": build.buildId,
+								},
+								snapshotId: reusableSnapshotId,
+								timeoutSeconds: config.createTimeoutSeconds,
+								env: {},
+								network: { kind: "open" },
+								onTimeout: "terminate",
+							})
+							.pipe(Effect.orDie));
+			if (authSnapshotId !== undefined)
+				yield* provider.deleteSnapshot(authSnapshotId).pipe(Effect.ignore);
+			yield* provider
+				.setNetwork(sandbox.providerSandboxId, { kind: "open" })
+				.pipe(Effect.orDie);
+			yield* Effect.all(
+				[
+					provider.writeTextFile(
+						sandbox.providerSandboxId,
+						PROJECT_BUILDER_FILE,
+						PROJECT_BUILDER_SOURCE,
+						"zuse",
+					),
+					provider.writeTextFile(
+						sandbox.providerSandboxId,
+						WORKSPACE_BOOTSTRAP_FILE,
+						WORKSPACE_BOOTSTRAP_SOURCE,
+						"zuse",
+					),
+					config.runtimeSigningPublicJwk === undefined
+						? Effect.void
+						: provider.writeTextFile(
+								sandbox.providerSandboxId,
+								RUNTIME_SIGNING_PUBLIC_JWK_FILE,
+								config.runtimeSigningPublicJwk,
+								"zuse",
+							),
+				],
+				{ concurrency: "unbounded", discard: true },
+			).pipe(Effect.orDie);
+			yield* provider
+				.startProcess(sandbox.providerSandboxId, {
+					command: "/usr/bin/chmod",
+					args: ["0700", PROJECT_BUILDER_FILE, WORKSPACE_BOOTSTRAP_FILE],
+					user: "zuse",
+				})
+				.pipe(Effect.orDie);
+			const accountProjects = yield* store.listProjects(build.accountId);
+			const githubGrants = yield* githubInstallationGrants(
+				build.accountId,
+			).pipe(Effect.orElseSucceed(() => []));
+			const tokenFileByRepository = new Map<string, string>();
+			yield* Effect.forEach(
+				githubGrants,
+				(grant) => {
+					const tokenFile = `/run/zuse-secrets/github-installation-${grant.installationId}`;
+					for (const repository of grant.repositories)
+						tokenFileByRepository.set(
+							repository.fullName.toLowerCase(),
+							tokenFile,
 						);
-			const failureCode = buildTimedOut
-				? "project-setup-timeout"
-				: /^[a-z][a-z0-9-]{0,63}$/.test(reportedFailurePhase)
-					? `project-${reportedFailurePhase}-failed`
-					: "project-setup-failed";
-			const diagnostic = buildTimedOut
-				? "Project build timed out before completion."
-				: yield* provider
-						.readTextFile(
-							build.providerSandboxId,
-							PROJECT_BUILD_DIAGNOSTIC_FILE,
+					return provider
+						.writeTextFile(
+							sandbox.providerSandboxId,
+							tokenFile,
+							grant.token,
 							"zuse",
 						)
 						.pipe(
-							Effect.map(sanitizeProjectBuildDiagnostic),
-							Effect.catchTag("SandboxProviderError", () =>
-								Effect.succeed("Project builder exited without a diagnostic."),
+							Effect.flatMap(() =>
+								provider.startProcess(sandbox.providerSandboxId, {
+									command: "/usr/bin/chmod",
+									args: ["0600", tokenFile],
+									user: "zuse",
+								}),
 							),
 						);
-			yield* Effect.sync(() =>
-				console.warn("[cloud-workspace] project build failed", {
-					buildId: build.buildId,
-					failureCode,
-					diagnostic,
-				}),
-			);
-			yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
-			const previous = yield* store.getActiveBuild(
-				build.projectId,
-				build.provider,
-			);
+				},
+				{ concurrency: 4, discard: true },
+			).pipe(Effect.orDie);
+			const repositoryManifest = accountProjects
+				.map((candidate) => {
+					const repositoryName = candidate.repositoryIdentity
+						.replace(/^github\.com\//u, "")
+						.toLowerCase();
+					return `${candidate.projectId}\t${candidate.repositoryUrl}\t${candidate.defaultBranch}\t${candidate.visibility}\t${tokenFileByRepository.get(repositoryName) ?? ""}\t${cloudRepositoryWorkspacePath(candidate.repositoryIdentity)}`;
+				})
+				.join("\n");
+			yield* provider
+				.writeTextFile(
+					sandbox.providerSandboxId,
+					"/var/lib/zuse/project-build/repositories.tsv",
+					`${repositoryManifest}\n`,
+					"zuse",
+				)
+				.pipe(Effect.orDie);
+			yield* provider
+				.startProcess(sandbox.providerSandboxId, {
+					command: "/bin/bash",
+					args: [
+						"-lc",
+						`set -e; : >${PROJECT_BUILD_LOG_FILE}; if [ -n "\${ZUSE_RUNTIME_MANIFEST_URL:-}" ] && [ -f "\${ZUSE_RUNTIME_PUBLIC_KEY_FILE:-}" ]; then ZUSE_RUNTIME_INSTALL_ONLY=1 ZUSE_RUNTIME_SKIP_TOOLCHAIN=1 node /usr/local/lib/zuse/runtime-updater.mjs >>${PROJECT_BUILD_LOG_FILE} 2>&1 || { code=$?; printf 'updating-runtime\n' >/var/lib/zuse/project-build/failure-phase; touch /var/lib/zuse/project-build/failed /tmp/zuse-project-builder-exited; exit "$code"; }; fi; set +e; ${PROJECT_BUILDER_FILE} >>${PROJECT_BUILD_LOG_FILE} 2>&1; code=$?; touch /tmp/zuse-project-builder-exited; exit "$code"`,
+					],
+					env: {
+						ZUSE_TEMPLATE_VERSION: build.templateVersion,
+						ZUSE_CONFIGURATION_DIGEST: build.configurationDigest,
+						ZUSE_REPOSITORY_CACHE_MAX_BYTES: String(
+							relayConfig.cloudRepositoryCacheMaxBytes,
+						),
+						...(config.runtimeManifestUrl === undefined
+							? {}
+							: {
+									ZUSE_RUNTIME_MANIFEST_URL: config.runtimeManifestUrl,
+									ZUSE_RUNTIME_PUBLIC_KEY_FILE: RUNTIME_SIGNING_PUBLIC_JWK_FILE,
+									ZUSE_RUNTIME_WIRE_PROTOCOL: String(WIRE_PROTOCOL_VERSION),
+								}),
+					},
+					user: "zuse",
+				})
+				.pipe(Effect.orDie);
 			yield* store.saveBuild({
 				...build,
-				providerSandboxId: undefined,
-				state: "failed",
-				lastErrorCode: failureCode,
-				nextActionAtMs: Number.MAX_SAFE_INTEGER,
-				revision: build.revision + 1,
-				updatedAtMs: nowMs,
-			});
-			yield* store.saveProject({
-				...project,
-				state: previous === null ? "failed" : "ready",
-				lastErrorCode: failureCode,
-				updatedAtMs: nowMs,
-			});
-			return;
-		}
-		if (!ready) {
-			yield* store.saveBuild({
-				...build,
+				providerSandboxId: sandbox.providerSandboxId,
+				state: "building",
 				nextActionAtMs: nowMs + RETRY_MS,
-				updatedAtMs: nowMs,
-			});
-			return;
-		}
-		const forbiddenPaths = [
-			"/home/zuse/.config/gh",
-			"/home/zuse/.claude",
-			"/home/zuse/.codex",
-			"/home/zuse/.zuse-data",
-			"/home/zuse/.git-credentials",
-			"/home/zuse/.netrc",
-			"/run/zuse-secrets",
-		];
-		const forbiddenResults = yield* Effect.forEach(forbiddenPaths, (path) =>
-			provider.pathExists(build.providerSandboxId as string, path, "zuse"),
-		);
-		const sourceCommit = (yield* provider.readTextFile(
-			build.providerSandboxId,
-			"/var/lib/zuse/project-build/source-commit",
-			"zuse",
-		)).trim();
-		const templateVersion = (yield* provider.readTextFile(
-			build.providerSandboxId,
-			"/var/lib/zuse/project-build/template-version",
-			"zuse",
-		)).trim();
-		const configurationDigest = (yield* provider.readTextFile(
-			build.providerSandboxId,
-			"/var/lib/zuse/project-build/configuration-digest",
-			"zuse",
-		)).trim();
-		if (
-			forbiddenResults.some(Boolean) ||
-			!/^[0-9a-f]{40,64}$/u.test(sourceCommit) ||
-			templateVersion !== build.templateVersion ||
-			configurationDigest !== build.configurationDigest
-		) {
-			yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
-			const previous = yield* store.getActiveBuild(
-				build.projectId,
-				build.provider,
-			);
-			yield* store.saveBuild({
-				...build,
-				providerSandboxId: undefined,
-				state: "failed",
-				lastErrorCode: "snapshot-sanitization-failed",
-				nextActionAtMs: Number.MAX_SAFE_INTEGER,
 				revision: build.revision + 1,
 				updatedAtMs: nowMs,
 			});
-			yield* store.saveProject({
-				...project,
-				state: previous === null ? "failed" : "ready",
-				lastErrorCode: "snapshot-sanitization-failed",
-				updatedAtMs: nowMs,
-			});
 			return;
 		}
-		const sanitizing = {
-			...build,
-			sourceCommit,
-			state: "sanitizing" as const,
-			nextActionAtMs: nowMs,
-			revision: build.revision + 1,
-			updatedAtMs: nowMs,
-		};
-		yield* store.saveBuild(sanitizing);
-		const snapshotId = yield* provider
-			.snapshot(
+		if (build.state === "building" && build.providerSandboxId !== undefined) {
+			const logText = yield* readProjectBuildLog(
+				provider,
 				build.providerSandboxId,
-				`${project.projectId}-${build.buildId}`,
-			)
-			.pipe(Effect.orDie);
-		yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
-		const promoted = {
-			...sanitizing,
-			snapshotId,
-			providerSandboxId: undefined,
-			state: "ready",
-			nextActionAtMs: Number.MAX_SAFE_INTEGER,
-			revision: sanitizing.revision + 1,
-			updatedAtMs: nowMs,
-		} as const;
-		yield* store.saveBuild(promoted);
-		yield* store.saveProject({
-			...project,
-			state: "ready",
-			lastErrorCode: undefined,
-			updatedAtMs: nowMs,
-		});
-		const referencedBuildIds = new Set(
-			(yield* store.listWorkspaces(build.accountId))
-				.filter((workspace) => workspace.state !== "deleted")
-				.map((workspace) => workspace.buildId),
-		);
-		const superseded = (yield* store.listAccountBuilds(
-			build.accountId,
-			build.provider,
-		)).filter(
-			(candidate) =>
-				candidate.buildId !== promoted.buildId &&
-				candidate.snapshotId !== undefined &&
-				!referencedBuildIds.has(candidate.buildId),
-		);
-		for (const candidate of superseded) {
-			if (candidate.snapshotId === undefined) continue;
-			yield* provider.deleteSnapshot(candidate.snapshotId).pipe(Effect.ignore);
-			yield* store.saveBuild({
-				...candidate,
-				snapshotId: undefined,
-				revision: candidate.revision + 1,
+			);
+			const buildTimedOut =
+				nowMs - build.createdAtMs >= PROJECT_BUILD_TIMEOUT_MS;
+			const builderExited = yield* provider
+				.pathExists(
+					build.providerSandboxId,
+					"/tmp/zuse-project-builder-exited",
+					"zuse",
+				)
+				.pipe(Effect.orDie);
+			const ready = yield* provider
+				.pathExists(
+					build.providerSandboxId,
+					"/var/lib/zuse/project-build/ready",
+					"zuse",
+				)
+				.pipe(Effect.orDie);
+			if (
+				buildTimedOut ||
+				(builderExited && !ready) ||
+				(yield* provider
+					.pathExists(
+						build.providerSandboxId,
+						"/var/lib/zuse/project-build/failed",
+						"zuse",
+					)
+					.pipe(Effect.orDie))
+			) {
+				const reportedFailurePhase = buildTimedOut
+					? ""
+					: yield* provider
+							.readTextFile(
+								build.providerSandboxId,
+								"/var/lib/zuse/project-build/failure-phase",
+								"zuse",
+							)
+							.pipe(
+								Effect.map((phase) => phase.trim()),
+								Effect.catchTag("SandboxProviderError", () =>
+									Effect.succeed(""),
+								),
+							);
+				const failureCode = buildTimedOut
+					? "project-setup-timeout"
+					: /^[a-z][a-z0-9-]{0,63}$/.test(reportedFailurePhase)
+						? `project-${reportedFailurePhase}-failed`
+						: "project-setup-failed";
+				const diagnostic = buildTimedOut
+					? "Project build timed out before completion."
+					: sanitizeProjectBuildDiagnostic(logText) ||
+						"Project builder exited without a diagnostic.";
+				yield* Effect.sync(() =>
+					console.warn("[cloud-workspace] project build failed", {
+						buildId: build.buildId,
+						failureCode,
+						diagnostic,
+					}),
+				);
+				yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
+				const previous = yield* store.getActiveAccountBuild(
+					build.accountId,
+					build.provider,
+				);
+				yield* store.saveBuild({
+					...build,
+					providerSandboxId: undefined,
+					state: "failed",
+					lastErrorCode: failureCode,
+					logText:
+						logText.length > 0
+							? logText
+							: `Build failed during ${reportedFailurePhase || "setup"}.`,
+					nextActionAtMs: Number.MAX_SAFE_INTEGER,
+					revision: build.revision + 1,
+					updatedAtMs: nowMs,
+				});
+				yield* saveAccountProjectState(
+					build.accountId,
+					previous === null ? "failed" : "ready",
+					failureCode,
+					nowMs,
+				);
+				return;
+			}
+			if (!ready) {
+				yield* store.saveBuild({
+					...build,
+					logText,
+					nextActionAtMs: nowMs + RETRY_MS,
+					updatedAtMs: nowMs,
+				});
+				return;
+			}
+			const forbiddenPaths = [
+				"/home/zuse/.config/gh",
+				"/home/zuse/.zuse-data",
+				"/home/zuse/.git-credentials",
+				"/home/zuse/.netrc",
+			];
+			const forbiddenResults = yield* Effect.forEach(forbiddenPaths, (path) =>
+				provider.pathExists(build.providerSandboxId as string, path, "zuse"),
+			);
+			const sourceCommit = (yield* provider.readTextFile(
+				build.providerSandboxId,
+				"/var/lib/zuse/project-build/source-commit",
+				"zuse",
+			)).trim();
+			const templateVersion = (yield* provider.readTextFile(
+				build.providerSandboxId,
+				"/var/lib/zuse/project-build/template-version",
+				"zuse",
+			)).trim();
+			const configurationDigest = (yield* provider.readTextFile(
+				build.providerSandboxId,
+				"/var/lib/zuse/project-build/configuration-digest",
+				"zuse",
+			)).trim();
+			const sanitizationFailures = snapshotSanitizationFailures({
+				forbiddenPaths,
+				forbiddenResults,
+				sourceCommit,
+				templateVersion,
+				expectedTemplateVersion: build.templateVersion,
+				configurationDigest,
+				expectedConfigurationDigest: build.configurationDigest,
 			});
+			if (sanitizationFailures.length > 0) {
+				const sanitizationDiagnostic = `Snapshot validation failed: ${sanitizationFailures.join(", ")}.`;
+				yield* Effect.sync(() =>
+					console.warn("[cloud-workspace] snapshot sanitization failed", {
+						buildId: build.buildId,
+						failures: sanitizationFailures,
+					}),
+				);
+				yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
+				const previous = yield* store.getActiveAccountBuild(
+					build.accountId,
+					build.provider,
+				);
+				yield* store.saveBuild({
+					...build,
+					providerSandboxId: undefined,
+					state: "failed",
+					lastErrorCode: "snapshot-sanitization-failed",
+					logText: [logText, sanitizationDiagnostic]
+						.filter((line) => line.length > 0)
+						.join("\n"),
+					nextActionAtMs: Number.MAX_SAFE_INTEGER,
+					revision: build.revision + 1,
+					updatedAtMs: nowMs,
+				});
+				yield* saveAccountProjectState(
+					build.accountId,
+					previous === null ? "failed" : "ready",
+					"snapshot-sanitization-failed",
+					nowMs,
+				);
+				return;
+			}
+			const sanitizing = {
+				...build,
+				sourceCommit,
+				state: "sanitizing" as const,
+				nextActionAtMs: nowMs,
+				revision: build.revision + 1,
+				updatedAtMs: nowMs,
+			};
+			yield* store.saveBuild(sanitizing);
+			const snapshotId = yield* provider
+				.snapshot(
+					build.providerSandboxId,
+					`${project.projectId}-${build.buildId}`,
+				)
+				.pipe(Effect.orDie);
+			yield* provider.kill(build.providerSandboxId).pipe(Effect.ignore);
+			const promoted = {
+				...sanitizing,
+				snapshotId,
+				providerSandboxId: undefined,
+				state: "ready",
+				logText,
+				nextActionAtMs: Number.MAX_SAFE_INTEGER,
+				revision: sanitizing.revision + 1,
+				updatedAtMs: nowMs,
+			} as const;
+			yield* store.saveBuild(promoted);
+			for (const accountProject of yield* store.listProjects(build.accountId))
+				yield* store.saveProject({
+					...accountProject,
+					state: "ready",
+					lastErrorCode: undefined,
+					updatedAtMs: nowMs,
+				});
+			const superseded = (yield* store.listAccountBuilds(
+				build.accountId,
+				build.provider,
+			)).filter(
+				(candidate) =>
+					candidate.buildId !== promoted.buildId &&
+					candidate.snapshotId !== undefined,
+			);
+			for (const candidate of superseded) {
+				if (candidate.snapshotId === undefined) continue;
+				yield* provider
+					.deleteSnapshot(candidate.snapshotId)
+					.pipe(Effect.ignore);
+				yield* store.saveBuild({
+					...candidate,
+					snapshotId: undefined,
+					revision: candidate.revision + 1,
+				});
+			}
+			yield* reconcileCloudPool(build.accountId).pipe(Effect.ignore);
+		}
+	},
+);
+
+/** Keep two unassigned forks of the active account image off the launch path. */
+export const reconcileCloudPool = Effect.fn("reconcileCloudPool")(function* (
+	accountId: string,
+) {
+	const store = yield* CloudWorkspaceStore;
+	const config = yield* SandboxOfferConfiguration;
+	const providers = yield* SandboxProviders;
+	const provider = yield* providers.get("e2b").pipe(Effect.orDie);
+	const image = yield* store.getActiveAccountBuild(
+		accountId,
+		provider.providerId,
+	);
+	if (image?.snapshotId === undefined) return;
+	const records = yield* store.listPool(accountId, provider.providerId);
+	for (const record of records) {
+		if (
+			record.state === "available" &&
+			record.imageGeneration !== image.buildId
+		) {
+			yield* provider.kill(record.providerSandboxId).pipe(Effect.ignore);
+			yield* store.removePool(record.poolId);
 		}
 	}
+	const current = (yield* store.listPool(
+		accountId,
+		provider.providerId,
+	)).filter(
+		(record) =>
+			record.imageGeneration === image.buildId && record.state === "available",
+	);
+	const live = [] as Array<(typeof current)[number]>;
+	for (const record of current) {
+		const sandbox = yield* provider
+			.inspect(record.providerSandboxId)
+			.pipe(
+				Effect.catchTag("SandboxProviderError", () => Effect.succeed(null)),
+			);
+		if (sandbox?.state === "running") {
+			live.push(record);
+			continue;
+		}
+		if (sandbox !== null)
+			yield* provider.kill(record.providerSandboxId).pipe(Effect.ignore);
+		yield* store.removePool(record.poolId);
+	}
+	const missing = Math.max(0, ACCOUNT_POOL_SIZE - live.length);
+	const nowMs = yield* Clock.currentTimeMillis;
+	yield* Effect.forEach(
+		Array.from({ length: missing }),
+		() =>
+			Effect.gen(function* () {
+				const poolId = yield* randomToken("pool", 12);
+				const created = yield* provider.fork({
+					sandboxId: poolId,
+					providerLabel: providerLabel("workspace", poolId),
+					metadata: {
+						"zuse-account-id": accountId,
+						"zuse-resource-kind": "workspace-pool",
+						"zuse-image-generation": image.buildId,
+					},
+					snapshotId: image.snapshotId as string,
+					timeoutSeconds: config.keepAliveTimeoutSeconds,
+					env: {},
+					network: { kind: "quarantined" },
+					onTimeout: "pause",
+				});
+				yield* store.savePool({
+					poolId,
+					accountId,
+					provider: provider.providerId,
+					imageGeneration: image.buildId,
+					providerSandboxId: created.providerSandboxId,
+					state: "available",
+					createdAtMs: nowMs,
+					updatedAtMs: nowMs,
+				});
+			}),
+		{ concurrency: "unbounded", discard: true },
+	);
 });
 
 const recordLifecycle = (
@@ -711,11 +984,9 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 		const relay = yield* RelayConfiguration;
 		const project = yield* store.getProject(workspace.projectId);
 		if (project === null) return;
-		const relayHost = new URL(relay.relayIssuer).hostname;
-		const runtimeManifestHost =
-			config.runtimeManifestUrl === undefined
-				? undefined
-				: new URL(config.runtimeManifestUrl).hostname;
+		const workspaceRoot = cloudRepositoryWorkspacePath(
+			project.repositoryIdentity,
+		);
 
 		if (!providerAlreadyRunning)
 			yield* provider.resume(
@@ -723,34 +994,24 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 				config.keepAliveTimeoutSeconds,
 				"pause",
 			);
-		const [boot] = yield* Effect.all(
+		const boot = yield* issueWorkspaceRuntimeBoot(nowMs);
+		yield* Effect.all(
 			[
-				issueWorkspaceRuntimeBoot(provider, providerSandboxId, nowMs),
-				provider.setNetwork(providerSandboxId, {
-					kind: "restricted",
-					allowOut: [
-						relayHost,
-						...(runtimeManifestHost === undefined
-							? []
-							: [
-									runtimeManifestHost,
-									"github.com",
-									"release-assets.githubusercontent.com",
-									"objects.githubusercontent.com",
-								]),
-					],
-					denyOut: ["0.0.0.0/0", "::/0"],
-				}),
 				config.runtimeSigningPublicJwk === undefined
 					? Effect.void
 					: provider.writeTextFile(
 							providerSandboxId,
-							"/home/zuse/.zuse-runtime-signing-public.jwk",
+							RUNTIME_SIGNING_PUBLIC_JWK_FILE,
 							config.runtimeSigningPublicJwk,
 							"zuse",
 						),
+				ensureWorkspaceRepositoryReadyMarker(
+					provider,
+					providerSandboxId,
+					workspaceRoot,
+				),
 			],
-			{ concurrency: "unbounded" },
+			{ concurrency: "unbounded", discard: true },
 		);
 		const timings =
 			(workspace.requestConfig.startupTimings as
@@ -771,6 +1032,7 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 			requestConfig: {
 				...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
 				...runtimeFence,
+				runtimeSessionRecoveryPending: true,
 				startupTimings: { ...timings, allocatedAt: nowMs },
 			},
 			nextActionAtMs: nowMs + 30_000,
@@ -779,39 +1041,46 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 			revision: workspace.revision + 1,
 			updatedAtMs: nowMs,
 		});
-		yield* provider.replaceProcess(
-			providerSandboxId,
-			WORKSPACE_RUNTIME_PROCESS_SELECTOR,
-			{
-				command: "/bin/bash",
-				args: ["-lc", WORKSPACE_RUNTIME_RESUME_SCRIPT],
-				cwd: "/home/zuse/workspace",
-				env: {
-					...project.cloudEnvironment,
-					ZUSE_CLOUD_WORKSPACE_ID: workspace.workspaceId,
-					ZUSE_RUNTIME_BOOT_TOKEN_FILE: WORKSPACE_RUNTIME_BOOT_TOKEN_FILE,
-					ZUSE_RELAY_URL: relay.relayIssuer,
-					ZUSE_RUNTIME_KIND: "cloud-workspace",
-					ZUSE_HOST: "127.0.0.1",
-					ZUSE_PORT: "47837",
-					ZUSE_AUTH_POLICY: "protected",
-					ZUSE_ENABLE_PAIRING: "0",
-					ZUSE_MACHINE_RUNTIME_ROLE: "cloud-environment",
-					ZUSE_SERVER_READY_STDOUT: "1",
-					ZUSE_USER_DATA: "/home/zuse/.zuse-data",
-					ZUSE_RUNTIME_GENERATION: String(runtimeFence.runtimeGeneration),
-					ZUSE_GATEWAY_EPOCH: String(runtimeFence.gatewayEpoch),
-					...(config.runtimeManifestUrl === undefined
-						? {}
-						: {
-								ZUSE_RUNTIME_MANIFEST_URL: config.runtimeManifestUrl,
-								ZUSE_RUNTIME_PUBLIC_KEY_FILE:
-									"/home/zuse/.zuse-runtime-signing-public.jwk",
-								ZUSE_RUNTIME_WIRE_PROTOCOL: String(WIRE_PROTOCOL_VERSION),
-							}),
-				},
-				user: "zuse",
-			},
+		yield* Effect.all(
+			[
+				provider.setNetwork(providerSandboxId, { kind: "open" }),
+				provider.replaceProcess(
+					providerSandboxId,
+					workspaceRuntimeProcessSelector(),
+					{
+						command: "/bin/bash",
+						args: ["-lc", WORKSPACE_RUNTIME_RESUME_SCRIPT],
+						cwd: "/home/zuse",
+						env: {
+							...project.cloudEnvironment,
+							ZUSE_CLOUD_WORKSPACE_ID: workspace.workspaceId,
+							ZUSE_RUNTIME_BOOT_TOKEN: boot.token,
+							ZUSE_RELAY_URL: relay.relayIssuer,
+							ZUSE_CLOUD_WORKSPACE_ROOT: workspaceRoot,
+							ZUSE_RUNTIME_KIND: "cloud-workspace",
+							ZUSE_HOST: "127.0.0.1",
+							ZUSE_PORT: "47837",
+							ZUSE_AUTH_POLICY: "protected",
+							ZUSE_ENABLE_PAIRING: "0",
+							ZUSE_MACHINE_RUNTIME_ROLE: "cloud-environment",
+							ZUSE_SERVER_READY_STDOUT: "1",
+							ZUSE_USER_DATA: "/home/zuse/.zuse-data",
+							ZUSE_RUNTIME_GENERATION: String(runtimeFence.runtimeGeneration),
+							ZUSE_GATEWAY_EPOCH: String(runtimeFence.gatewayEpoch),
+							...(config.runtimeManifestUrl === undefined
+								? {}
+								: {
+										ZUSE_RUNTIME_MANIFEST_URL: config.runtimeManifestUrl,
+										ZUSE_RUNTIME_PUBLIC_KEY_FILE:
+											RUNTIME_SIGNING_PUBLIC_JWK_FILE,
+										ZUSE_RUNTIME_WIRE_PROTOCOL: String(WIRE_PROTOCOL_VERSION),
+									}),
+						},
+						user: "zuse",
+					},
+				),
+			],
+			{ concurrency: "unbounded", discard: true },
 		);
 	},
 );
@@ -947,18 +1216,53 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 			const project = yield* store.getProject(workspace.projectId);
 			if (build === null || project === null) return;
 			const label = providerLabel("workspace", workspace.workspaceId);
+			const workspaceRoot = cloudRepositoryWorkspacePath(
+				project.repositoryIdentity,
+			);
 			const replacingFailedSandbox =
-				workspace.statusCode === "resume-queued" &&
+				(workspace.statusCode === "resume-queued" ||
+					workspace.statusCode === "resume-runtime-recovery-queued") &&
 				workspace.providerSandboxId !== undefined;
 			if (replacingFailedSandbox && workspace.providerSandboxId !== undefined)
 				yield* provider.kill(workspace.providerSandboxId);
+			const replacementPool = replacingFailedSandbox
+				? yield* store.claimPool(
+						workspace.accountId,
+						workspace.provider,
+						workspace.buildId,
+						workspace.workspaceId,
+						nowMs,
+					)
+				: null;
+			const assignedSandboxId =
+				replacementPool?.providerSandboxId ??
+				(replacingFailedSandbox ? undefined : workspace.providerSandboxId);
+			const pooled =
+				assignedSandboxId !== undefined
+					? yield* provider
+							.inspect(assignedSandboxId)
+							.pipe(
+								Effect.catchTag("SandboxProviderError", () =>
+									Effect.succeed(null),
+								),
+							)
+					: null;
+			// A paused E2B sandbox is not warm: reconnecting its allocation can be
+			// substantially slower than forking the account image. Never put that
+			// hidden resume on the normal creation path.
+			const warmSandbox = pooled?.state === "running" ? pooled : null;
+			if (pooled?.state === "paused")
+				yield* provider.kill(pooled.providerSandboxId).pipe(Effect.ignore);
 			const preparedSnapshotAvailable =
 				build.snapshotId !== undefined &&
 				build.templateVersion === provider.templateVersion;
+			const recovered =
+				warmSandbox === null && !replacingFailedSandbox
+					? yield* provider.recoverByLabel(label)
+					: null;
 			const sandbox =
-				(replacingFailedSandbox
-					? null
-					: yield* provider.recoverByLabel(label)) ??
+				warmSandbox ??
+				recovered ??
 				(preparedSnapshotAvailable
 					? yield* provider.fork({
 							sandboxId: workspace.workspaceId,
@@ -973,6 +1277,7 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 							snapshotId: build.snapshotId as string,
 							timeoutSeconds: config.keepAliveTimeoutSeconds,
 							env: {},
+							network: { kind: "open" },
 							onTimeout: "pause",
 						})
 					: yield* provider.create({
@@ -987,51 +1292,12 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 							},
 							timeoutSeconds: config.keepAliveTimeoutSeconds,
 							env: {},
-							network: { kind: "quarantined" },
+							network: { kind: "open" },
 							onTimeout: "pause",
 						}));
 			const allocatedAtMs = yield* Clock.currentTimeMillis;
+			const boot = yield* issueWorkspaceRuntimeBoot(allocatedAtMs);
 			const relay = yield* RelayConfiguration;
-			const relayHost = new URL(relay.relayIssuer).hostname;
-			const runtimeManifestHost =
-				config.runtimeManifestUrl === undefined
-					? undefined
-					: new URL(config.runtimeManifestUrl).hostname;
-			const [boot] = yield* Effect.all(
-				[
-					issueWorkspaceRuntimeBoot(
-						provider,
-						sandbox.providerSandboxId,
-						allocatedAtMs,
-					),
-					provider.setNetwork(sandbox.providerSandboxId, {
-						kind: "restricted",
-						allowOut: [
-							relayHost,
-							...(runtimeManifestHost === undefined
-								? []
-								: [
-										runtimeManifestHost,
-										"github.com",
-										"release-assets.githubusercontent.com",
-										"objects.githubusercontent.com",
-									]),
-						],
-						denyOut: ["0.0.0.0/0", "::/0"],
-					}),
-				],
-				{ concurrency: "unbounded" },
-			);
-			if (
-				config.runtimeManifestUrl !== undefined &&
-				config.runtimeSigningPublicJwk !== undefined
-			)
-				yield* provider.writeTextFile(
-					sandbox.providerSandboxId,
-					"/home/zuse/.zuse-runtime-signing-public.jwk",
-					config.runtimeSigningPublicJwk,
-					"zuse",
-				);
 			const timings =
 				(workspace.requestConfig.startupTimings as
 					| Readonly<Record<string, number>>
@@ -1048,38 +1314,56 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 				requestConfig: {
 					...withoutRuntimeBootstrapReceipt(workspace.requestConfig),
 					...runtimeFence,
-					startupTimings: { ...timings, allocatedAt: allocatedAtMs },
+					...(typeof workspace.requestConfig.sessionHeadVersion === "number"
+						? { runtimeSessionRecoveryPending: true }
+						: {}),
+					...(replacementPool === null ? {} : { poolClaimedAt: allocatedAtMs }),
+					startupTimings: {
+						...timings,
+						...(replacementPool === null
+							? {}
+							: { poolClaimedAt: allocatedAtMs }),
+						allocatedAt: allocatedAtMs,
+						...(replacementPool === null && timings.poolClaimedAt === undefined
+							? { forkedAt: allocatedAtMs }
+							: {}),
+					},
 				},
 				nextActionAtMs: allocatedAtMs + 30_000,
 				revision: workspace.revision + 1,
 				updatedAtMs: allocatedAtMs,
 			});
-			yield* provider.startProcess(sandbox.providerSandboxId, {
-				command: "/usr/local/bin/zuse-workspace-bootstrap",
-				tag: WORKSPACE_RUNTIME_PROCESS_SELECTOR.tag,
+			const startRuntime = provider.startProcess(sandbox.providerSandboxId, {
+				command: WORKSPACE_BOOTSTRAP_FILE,
+				tag: WORKSPACE_RUNTIME_PROCESS.tag,
 				cwd: "/home/zuse",
 				env: {
 					...project.cloudEnvironment,
 					ZUSE_CLOUD_WORKSPACE_ID: workspace.workspaceId,
-					ZUSE_RUNTIME_BOOT_TOKEN_FILE: WORKSPACE_RUNTIME_BOOT_TOKEN_FILE,
+					ZUSE_RUNTIME_BOOT_TOKEN: boot.token,
 					ZUSE_RELAY_URL: relay.relayIssuer,
 					ZUSE_BASE_REF: workspace.baseRef,
 					ZUSE_BRANCH: workspace.branch,
 					ZUSE_PROJECT_CACHE_ID: project.projectId,
 					ZUSE_REPOSITORY_URL: project.repositoryUrl,
+					ZUSE_CLOUD_WORKSPACE_ROOT: workspaceRoot,
 					ZUSE_RUNTIME_GENERATION: String(runtimeFence.runtimeGeneration),
 					ZUSE_GATEWAY_EPOCH: String(runtimeFence.gatewayEpoch),
-					...(config.runtimeManifestUrl === undefined
-						? {}
-						: {
-								ZUSE_RUNTIME_MANIFEST_URL: config.runtimeManifestUrl,
-								ZUSE_RUNTIME_PUBLIC_KEY_FILE:
-									"/home/zuse/.zuse-runtime-signing-public.jwk",
-								ZUSE_RUNTIME_WIRE_PROTOCOL: String(WIRE_PROTOCOL_VERSION),
-							}),
 				},
 				user: "zuse",
 			});
+			// The boot credential is authorized in Relay before the detached process
+			// can enroll. Opening the claimed sandbox's network and starting that
+			// process are independent E2B operations, so neither extends the other.
+			yield* Effect.all(
+				[
+					warmSandbox !== null || recovered !== null
+						? provider.setNetwork(sandbox.providerSandboxId, { kind: "open" })
+						: Effect.void,
+					startRuntime,
+				],
+				{ concurrency: "unbounded", discard: true },
+			);
 			return;
 		}
 
@@ -1110,6 +1394,16 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 					"zuse",
 				)
 			) {
+				const runtimeDiagnostic = yield* provider
+					.readTextFile(
+						workspace.providerSandboxId,
+						"/var/lib/zuse/workspace/runtime.log",
+						"zuse",
+					)
+					.pipe(
+						Effect.map(sanitizeProjectBuildDiagnostic),
+						Effect.catchTag("SandboxProviderError", () => Effect.succeed("")),
+					);
 				const reportedFailurePhase = yield* provider
 					.readTextFile(
 						workspace.providerSandboxId,
@@ -1128,6 +1422,12 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 					state: "failed",
 					statusCode: failureCode,
 					runtimeState: "offline",
+					requestConfig: {
+						...workspace.requestConfig,
+						...(runtimeDiagnostic.length === 0
+							? {}
+							: { startupFailureDiagnostic: runtimeDiagnostic }),
+					},
 					nextActionAtMs: Number.MAX_SAFE_INTEGER,
 					revision: workspace.revision + 1,
 					updatedAtMs: nowMs,
@@ -1185,101 +1485,6 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 			workspace.desiredState === "ready" &&
 			workspace.providerSandboxId !== undefined
 		) {
-			const currentCredentialEpoch = yield* store.credentialEpoch(
-				workspace.accountId,
-			);
-			if (currentCredentialEpoch !== workspace.credentialEpoch) {
-				const relay = yield* RelayConfiguration;
-				const project = yield* store.getProject(workspace.projectId);
-				if (project === null) return;
-				const invalidated = {
-					...workspace,
-					runtimeCredentialHash: undefined,
-					runtimeState: "offline" as const,
-					statusCode: "credential-refreshing",
-					nextActionAtMs: nowMs + 30_000,
-					revision: workspace.revision + 1,
-					updatedAtMs: nowMs,
-				};
-				yield* saveWorkspace(invalidated);
-				yield* provider.setNetwork(workspace.providerSandboxId, {
-					kind: "restricted",
-					allowOut: [
-						new URL(relay.relayIssuer).hostname,
-						...(config.runtimeManifestUrl === undefined
-							? []
-							: [
-									new URL(config.runtimeManifestUrl).hostname,
-									"github.com",
-									"release-assets.githubusercontent.com",
-									"objects.githubusercontent.com",
-								]),
-					],
-					denyOut: ["0.0.0.0/0", "::/0"],
-				});
-				yield* provider.resume(
-					workspace.providerSandboxId,
-					config.keepAliveTimeoutSeconds,
-					"pause",
-				);
-				const boot = yield* issueWorkspaceRuntimeBoot(
-					provider,
-					workspace.providerSandboxId,
-					nowMs,
-				);
-				if (config.runtimeSigningPublicJwk !== undefined)
-					yield* provider.writeTextFile(
-						workspace.providerSandboxId,
-						"/home/zuse/.zuse-runtime-signing-public.jwk",
-						config.runtimeSigningPublicJwk,
-						"zuse",
-					);
-				const runtimeFence = nextRuntimeFence(invalidated);
-				yield* saveWorkspace({
-					...invalidated,
-					runtimeBootTokenHash: boot.tokenHash,
-					runtimeBootTokenExpiresAtMs: boot.expiresAtMs,
-					credentialEpoch: currentCredentialEpoch,
-					state: "provisioning",
-					requestConfig: {
-						...withoutRuntimeBootstrapReceipt(invalidated.requestConfig),
-						...runtimeFence,
-					},
-					runningSinceMs: nowMs,
-					revision: invalidated.revision + 1,
-				});
-				yield* provider.replaceProcess(
-					workspace.providerSandboxId,
-					WORKSPACE_RUNTIME_PROCESS_SELECTOR,
-					{
-						command: "/bin/bash",
-						args: ["-lc", "exec /usr/local/bin/zuse-workspace-bootstrap"],
-						cwd: "/home/zuse",
-						env: {
-							...project.cloudEnvironment,
-							ZUSE_CLOUD_WORKSPACE_ID: workspace.workspaceId,
-							ZUSE_RUNTIME_BOOT_TOKEN_FILE: WORKSPACE_RUNTIME_BOOT_TOKEN_FILE,
-							ZUSE_RELAY_URL: relay.relayIssuer,
-							ZUSE_BASE_REF: workspace.baseRef,
-							ZUSE_BRANCH: workspace.branch,
-							ZUSE_PROJECT_CACHE_ID: project.projectId,
-							ZUSE_REPOSITORY_URL: project.repositoryUrl,
-							ZUSE_RUNTIME_GENERATION: String(runtimeFence.runtimeGeneration),
-							ZUSE_GATEWAY_EPOCH: String(runtimeFence.gatewayEpoch),
-							...(config.runtimeManifestUrl === undefined
-								? {}
-								: {
-										ZUSE_RUNTIME_MANIFEST_URL: config.runtimeManifestUrl,
-										ZUSE_RUNTIME_PUBLIC_KEY_FILE:
-											"/home/zuse/.zuse-runtime-signing-public.jwk",
-										ZUSE_RUNTIME_WIRE_PROTOCOL: String(WIRE_PROTOCOL_VERSION),
-									}),
-						},
-						user: "zuse",
-					},
-				);
-				return;
-			}
 			yield* recordLifecycle(workspace, "resume", nowMs);
 			// Provider pause preserves memory and processes. Wake the sandbox first
 			// and give its existing runtime a brief window to reconnect to the
@@ -1417,3 +1622,25 @@ export const reconcileCloudWorkspace = (workspaceId: string) =>
 			),
 		);
 	});
+
+/**
+ * Observe only the short pre-enrollment window. Successful runtimes continue
+ * through their authenticated callbacks; failed processes are noticed without
+ * waiting for the one-minute recovery reconciler.
+ */
+export const reconcileCloudWorkspaceStartup = Effect.fn(
+	"reconcileCloudWorkspaceStartup",
+)(function* (workspaceId: string) {
+	const store = yield* CloudWorkspaceStore;
+	const startedAtMs = yield* Clock.currentTimeMillis;
+	while (true) {
+		yield* reconcileCloudWorkspace(workspaceId);
+		const workspace = yield* store.getWorkspace(workspaceId);
+		if (!cloudWorkspaceStartupNeedsObservation(workspace)) return;
+		const nowMs = yield* Clock.currentTimeMillis;
+		if (nowMs - startedAtMs >= WORKSPACE_START_OBSERVATION_MS) return;
+		yield* Effect.sleep(
+			Duration.millis(WORKSPACE_START_OBSERVATION_INTERVAL_MS),
+		);
+	}
+});

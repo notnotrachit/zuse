@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	providerIdsForUsagePoll,
 	shouldPersistDailyCosts,
+	usagePollInitialDelay,
 } from "../../src/usage/limits/poller.ts";
 import {
 	loadUsageLimitsCached,
@@ -37,6 +38,11 @@ describe("usage limits poller", () => {
 		);
 
 		expect(providers).toEqual(["claude", "grok", "gemini", "kiro"]);
+	});
+
+	it("keeps usage probes off the cloud-workspace startup path", () => {
+		expect(usagePollInitialDelay("cloud-workspace")).toBe("30 seconds");
+		expect(usagePollInitialDelay("desktop")).toBe("0 millis");
 	});
 
 	it("suppresses repeated auth failures until a manual refresh", async () => {

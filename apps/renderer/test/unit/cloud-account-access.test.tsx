@@ -1,64 +1,43 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-	CloudAccountAccess,
-	claudeAuthorizationFailureMessage,
-	hasConnectedClaudeAccess,
-} from "../../src/components/settings/cloud-account-access.tsx";
+import { CloudAccountAccess } from "../../src/components/settings/cloud-account-access.tsx";
 import {
 	runtimePhaseLabel,
 	runtimeVersionDescription,
 } from "../../src/components/settings/cloud-machines-pane.tsx";
 
 describe("CloudAccountAccess", () => {
-	it("gives actionable Claude authorization failures", () => {
-		expect(
-			claudeAuthorizationFailureMessage(new Error("invalid-code")),
-		).toContain("including the part after #");
-		expect(
-			claudeAuthorizationFailureMessage(new Error("token-not-captured")),
-		).toContain("could not capture the credential");
-	});
-
-	it("reconciles a lost import response from the remote provider status", () => {
-		expect(
-			hasConnectedClaudeAccess({
-				providers: [
-					{
-						providerId: "claude",
-						state: "connected",
-						installed: true,
-						authKind: "oauth-token",
-					},
-				],
-			}),
-		).toBe(true);
-		expect(hasConnectedClaudeAccess({ providers: [] })).toBe(false);
-	});
-
-	it("renders a stable keyboard-operable setup checklist without secret inputs", () => {
+	it("renders target-machine provider setup without local-import language", () => {
 		const markup = renderToStaticMarkup(
 			<CloudAccountAccess environmentId="env-cloud" />,
 		);
 
-		expect(markup).toContain("Developer access");
-		expect(markup).toContain("Developer tools");
-		expect(markup).toContain("Checking installed developer tools.");
-		expect(markup).not.toContain(">Ready</span>");
-		expect(markup).toContain("Private repository access");
-		expect(markup).toContain("GitHub");
-		expect(markup).toContain("Claude");
+		expect(markup).toContain("Agents");
+		expect(markup).toContain("Agent tools");
+		expect(markup).toContain("Checking installed agent tools.");
+		expect(markup).toContain("Claude Code");
 		expect(markup).toContain("Codex");
-		expect(markup.match(/>Connect<\/button>/gu)).toHaveLength(3);
-		expect(
-			markup.match(/<button[^>]*disabled=""[^>]*>Connect<\/button>/gu),
-		).toHaveLength(3);
-		expect(markup).not.toContain("Not connected");
-		expect(markup).toContain('aria-label="Refresh developer access"');
+		expect(markup).toContain("Cursor");
+		expect(markup).toContain("Grok");
+		expect(markup.match(/>Set up<\/button>/gu)).toHaveLength(4);
+		expect(markup).toContain('aria-label="Refresh agent authorization"');
 		expect(markup).toContain('aria-live="polite"');
-		expect(markup).not.toContain('type="password"');
 		expect(markup).not.toContain("auth.json");
+		expect(markup).not.toContain("transfer");
+	});
+
+	it("keeps setup visible before the persistent cloud computer exists", () => {
+		const markup = renderToStaticMarkup(<CloudAccountAccess />);
+
+		expect(markup).toContain("Cloud computer required");
+		expect(markup).toContain("Claude Code");
+		expect(markup).toContain("Codex");
+		expect(markup).toContain("Cursor");
+		expect(markup).toContain("Grok");
+		expect(markup.match(/>Not available</gu)).toHaveLength(4);
+		expect(markup).toContain('disabled=""');
+		expect(markup).not.toContain("Transfer to cloud");
 	});
 });
 

@@ -4,7 +4,6 @@ import {
 	decodeRuntimeSummary,
 	publicCloudWorkspaceSummary,
 	runtimeActivityLifecycle,
-	runtimeReadyStatusCode,
 } from "../../src/cloud-workspace-routes.ts";
 
 describe("cloud workspace runtime ready status", () => {
@@ -61,7 +60,6 @@ describe("cloud workspace runtime ready status", () => {
 				state: "failed",
 				desiredState: "archived",
 				statusCode: "archive-failed",
-				credentialEpoch: 0,
 				idempotencyKey: "workspace-key",
 				requestConfig: {
 					title: "Public title",
@@ -103,22 +101,57 @@ describe("cloud workspace runtime ready status", () => {
 		expect(JSON.stringify(summary)).not.toContain("private");
 	});
 
-	it("keeps a resumed workspace running after its start command was acknowledged", () => {
-		expect(runtimeReadyStatusCode("repository-ready", "acknowledged")).toBe(
-			"agent-running",
+	it("publishes an acknowledged warm resume as fully running", () => {
+		const summary = publicCloudWorkspaceSummary(
+			{
+				workspaceId: "workspace-1",
+				accountId: "account-1",
+				projectId: "project-1",
+				buildId: "build-1",
+				provider: "fake",
+				state: "ready",
+				desiredState: "ready",
+				runtimeState: "online",
+				statusCode: "agent-running",
+				chatId: "chat-1",
+				initialSessionId: "session-1",
+				branch: "zuse/workspace-1",
+				baseRef: "origin/main",
+				idempotencyKey: "workspace-key",
+				requestConfig: {
+					title: "Warm workspace",
+					agent: "codex",
+					model: "gpt-5",
+					startupTimings: { repositoryReadyAt: 2 },
+				},
+				nextActionAtMs: 3,
+				revision: 2,
+				createdAtMs: 1,
+				updatedAtMs: 2,
+				lastActivityAtMs: 2,
+			},
+			{
+				projectId: "project-1",
+				accountId: "account-1",
+				repositoryIdentity: "github.com/acme/app",
+				repositoryUrl: "https://github.com/acme/app.git",
+				displayName: "app",
+				defaultBranch: "main",
+				visibility: "private",
+				gitConnectionKind: "github-app",
+				cloudEnvironment: {},
+				secretBindings: [],
+				configurationDigest: "digest",
+				state: "ready",
+				idempotencyKey: "project-key",
+				createdAtMs: 1,
+				updatedAtMs: 1,
+			},
+			false,
+			null,
 		);
-		expect(runtimeReadyStatusCode("repository-ready", 42)).toBe(
-			"agent-running",
-		);
-	});
 
-	it("waits for the first agent start on a new workspace", () => {
-		expect(runtimeReadyStatusCode("repository-ready", undefined)).toBe(
-			"agent-starting",
-		);
-		expect(runtimeReadyStatusCode("agent-started", undefined)).toBe(
-			"agent-running",
-		);
+		expect(summary.startupPhase).toBe("running");
 	});
 
 	it("treats authenticated runtime traffic as a successful warm resume", () => {

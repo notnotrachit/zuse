@@ -14,11 +14,14 @@ import {
 	type SessionId,
 } from "@zuse/contracts";
 import { StarIcon } from "@zuse/icons/solid-rounded";
+import { Effect } from "effect";
 import {
 	Camera,
+	Check,
 	ChevronLeft,
 	ChevronRight,
 	Eraser,
+	Link2,
 	MousePointer2,
 	MousePointerClick,
 	PencilLine,
@@ -41,7 +44,6 @@ import type {
 	BrowserCookieImportStatus,
 	BrowserInputAction,
 	CdpCommandOutcome,
-	LocalServerSummary,
 	NetworkQueryResult,
 } from "../lib/bridge.ts";
 import {
@@ -53,8 +55,15 @@ import {
 	type BrowserRecordingArtifact,
 	BrowserRecordingController,
 } from "../lib/browser-recording.ts";
+import { getCloudPreviewUrl } from "../lib/cloud-preview-client.ts";
 import { useActiveEnvironmentEntities } from "../lib/environment-entity-hooks.ts";
+import { ensurePortForward } from "../lib/port-forward-client.ts";
 import { reportPowerBrowserSession } from "../lib/power-runtime-activity.ts";
+import {
+	getLocalEnvironmentId,
+	getRpcClient,
+	isCloudWorkspaceEnvironment,
+} from "../lib/rpc-client.ts";
 import { useAnnotationsStore } from "../store/annotations.ts";
 import { useSessionsStore } from "../store/sessions.ts";
 import { rightPaneRefFromKey, useUiStore } from "../store/ui.ts";
@@ -129,11 +138,18 @@ const annotationTools: ReadonlyArray<{
 	{ id: "erase", label: "Erase", icon: Eraser },
 ];
 
-const fallbackLocalServers: ReadonlyArray<LocalServerSummary> = [
-	{ name: "T3 Code", port: 3773 },
-	{ name: "Vite", port: 5173 },
-	{ name: "Zuse", port: 5733 },
-	{ name: "Next.js", port: 3000 },
+/** A dev server row rendered by the empty state (see `PreviewServer`). */
+type PreviewServerInfo = {
+	readonly name: string;
+	readonly port: number;
+	readonly loopbackOnly: boolean;
+};
+
+const fallbackLocalServers: ReadonlyArray<PreviewServerInfo> = [
+	{ name: "T3 Code", port: 3773, loopbackOnly: true },
+	{ name: "Vite", port: 5173, loopbackOnly: true },
+	{ name: "Zuse", port: 5733, loopbackOnly: true },
+	{ name: "Next.js", port: 3000, loopbackOnly: true },
 ];
 
 const newAnnotationId = (prefix: string): string => {
@@ -388,7 +404,9 @@ export function BrowserPane({
 	readonly sessionId: SessionId | null;
 	readonly visible: boolean;
 }) {
-	const { chatId } = chatRef;
+	const { chatId, environmentId } = chatRef;
+	const isLocalEnvironment = environmentId === getLocalEnvironmentId();
+	const isCloudEnvironment = isCloudWorkspaceEnvironment(environmentId);
 	useEffect(() => {
 		reportPowerBrowserSession(chatId, false);
 		return () => reportPowerBrowserSession(chatId, null);
@@ -498,8 +516,9 @@ export function BrowserPane({
 		useState<BrowserAnnotationStroke | null>(null);
 	const [annotationComment, setAnnotationComment] = useState("");
 	const [attachingAnnotation, setAttachingAnnotation] = useState(false);
-	const [localServers, setLocalServers] =
-		useState<ReadonlyArray<LocalServerSummary>>(fallbackLocalServers);
+	const [previewServers, setPreviewServers] = useState<
+		ReadonlyArray<PreviewServerInfo>
+	>(() => (isLocalEnvironment ? fallbackLocalServers : []));
 	const hasLoadedPage = url !== "" && url !== "about:blank";
 	const viewportPreviewScale =
 		viewport.mode === "fill" ||
@@ -748,16 +767,43 @@ export function BrowserPane({
 		);
 	};
 
+	// Discover dev servers on the chat's environment over its RPC connection —
+	// the same path serves local, SSH, and cloud. Poll while the empty state is
+	// visible so servers started after mount still appear. Stop after repeated
+	// failures so a broken remote connection is not re-dialed every tick; the
+	// poll restarts when the pane or environment changes.
 	useEffect(() => {
+		if (!visible || hasLoadedPage) return;
 		let cancelled = false;
-		void window.zuse?.browser?.listLocalServers?.().then((servers) => {
-			if (cancelled || servers.length === 0) return;
-			setLocalServers(servers);
-		});
+		let consecutiveFailures = 0;
+		const refresh = async (): Promise<void> => {
+			if (consecutiveFailures >= 3) return;
+			try {
+				const client = await getRpcClient(environmentId);
+				const result = await Effect.runPromise(
+					client["previews.listServers"](),
+				);
+				if (cancelled) return;
+				consecutiveFailures = 0;
+				// Local environments keep the placeholder suggestions when nothing
+				// is detected; remote lists reflect exactly what is listening.
+				setPreviewServers((current) =>
+					result.servers.length === 0 && isLocalEnvironment
+						? current
+						: result.servers,
+				);
+			} catch {
+				consecutiveFailures += 1;
+				if (!cancelled && !isLocalEnvironment) setPreviewServers([]);
+			}
+		};
+		void refresh();
+		const interval = setInterval(() => void refresh(), 5_000);
 		return () => {
 			cancelled = true;
+			clearInterval(interval);
 		};
-	}, []);
+	}, [environmentId, visible, hasLoadedPage, isLocalEnvironment]);
 
 	// Wire navigation lifecycle events onto the underlying webview element.
 	// We attach via `addEventListener` because the webview tag isn't a real
@@ -1701,7 +1747,28 @@ export function BrowserPane({
 				className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted/20"
 			>
 				{!hasLoadedPage ? (
-					<BrowserEmptyState servers={localServers} onOpen={navigate} />
+					<BrowserEmptyState
+						servers={previewServers}
+						isRemote={!isLocalEnvironment}
+						onOpenServer={async (server) => {
+							const localPort = await ensurePortForward(
+								environmentId,
+								server.port,
+							);
+							navigate(`http://localhost:${localPort}`);
+						}}
+						onCopyPublicLink={
+							isCloudEnvironment
+								? async (server) => {
+										const preview = await getCloudPreviewUrl(
+											environmentId,
+											server.port,
+										);
+										await navigator.clipboard.writeText(preview.url);
+									}
+								: null
+						}
+					/>
 				) : null}
 				<div
 					className="relative shrink-0"
@@ -3680,42 +3747,106 @@ function BrowserAgentOverlay({
 
 function BrowserEmptyState({
 	servers,
-	onOpen,
+	isRemote,
+	onOpenServer,
+	onCopyPublicLink,
 }: {
-	servers: ReadonlyArray<LocalServerSummary>;
-	onOpen: (url: string) => void;
+	servers: ReadonlyArray<PreviewServerInfo>;
+	isRemote: boolean;
+	onOpenServer: (server: PreviewServerInfo) => Promise<void>;
+	/** Cloud workspaces only: mint and copy the public preview link. */
+	onCopyPublicLink: ((server: PreviewServerInfo) => Promise<void>) | null;
 }) {
-	const rows = servers.length > 0 ? servers : fallbackLocalServers;
+	const [busyPort, setBusyPort] = useState<number | null>(null);
+	const [copiedPort, setCopiedPort] = useState<number | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const describeError = (cause: unknown): string =>
+		cause instanceof Error ? cause.message : String(cause);
 	return (
 		<div className="absolute inset-0 z-10 overflow-auto bg-background px-8 py-10">
 			<div className="mx-auto max-w-3xl">
 				<div className="mb-5 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
 					<Server className="size-4" strokeWidth={1.8} />
-					Local servers
+					{isRemote ? "Dev servers on this environment" : "Local servers"}
 				</div>
-				<div className="overflow-hidden rounded-xl border border-border/70 bg-card/70">
-					{rows.map((server) => (
-						<button
-							key={`${server.name}-${server.port}`}
-							type="button"
-							onClick={() => onOpen(`http://localhost:${server.port}`)}
-							className="flex w-full items-center gap-4 border-b border-border/60 px-4 py-3 text-left last:border-b-0 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-						>
-							<span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground">
-								<Server className="size-4" strokeWidth={1.8} />
-							</span>
-							<span className="grid min-w-0 flex-1">
-								<span className="truncate text-sm font-semibold text-foreground">
-									{server.name}
-								</span>
-								<span className="text-sm text-muted-foreground">
-									localhost:{server.port}
-								</span>
-							</span>
-							<span className="size-2.5 rounded-full bg-emerald-500" />
-						</button>
-					))}
-				</div>
+				{servers.length === 0 && isRemote ? (
+					<div className="rounded-xl border border-border/70 bg-card/70 px-4 py-6 text-sm text-muted-foreground">
+						No dev servers detected on this environment.
+					</div>
+				) : (
+					<div className="overflow-hidden rounded-xl border border-border/70 bg-card/70">
+						{servers.map((server) => (
+							<div
+								key={`${server.name}-${server.port}`}
+								className="flex w-full items-center border-b border-border/60 last:border-b-0 hover:bg-muted/40"
+							>
+								<button
+									type="button"
+									disabled={busyPort !== null}
+									onClick={() => {
+										setError(null);
+										setBusyPort(server.port);
+										void onOpenServer(server)
+											.catch((cause) => setError(describeError(cause)))
+											.finally(() => setBusyPort(null));
+									}}
+									className="flex min-w-0 flex-1 items-center gap-4 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+								>
+									<span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground">
+										<Server className="size-4" strokeWidth={1.8} />
+									</span>
+									<span className="grid min-w-0 flex-1">
+										<span className="truncate text-sm font-semibold text-foreground">
+											{server.name}
+										</span>
+										<span className="text-sm text-muted-foreground">
+											{busyPort === server.port
+												? "Connecting…"
+												: isRemote
+													? `port ${server.port}`
+													: `localhost:${server.port}`}
+										</span>
+									</span>
+								</button>
+								{onCopyPublicLink !== null ? (
+									<button
+										type="button"
+										disabled={server.loopbackOnly || busyPort !== null}
+										title={
+											server.loopbackOnly
+												? "This server only listens on 127.0.0.1 — restart it with --host 0.0.0.0 to share a public link."
+												: "Copy public link — anyone with the link can access it."
+										}
+										onClick={() => {
+											setError(null);
+											void onCopyPublicLink(server)
+												.then(() => {
+													setCopiedPort(server.port);
+													setTimeout(() => {
+														setCopiedPort((current) =>
+															current === server.port ? null : current,
+														);
+													}, 2_000);
+												})
+												.catch((cause) => setError(describeError(cause)));
+										}}
+										className="mr-2 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+									>
+										{copiedPort === server.port ? (
+											<Check className="size-4" strokeWidth={1.8} />
+										) : (
+											<Link2 className="size-4" strokeWidth={1.8} />
+										)}
+									</button>
+								) : null}
+								<span className="mr-4 size-2.5 shrink-0 rounded-full bg-emerald-500" />
+							</div>
+						))}
+					</div>
+				)}
+				{error !== null ? (
+					<div className="mt-3 text-sm text-destructive">{error}</div>
+				) : null}
 			</div>
 		</div>
 	);

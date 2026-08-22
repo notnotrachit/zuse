@@ -68,7 +68,7 @@ export function QueueChip({
 	const ref = { environmentId, sessionId };
 	const [runningNow, setRunningNow] = useState(false);
 	const text = previewText(item);
-	const subtitle = item.ready ? refSubtitle(item) : "Saving message…";
+	const subtitle = item.ready ? refSubtitle(item) : undefined;
 
 	const runNext = async () => {
 		if (runningNow || !item.ready) return;
@@ -91,7 +91,7 @@ export function QueueChip({
 			icon={icon}
 			title={text}
 			subtitle={subtitle}
-			className={cn("group", dragging && "bg-muted/55")}
+			className={cn("group text-[11px]", dragging && "bg-muted/55")}
 			draggable
 			onDragStart={(event) => {
 				event.dataTransfer.effectAllowed = "move";
@@ -137,7 +137,7 @@ export function QueueChip({
 										icon={ArrowTurnDownIcon}
 										className="size-3.5"
 									/>
-									<span className="text-[11px]">
+									<span className="text-[10px]">
 										{runningNow ? "Starting…" : running ? "Steer" : "Send now"}
 									</span>
 								</button>

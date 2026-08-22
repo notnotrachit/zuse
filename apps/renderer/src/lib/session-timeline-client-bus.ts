@@ -40,8 +40,11 @@ import {
 } from "./client-command-outbox.ts";
 import {
 	acquireRendererRpcSession,
+	isAuthCodedConnectionError,
+	isCloudWorkspaceEnvironment,
 	isRpcClientTransportError,
 	type MemoizeClient,
+	markCloudWorkspaceConnectionHealthy,
 	type RendererRpcSession,
 } from "./rpc-client.ts";
 import { sessionTimelineCache } from "./session-timeline-cache.ts";
@@ -126,8 +129,7 @@ class RendererTimelinePersistence implements ResourcePersistence {
 		if (
 			ref === null ||
 			sessionTimelineCache === null ||
-			value.cursor === null ||
-			(value.data as SessionTimelineProjection).olderMessageSequence != null
+			value.cursor === null
 		) {
 			return;
 		}
@@ -1040,7 +1042,7 @@ const faultFor = (cause: unknown): EnvironmentFault => {
 				? "update-required"
 				: code === "beta-access-required" || lower.includes("revoked")
 					? "revoked"
-					: code === "not-allowed" ||
+					: isAuthCodedConnectionError(cause) ||
 							lower.includes("unauthorized") ||
 							lower.includes("authentication")
 						? "blocked-auth"
@@ -1076,7 +1078,11 @@ const environmentResolver: EnvironmentResolver<MemoizeClient> = {
 					...session,
 					onActivated: (activeGeneration: number) => {
 						generation = activeGeneration;
-						if (pendingFault === null) return;
+						if (pendingFault === null) {
+							if (isCloudWorkspaceEnvironment(environmentId))
+								markCloudWorkspaceConnectionHealthy(environmentId);
+							return;
+						}
 						const fault = pendingFault;
 						pendingFault = null;
 						queueMicrotask(() => {

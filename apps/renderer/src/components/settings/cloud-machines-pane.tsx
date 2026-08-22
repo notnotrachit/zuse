@@ -541,6 +541,18 @@ export function CloudMachinesPane() {
 	return (
 		<section className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3 text-xs">
 			<CloudWorkspacePool />
+			<CloudAccountAccess
+				environmentId={
+					connected && machineEnvironmentId !== undefined
+						? machineEnvironmentId
+						: undefined
+				}
+				unavailableReason={
+					machine === null
+						? "Create the persistent cloud computer below before configuring agent authentication."
+						: "Reconnect the persistent cloud computer before managing agent authentication."
+				}
+			/>
 			{error === null ? null : (
 				<div
 					role="alert"
@@ -762,92 +774,84 @@ export function CloudMachinesPane() {
 							</>
 						)}
 					</CloudSettingsGroup>
-
 					{connected && machineEnvironmentId !== undefined ? (
-						<>
-							<CloudAccountAccess environmentId={machineEnvironmentId} />
-							<CloudSettingsGroup
-								title="Private access"
-								description="Optional private networking and SSH access for this machine."
-							>
-								<CloudSettingsRow
-									title="Private network"
-									description={
-										network?.enabled === true
-											? (network.dnsName ?? "Connected to your private network")
-											: "Connect once with a reusable or ephemeral network auth key."
-									}
-									action={
-										<>
-											<Badge
-												variant={
-													network?.enabled === true ? "success" : "outline"
-												}
-											>
-												{network?.enabled === true
-													? "Enabled"
-													: "Not configured"}
-											</Badge>
-											<Button
-												size="xs"
-												variant="outline"
-												onClick={() => setNetworkDialogOpen(true)}
-											>
-												{network?.enabled === true ? "Reconnect" : "Set up"}
-											</Button>
-										</>
-									}
-								/>
-								<CloudSettingsRow
-									title="SSH mode"
-									description={
-										sshMode === "tailnet-identity"
-											? "Network identity controls SSH access. Explicit ACL rules are required."
-											: "Standard public keys authorize SSH access."
-									}
-									action={
-										<Select
-											value={sshMode}
-											disabled={network?.enabled !== true || action !== null}
-											onValueChange={(value) =>
-												void updateSshMode(value as SshMode)
+						<CloudSettingsGroup
+							title="Private access"
+							description="Optional private networking and SSH access for this machine."
+						>
+							<CloudSettingsRow
+								title="Private network"
+								description={
+									network?.enabled === true
+										? (network.dnsName ?? "Connected to your private network")
+										: "Connect once with a reusable or ephemeral network auth key."
+								}
+								action={
+									<>
+										<Badge
+											variant={
+												network?.enabled === true ? "success" : "outline"
 											}
 										>
-											<SelectTrigger size="sm" className="w-36">
-												<SelectValue />
-											</SelectTrigger>
-											<SelectPopup>
-												<SelectItem value="authorized-keys">
-													SSH keys
-												</SelectItem>
-												<SelectItem value="tailnet-identity">
-													Network identity
-												</SelectItem>
-											</SelectPopup>
-										</Select>
-									}
-								/>
-								<CloudSettingsRow
-									title="Authorized keys"
-									description={
-										sshKeys.length === 0
-											? "No SSH public keys have been added."
-											: `${sshKeys.length} ${sshKeys.length === 1 ? "key" : "keys"} authorized`
-									}
-									action={
+											{network?.enabled === true ? "Enabled" : "Not configured"}
+										</Badge>
 										<Button
 											size="xs"
 											variant="outline"
-											disabled={network?.enabled !== true}
-											onClick={() => setKeysDialogOpen(true)}
+											onClick={() => setNetworkDialogOpen(true)}
 										>
-											<KeyRound aria-hidden />
-											Manage
+											{network?.enabled === true ? "Reconnect" : "Set up"}
 										</Button>
-									}
-								/>
-							</CloudSettingsGroup>
-						</>
+									</>
+								}
+							/>
+							<CloudSettingsRow
+								title="SSH mode"
+								description={
+									sshMode === "tailnet-identity"
+										? "Network identity controls SSH access. Explicit ACL rules are required."
+										: "Standard public keys authorize SSH access."
+								}
+								action={
+									<Select
+										value={sshMode}
+										disabled={network?.enabled !== true || action !== null}
+										onValueChange={(value) =>
+											void updateSshMode(value as SshMode)
+										}
+									>
+										<SelectTrigger size="sm" className="w-36">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectPopup>
+											<SelectItem value="authorized-keys">SSH keys</SelectItem>
+											<SelectItem value="tailnet-identity">
+												Network identity
+											</SelectItem>
+										</SelectPopup>
+									</Select>
+								}
+							/>
+							<CloudSettingsRow
+								title="Authorized keys"
+								description={
+									sshKeys.length === 0
+										? "No SSH public keys have been added."
+										: `${sshKeys.length} ${sshKeys.length === 1 ? "key" : "keys"} authorized`
+								}
+								action={
+									<Button
+										size="xs"
+										variant="outline"
+										disabled={network?.enabled !== true}
+										onClick={() => setKeysDialogOpen(true)}
+									>
+										<KeyRound aria-hidden />
+										Manage
+									</Button>
+								}
+							/>
+						</CloudSettingsGroup>
 					) : null}
 
 					<CloudSettingsGroup

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	attachmentUrl,
+	copyText,
 	rendererPlatformCapabilities,
 } from "../../src/lib/platform-capabilities.ts";
 
@@ -30,5 +31,47 @@ describe("renderer platform capabilities", () => {
 			updater: true,
 		});
 		expect(attachmentUrl("image-one")).toBe("zuse://attachments/image-one");
+	});
+
+	it("copies arbitrary text through Electron's native clipboard bridge", async () => {
+		const copied: string[] = [];
+		Object.defineProperty(globalThis, "window", {
+			configurable: true,
+			value: {
+				zuse: {
+					app: {
+						copyText: async (text: string) => {
+							copied.push(text);
+						},
+					},
+				},
+			},
+		});
+
+		await copyText("claude setup-token");
+
+		expect(copied).toEqual(["claude setup-token"]);
+	});
+
+	it("uses the browser clipboard when no desktop bridge exists", async () => {
+		const copied: string[] = [];
+		Object.defineProperty(globalThis, "window", {
+			configurable: true,
+			value: {},
+		});
+		Object.defineProperty(globalThis, "navigator", {
+			configurable: true,
+			value: {
+				clipboard: {
+					writeText: async (text: string) => {
+						copied.push(text);
+					},
+				},
+			},
+		});
+
+		await copyText("ABCD-EFGH");
+
+		expect(copied).toEqual(["ABCD-EFGH"]);
 	});
 });

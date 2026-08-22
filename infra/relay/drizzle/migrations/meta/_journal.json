@@ -78,6 +78,41 @@
 			"when": 1786727400000,
 			"tag": "0010_cloud_billing_ledger",
 			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "7",
+			"when": 1787130000000,
+			"tag": "0011_machine_owned_auth",
+			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "7",
+			"when": 1787133600000,
+			"tag": "0012_single_account_image",
+			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "7",
+			"when": 1787212800000,
+			"tag": "0013_cloud_image_build_details",
+			"breakpoints": true
+		},
+		{
+			"idx": 14,
+			"version": "7",
+			"when": 1787220000000,
+			"tag": "0014_cloud_project_selection",
+			"breakpoints": true
+		},
+		{
+			"idx": 15,
+			"version": "7",
+			"when": 1787266800000,
+			"tag": "0015_github_app_installations",
+			"breakpoints": true
 		}
 	]
 }

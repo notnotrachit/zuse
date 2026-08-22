@@ -5,7 +5,7 @@ import { resolveRendererRelayUrl } from "../../src/lib/relay-url.ts";
 describe("renderer relay URL", () => {
 	it("defaults development to staging and production to the live relay", () => {
 		expect(resolveRendererRelayUrl(undefined, true)).toBe(
-			"https://relay-staging.zuse.sh",
+			"https://relay-staging.stuff.md",
 		);
 		expect(resolveRendererRelayUrl(undefined, false)).toBe(
 			"https://relay.stuff.md",

@@ -27,6 +27,22 @@ export const CloudProjectBuildState = Schema.Literals([
 ]);
 export type CloudProjectBuildState = typeof CloudProjectBuildState.Type;
 
+export const CloudAccountImageState = Schema.Literals([
+	"not-built",
+	"building",
+	"ready",
+	"outdated",
+	"auth-broken",
+	"failed",
+]);
+export type CloudAccountImageState = typeof CloudAccountImageState.Type;
+
+export const CloudAccountImageBuildMode = Schema.Literals([
+	"update",
+	"rebuild",
+]);
+export type CloudAccountImageBuildMode = typeof CloudAccountImageBuildMode.Type;
+
 export const CloudWorkspaceState = Schema.Literals([
 	"queued",
 	"provisioning",
@@ -66,6 +82,8 @@ export class CloudWorkspaceStartupTimings extends Schema.Class<CloudWorkspaceSta
 	"CloudWorkspaceStartupTimings",
 )({
 	requestedAt: Schema.optional(Schema.Number),
+	poolClaimedAt: Schema.optional(Schema.Number),
+	forkedAt: Schema.optional(Schema.Number),
 	resumeRequestedAt: Schema.optional(Schema.Number),
 	allocatedAt: Schema.optional(Schema.Number),
 	allocationDurationMs: Schema.optional(Schema.Number),
@@ -81,6 +99,7 @@ export class CloudWorkspaceStartupTimings extends Schema.Class<CloudWorkspaceSta
 	durableChatCreatedAt: Schema.optional(Schema.Number),
 	chatCreateDurationMs: Schema.optional(Schema.Number),
 	agentStartedAt: Schema.optional(Schema.Number),
+	messageAcceptedAt: Schema.optional(Schema.Number),
 	agentStartDurationMs: Schema.optional(Schema.Number),
 	launchDurationMs: Schema.optional(Schema.Number),
 	providerResumedAt: Schema.optional(Schema.Number),
@@ -93,13 +112,6 @@ export const CloudWorkspaceRuntimeState = Schema.Literals([
 	"online",
 ]);
 export type CloudWorkspaceRuntimeState = typeof CloudWorkspaceRuntimeState.Type;
-
-export const CloudCredentialKind = Schema.Literals([
-	"github",
-	"claude",
-	"codex",
-]);
-export type CloudCredentialKind = typeof CloudCredentialKind.Type;
 
 export class CloudProviderOption extends Schema.Class<CloudProviderOption>(
 	"CloudProviderOption",
@@ -171,6 +183,77 @@ export class CloudProjectBuild extends Schema.Class<CloudProjectBuild>(
 	updatedAt: Schema.Number,
 }) {}
 
+export class CloudAccountImageRepository extends Schema.Class<CloudAccountImageRepository>(
+	"CloudAccountImageRepository",
+)({
+	projectId: Schema.String,
+	repositoryIdentity: Schema.String,
+	displayName: Schema.String,
+	defaultBranch: Schema.String,
+	sourceCommit: Schema.optional(Schema.String),
+}) {}
+
+export class CloudAccountImageProvider extends Schema.Class<CloudAccountImageProvider>(
+	"CloudAccountImageProvider",
+)({
+	providerId: Schema.String,
+	state: Schema.Literals([
+		"disconnected",
+		"authorizing",
+		"connected",
+		"expired",
+		"error",
+		"missing-tool",
+	]),
+	method: Schema.optional(
+		Schema.Literals(["subscription", "api-key", "custom"]),
+	),
+	verifiedAt: Schema.optional(Schema.Number),
+}) {}
+
+export class CloudAccountImageBuildAttempt extends Schema.Class<CloudAccountImageBuildAttempt>(
+	"CloudAccountImageBuildAttempt",
+)({
+	buildId: Schema.String,
+	state: CloudProjectBuildState,
+	mode: CloudAccountImageBuildMode,
+	active: Schema.Boolean,
+	progressPhase: Schema.optional(Schema.String),
+	errorCode: Schema.optional(Schema.String),
+	logText: Schema.optional(Schema.String),
+	runtimeVersion: Schema.String,
+	configurationDigest: Schema.String,
+	repositories: Schema.Array(CloudAccountImageRepository),
+	providers: Schema.Array(CloudAccountImageProvider),
+	createdAt: Schema.Number,
+	updatedAt: Schema.Number,
+}) {}
+
+/** The single logical private E2B image maintained for an account. */
+export class CloudAccountImage extends Schema.Class<CloudAccountImage>(
+	"CloudAccountImage",
+)({
+	state: CloudAccountImageState,
+	generation: Schema.optional(Schema.String),
+	providerId: Schema.optional(Schema.String),
+	runtimeVersion: Schema.optional(Schema.String),
+	buildMode: Schema.optional(CloudAccountImageBuildMode),
+	progressPhase: Schema.optional(Schema.String),
+	errorCode: Schema.optional(Schema.String),
+	repositories: Schema.Array(CloudAccountImageRepository),
+	providers: Schema.Array(CloudAccountImageProvider),
+	builds: Schema.Array(CloudAccountImageBuildAttempt),
+	builtAt: Schema.optional(Schema.Number),
+	updatedAt: Schema.Number,
+}) {}
+
+export class CloudAccountImageBuildRequest extends Schema.Class<CloudAccountImageBuildRequest>(
+	"CloudAccountImageBuildRequest",
+)({
+	mode: CloudAccountImageBuildMode,
+	idempotencyKey: Schema.String,
+}) {}
+
 export class CloudProjectPrepareRequest extends Schema.Class<CloudProjectPrepareRequest>(
 	"CloudProjectPrepareRequest",
 )({
@@ -184,13 +267,19 @@ export class CloudWorkspace extends Schema.Class<CloudWorkspace>(
 )({
 	workspaceId: Schema.String,
 	projectId: Schema.String,
-	buildId: Schema.String,
+	/** Legacy internal row id retained during the account-image migration. */
+	buildId: Schema.optional(Schema.String),
+	imageGeneration: Schema.String.pipe(
+		Schema.withConstructorDefault(Effect.succeed("legacy")),
+		Schema.withDecodingDefaultType(Effect.succeed("legacy")),
+	),
 	providerId: Schema.String,
 	branch: Schema.String,
 	baseRef: Schema.String,
 	state: CloudWorkspaceState,
 	desiredState: CloudWorkspaceDesiredState,
 	statusCode: Schema.String,
+	failureDiagnostic: Schema.optional(Schema.String),
 	startupPhase: CloudWorkspaceStartupPhase,
 	startupTimings: CloudWorkspaceStartupTimings,
 	runtimeState: CloudWorkspaceRuntimeState,
@@ -255,6 +344,7 @@ export class CloudChatSummary extends Schema.Class<CloudChatSummary>(
 	desiredState: CloudWorkspaceDesiredState,
 	runtimeState: CloudWorkspaceRuntimeState,
 	statusCode: Schema.String,
+	failureDiagnostic: Schema.optional(Schema.String),
 	startupPhase: CloudWorkspaceStartupPhase,
 	revision: Schema.Number,
 	/** Monotonic within the current runtime generation. */
@@ -377,7 +467,6 @@ export class CloudWorkspaceCreateRequest extends Schema.Class<CloudWorkspaceCrea
 	branch: Schema.optional(Schema.String),
 	agent: Schema.String,
 	model: Schema.String,
-	credentialKinds: Schema.optional(Schema.Array(CloudCredentialKind)),
 	secretBindings: Schema.optional(Schema.Array(Schema.String)),
 	permissions: Schema.optional(Schema.Array(Schema.String)),
 	firstMessage: Schema.optional(Schema.String),
@@ -416,37 +505,21 @@ export class CloudWorkspaceSshAccess extends Schema.Class<CloudWorkspaceSshAcces
 	workspacePath: Schema.String,
 }) {}
 
-export class CloudCredentialConnection extends Schema.Class<CloudCredentialConnection>(
-	"CloudCredentialConnection",
+/**
+ * A per-port public preview host for a running cloud workspace. The URL is
+ * public-by-URL: anyone holding it reaches the port with no further auth
+ * (the high-entropy sandbox id is the trust model). Revocation is pausing or
+ * restarting the workspace, which retires the sandbox id.
+ */
+export class CloudWorkspacePreviewUrl extends Schema.Class<CloudWorkspacePreviewUrl>(
+	"CloudWorkspacePreviewUrl",
 )({
-	kind: CloudCredentialKind,
-	state: Schema.Literals(["connected", "disconnected", "error"]),
-	version: Schema.Number,
-	accountLabel: Schema.optional(Schema.String),
-	updatedAt: Schema.Number,
+	workspaceId: Schema.String,
+	port: Schema.Number,
+	url: Schema.String,
+	/** Epoch millis, or null when the URL lives as long as the sandbox. */
+	expiresAt: Schema.NullOr(Schema.Number),
 }) {}
-
-export class CloudCredentialList extends Schema.Class<CloudCredentialList>(
-	"CloudCredentialList",
-)({ credentials: Schema.Array(CloudCredentialConnection) }) {}
-
-export class CloudCredentialConnectRequest extends Schema.Class<CloudCredentialConnectRequest>(
-	"CloudCredentialConnectRequest",
-)({
-	kind: CloudCredentialKind,
-	credentialType: Schema.Literals([
-		"api-key",
-		"oauth-token",
-		"repository-token",
-		"native-store",
-	]),
-	secret: Schema.String,
-	accountLabel: Schema.optional(Schema.String),
-}) {}
-
-export class CloudCredentialDisconnectRequest extends Schema.Class<CloudCredentialDisconnectRequest>(
-	"CloudCredentialDisconnectRequest",
-)({ kind: CloudCredentialKind }) {}
 
 export class CloudWorkspaceOpError extends Schema.TaggedErrorClass<CloudWorkspaceOpError>()(
 	"CloudWorkspaceOpError",
@@ -483,9 +556,24 @@ export const CloudProjectsConnectRpc = Rpc.make("cloud.projects.connect", {
 	success: CloudProject,
 	error: CloudWorkspaceOpError,
 });
+export const CloudProjectsRemoveRpc = Rpc.make("cloud.projects.remove", {
+	payload: Schema.Struct({ projectId: Schema.String }),
+	success: CloudProject,
+	error: CloudWorkspaceOpError,
+});
 export const CloudProjectsPrepareRpc = Rpc.make("cloud.projects.prepare", {
 	payload: CloudProjectPrepareRequest,
 	success: CloudProjectBuild,
+	error: CloudWorkspaceOpError,
+});
+export const CloudAccountImageStatusRpc = Rpc.make("cloud.image.status", {
+	payload: Schema.Void,
+	success: CloudAccountImage,
+	error: CloudWorkspaceOpError,
+});
+export const CloudAccountImageBuildRpc = Rpc.make("cloud.image.build", {
+	payload: CloudAccountImageBuildRequest,
+	success: CloudAccountImage,
 	error: CloudWorkspaceOpError,
 });
 export const CloudWorkspacesListRpc = Rpc.make("cloud.workspaces.list", {
@@ -553,6 +641,17 @@ export const CloudWorkspacesSshAccessRpc = Rpc.make(
 		error: CloudWorkspaceOpError,
 	},
 );
+export const CloudWorkspacesPreviewUrlRpc = Rpc.make(
+	"cloud.workspaces.previewUrl",
+	{
+		payload: Schema.Struct({
+			workspaceId: Schema.String,
+			port: Schema.Number,
+		}),
+		success: CloudWorkspacePreviewUrl,
+		error: CloudWorkspaceOpError,
+	},
+);
 export const CloudWorkspacesArchiveRpc = Rpc.make("cloud.workspaces.archive", {
 	payload: CloudWorkspaceActionRequest,
 	success: CloudWorkspace,
@@ -595,27 +694,6 @@ export const CloudTranscriptMessagePageGetRpc = Rpc.make(
 			beforeSequence: Schema.Number,
 		}),
 		success: CloudTranscriptMessagePageResult,
-		error: CloudWorkspaceOpError,
-	},
-);
-export const CloudCredentialsListRpc = Rpc.make("cloud.credentials.list", {
-	payload: Schema.Void,
-	success: CloudCredentialList,
-	error: CloudWorkspaceOpError,
-});
-export const CloudCredentialsImportLocalRpc = Rpc.make(
-	"cloud.credentials.importLocal",
-	{
-		payload: Schema.Struct({ kind: CloudCredentialKind }),
-		success: CloudCredentialConnection,
-		error: CloudWorkspaceOpError,
-	},
-);
-export const CloudCredentialsDisconnectRpc = Rpc.make(
-	"cloud.credentials.disconnect",
-	{
-		payload: CloudCredentialDisconnectRequest,
-		success: CloudCredentialConnection,
 		error: CloudWorkspaceOpError,
 	},
 );
