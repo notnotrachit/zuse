@@ -49,17 +49,16 @@ describe("desktop network access", () => {
 		});
 	});
 
-	it("prefers a stable local hostname across Wi-Fi address changes", () => {
-		expect(
-			resolveNetworkAccessState({
-				enabled: true,
-				port: 47_837,
-				interfaces,
-				stableHost: "MacBook-Pro.local",
-			}),
-		).toMatchObject({
-			advertisedHost: "MacBook-Pro.local",
-			endpointUrl: "ws://MacBook-Pro.local:47837",
+	it("does not replace the reachable address with a local hostname", () => {
+		const legacyInput = {
+			enabled: true,
+			port: 47_837,
+			interfaces,
+			stableHost: "MacBook-Pro.local",
+		};
+		expect(resolveNetworkAccessState(legacyInput)).toMatchObject({
+			advertisedHost: "192.168.1.42",
+			endpointUrl: "ws://192.168.1.42:47837",
 		});
 	});
 
