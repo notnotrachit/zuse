@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.9]
+
+### Fixed
+- Desktop updates now reliably open existing profiles even when startup is slow; early connection handshakes are preserved instead of leaving Zuse stuck on the loading screen.
+- Startup module failures now surface retry and reload controls instead of displaying an unbounded loading fallback.
+
 ## [0.20.8]
 
 ### Changed
