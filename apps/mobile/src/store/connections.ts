@@ -16,7 +16,11 @@ import { deviceLabel, getOrCreateDeviceId } from "~/lib/device-identity";
 import { visibleConnectionLabel } from "~/lib/display-names";
 import { clearMediaCache } from "~/lib/media-cache";
 import { serverKeyPin as serverKeyPinForPublicKey } from "~/lib/nearby-pairing";
-import { getConnectionClient } from "~/rpc/connection";
+import {
+	getConnectionClient,
+	registerRelayEndpointWriter,
+} from "~/rpc/connection";
+import type { GrantPathKind } from "~/rpc/endpoint-selection";
 import { redeemPairingCode } from "~/rpc/pairing-client";
 import { connectionKey, type WsProtocolOptions } from "~/rpc/ws-protocol";
 
@@ -183,11 +187,13 @@ export const addRelayConnection = async ({
 	label,
 	wsBaseUrl,
 	token,
+	grantPathKind,
 }: {
 	environmentId: string;
 	label: string;
 	wsBaseUrl: string;
 	token: string;
+	grantPathKind?: GrantPathKind;
 }): Promise<ConnectionRecord> => {
 	const { host, port } = parseHostPort(wsBaseUrl);
 	const key =
@@ -207,6 +213,7 @@ export const addRelayConnection = async ({
 		updatedAt: Date.now(),
 		source: "relay",
 		refreshAccountGrant: true,
+		...(grantPathKind === undefined ? {} : { grantPathKind }),
 	};
 	const next = [
 		record,
@@ -216,6 +223,56 @@ export const addRelayConnection = async ({
 	await Effect.runPromise(saveConnections(next));
 	return record;
 };
+
+export const patchRelayConnectionPath = async ({
+	environmentId,
+	host,
+	port,
+	wsBaseUrl,
+	token,
+	grantPathKind,
+}: {
+	readonly environmentId: string;
+	readonly host: string;
+	readonly port: number;
+	readonly wsBaseUrl: string;
+	readonly token: string;
+	readonly grantPathKind: GrantPathKind;
+}): Promise<void> => {
+	const current = currentConnections();
+	const existing = current.find(
+		(connection) =>
+			connection.source === "relay" &&
+			connection.environmentId === environmentId,
+	);
+	if (existing === undefined) return;
+	if (
+		existing.host === host &&
+		existing.port === port &&
+		existing.wsBaseUrl === wsBaseUrl &&
+		existing.token === token &&
+		existing.grantPathKind === grantPathKind
+	) {
+		return;
+	}
+	const next = current.map((connection) =>
+		connection.key === existing.key
+			? {
+					...connection,
+					host,
+					port,
+					wsBaseUrl,
+					token,
+					grantPathKind,
+					updatedAt: Date.now(),
+				}
+			: connection,
+	);
+	appAtomRegistry.set(connectionsAtom, next);
+	await Effect.runPromise(saveConnections(next));
+};
+
+registerRelayEndpointWriter(patchRelayConnectionPath);
 
 /** Persist a new human label for an already-stored connection. */
 export const updateConnectionLabel = async (

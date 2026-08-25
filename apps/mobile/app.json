@@ -30,6 +30,29 @@
 			"bundleIdentifier": "com.zuse.sh",
 			"appleTeamId": "HMCST4VV42"
 		},
+		"android": {
+			"package": "com.zuse.sh",
+			"adaptiveIcon": {
+				"foregroundImage": "./assets/icon.png",
+				"backgroundColor": "#111111"
+			},
+			"permissions": [
+				"CAMERA",
+				"RECORD_AUDIO",
+				"INTERNET",
+				"ACCESS_NETWORK_STATE",
+				"android.permission.POST_NOTIFICATIONS"
+			],
+			"blockedPermissions": [],
+			"intentFilters": [
+				{
+					"action": "VIEW",
+					"autoVerify": false,
+					"data": [{ "scheme": "zuse" }],
+					"category": ["BROWSABLE", "DEFAULT"]
+				}
+			]
+		},
 		"plugins": [
 			"expo-router",
 			"expo-dev-client",

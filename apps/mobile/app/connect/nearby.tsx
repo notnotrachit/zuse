@@ -29,6 +29,7 @@ import {
 	ephemeralPairingPublicKey,
 	pairingDevicePublicKey,
 } from "~/lib/pairing-device-key";
+import { nearbyUnavailableLinks } from "~/lib/settings-connect-entries";
 import { connectEnvironment } from "~/rpc/relay-client";
 import { authAccountAtom } from "~/store/auth";
 import { addConnection } from "~/store/connections";
@@ -282,11 +283,13 @@ export default function NearbyConnectScreen() {
 						<EmptyState
 							icon={Radio}
 							title="Nearby connection unavailable"
-							detail="This app build does not include nearby discovery. Scan the QR code or reinstall the native app."
+							detail="This app build does not include nearby discovery. Scan a QR code, add the laptop address, or sign in under Settings to reach a hosted computer."
 						/>
-						<Button onPress={() => router.replace("/connect/scan")}>
-							Scan QR
-						</Button>
+						{nearbyUnavailableLinks().map((link) => (
+							<Button key={link.id} onPress={() => router.replace(link.href)}>
+								{link.title}
+							</Button>
+						))}
 					</View>
 				) : pending !== null ? (
 					<View className="flex-1 items-center justify-center gap-4 px-4 py-8">

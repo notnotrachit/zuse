@@ -10,6 +10,7 @@ import {
 	Monitor,
 	Plus,
 	QrCode,
+	Radio,
 	RotateCcw,
 	TerminalSquare,
 	Trash2,
@@ -25,6 +26,7 @@ import { visibleConnectionLabel } from "~/lib/display-names";
 import { successTap } from "~/lib/haptics";
 import { clearMediaCache, mediaCacheSize } from "~/lib/media-cache";
 import { clearDownloadedMobileData } from "~/lib/mobile-data";
+import { settingsConnectEntries } from "~/lib/settings-connect-entries";
 import { registerCurrentDeviceForPush } from "~/notifications/push";
 import { downloadedCacheSize } from "~/offline/cache";
 import {
@@ -54,6 +56,7 @@ import {
 	environmentsLoadingAtom,
 	refreshEnvironments,
 } from "~/store/environments";
+import { localConnectivityAvailable } from "../../modules/local-connectivity";
 
 const formatBytes = (bytes: number | null): string => {
 	if (bytes === null) return "Calculating…";
@@ -178,22 +181,33 @@ export default function SettingsScreen() {
 			>
 				<ListSection
 					header="Connections"
-					footer="Pairing works directly over your local network and does not require an account."
+					footer={
+						localConnectivityAvailable
+							? "Pairing works directly over your local network and does not require an account."
+							: "Scan a pairing QR code or type the laptop address. Nearby discovery is available on iPhone."
+					}
 				>
-					<ListRow
-						analyticsId="connections.nearby.open"
-						icon={QrCode}
-						title="Connect to a nearby Mac"
-						subtitle="Find it automatically over Wi-Fi"
-						onPress={() => router.push("/connect/nearby")}
-					/>
-					<ListRow
-						analyticsId="connections.manual.open"
-						icon={Plus}
-						iconTone="neutral"
-						title="Add manually"
-						onPress={() => router.push("/connect/manual")}
-					/>
+					{settingsConnectEntries(localConnectivityAvailable).map((entry) => (
+						<ListRow
+							key={entry.id}
+							analyticsId={`connections.${entry.id}.open`}
+							icon={
+								entry.id === "nearby"
+									? Radio
+									: entry.id === "scan"
+										? QrCode
+										: Plus
+							}
+							iconTone={entry.id === "nearby" ? undefined : "neutral"}
+							title={entry.title}
+							subtitle={
+								entry.id === "nearby"
+									? "Find it automatically over Wi-Fi"
+									: undefined
+							}
+							onPress={() => router.push(entry.href)}
+						/>
+					))}
 					{directConnections.map((connection) => (
 						<ListRow
 							key={connection.key}

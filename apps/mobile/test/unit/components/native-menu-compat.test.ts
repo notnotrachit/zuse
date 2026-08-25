@@ -33,3 +33,27 @@ describe("iOS native menu compatibility", () => {
 		expect(sessionActions).not.toContain("Stack.Toolbar.Menu");
 	});
 });
+
+describe("non-iOS chrome is not a no-op stub", () => {
+	test("selector, session, model, and composer fallbacks wire handler props", () => {
+		expect(source("selector-row.tsx")).toContain("selectorMenuItems");
+		expect(source("selector-row.tsx")).toContain("option.onSelect");
+		expect(source("session-actions-menu.tsx")).toContain(
+			"sessionOverflowItems",
+		);
+		expect(source("session-actions-menu.tsx")).toContain("onFiles");
+		expect(source("session-actions-menu.tsx")).toContain("onTerminal");
+		expect(source("session-actions-menu.tsx")).toContain("onOpenOnDesktop");
+		expect(source("session-actions-menu.tsx")).not.toContain("_props");
+		expect(source("model-sheet.tsx")).toContain("modelSheetModelItems");
+		expect(source("model-sheet.tsx")).toContain("onChange");
+		expect(source("model-sheet.tsx")).not.toContain("_props");
+		expect(source("composer-plus-menu.tsx")).toContain("composerPlusItems");
+		expect(source("composer-plus-menu.tsx")).toContain("onCaptureImage");
+		expect(source("composer-approval-menu.tsx")).toContain(
+			"composerApprovalItems",
+		);
+		expect(source("composer-approval-menu.tsx")).toContain("onChange");
+		expect(source("composer-approval-menu.tsx")).not.toContain("_props");
+	});
+});

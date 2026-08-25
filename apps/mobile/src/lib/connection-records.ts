@@ -21,6 +21,9 @@ const ConnectionRecordFields = {
 	routeGeneration: Schema.optional(Schema.Number),
 	pathType: Schema.optional(LocalPathType),
 	refreshAccountGrant: Schema.optional(Schema.Boolean),
+	grantPathKind: Schema.optional(
+		Schema.Literals(["private-network", "managed-tunnel"]),
+	),
 	label: Schema.String,
 	updatedAt: Schema.Number,
 	source: Schema.optional(ConnectionSource),

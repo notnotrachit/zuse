@@ -1,7 +1,9 @@
 import { Atom } from "effect/unstable/reactivity";
 
+import { lastLocalPathUsesCellular } from "../../modules/local-connectivity";
 import { connectionErrorMessage } from "../lib/connection-error-message.ts";
 import { visibleConnectionLabel } from "../lib/display-names.ts";
+import { chooseAndDescribeGrant } from "../rpc/endpoint-selection.ts";
 import {
 	connectEnvironment,
 	getEnvironmentStatus,
@@ -85,6 +87,9 @@ export const connectToEnvironment = async (
 	environmentId: string,
 ): Promise<string> => {
 	const grant = await connectEnvironment(environmentId);
+	const chosen = await chooseAndDescribeGrant(grant, {
+		usesCellular: lastLocalPathUsesCellular(),
+	});
 	const label =
 		appAtomRegistry
 			.get(environmentsAtom)
@@ -92,8 +97,9 @@ export const connectToEnvironment = async (
 	const record = await addRelayConnection({
 		environmentId,
 		label,
-		wsBaseUrl: grant.endpoint.wsBaseUrl,
+		wsBaseUrl: chosen.endpoint.wsBaseUrl,
 		token: grant.connectToken,
+		grantPathKind: chosen.grantPathKind,
 	});
 	return record.key;
 };

@@ -1,3 +1,9 @@
 .expo/
 .turbo/
 dist/
+android/local.properties
+android/.gradle/
+android/**/build/
+*.keystore
+*.jks
+!android/app/debug.keystore

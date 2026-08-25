@@ -47,6 +47,24 @@ describe("connection record persistence", () => {
 		]);
 	});
 
+	test("preserves a relay grant path kind", () => {
+		const [record] = decodeConnectionRecords([
+			{
+				key: "relay:env-1",
+				environmentId: "env-1",
+				host: "100.64.0.8",
+				port: 47837,
+				wsBaseUrl: "ws://100.64.0.8:47837",
+				token: "relay-token",
+				label: "Desk",
+				updatedAt: 5,
+				source: "relay",
+				grantPathKind: "private-network",
+			},
+		]);
+		expect(record?.grantPathKind).toBe("private-network");
+	});
+
 	test("preserves explicit sources", () => {
 		const [record] = decodeConnectionRecords([
 			{

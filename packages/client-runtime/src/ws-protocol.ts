@@ -19,6 +19,8 @@ export type WsProtocolOptions = {
 	readonly serverKeyPin?: string;
 	/** Refresh a short-lived same-account grant while keeping the local route. */
 	readonly refreshAccountGrant?: boolean;
+	/** How the last relay grant was reached. Mobile persist/reconnect only. */
+	readonly grantPathKind?: "private-network" | "managed-tunnel";
 };
 
 export type WsProtocolLayerOptions = {

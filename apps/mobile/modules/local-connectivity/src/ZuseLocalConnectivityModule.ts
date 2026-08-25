@@ -86,6 +86,15 @@ Native?.addListener("onServicesChanged", (event) => {
 	for (const listener of nearbyListeners) listener(latestNearbyServices);
 });
 
+let latestPath: LocalPathEvent | null = null;
+Native?.addListener("onPathChanged", (event) => {
+	latestPath = event;
+});
+
+/** Last native path event. `undefined` when the module is absent or has not fired. */
+export const lastLocalPathUsesCellular = (): boolean | undefined =>
+	latestPath === null ? undefined : latestPath.usesCellular;
+
 let latestDiscoveryState: LocalDiscoveryState = { state: "stopped" };
 const discoveryStateListeners = new Set<(state: LocalDiscoveryState) => void>();
 Native?.addListener("onDiscoveryStateChanged", (event) => {

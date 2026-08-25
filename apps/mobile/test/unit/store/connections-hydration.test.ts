@@ -26,6 +26,7 @@ vi.mock("~/lib/nearby-pairing", () => ({
 }));
 vi.mock("~/rpc/connection", () => ({
 	getConnectionClient: vi.fn(),
+	registerRelayEndpointWriter: vi.fn(),
 }));
 vi.mock("~/rpc/pairing-client", () => ({
 	redeemPairingCode: vi.fn(),
