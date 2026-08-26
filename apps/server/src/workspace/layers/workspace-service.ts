@@ -136,14 +136,22 @@ export const WorkspaceServiceLive = Layer.effect(
 						yield* sql`
           INSERT INTO projects (id, path, name, created_at, updated_at)
           VALUES (${id}, ${canonical}, ${name}, ${nowIso}, ${nowIso})
+							ON CONFLICT(path) DO NOTHING
         `.pipe(Effect.orDie);
 
-						const folder = Folder.make({
-							id,
-							path: canonical,
-							name,
-							addedAt: now,
-						});
+						const registeredRows = yield* sql<ProjectRow>`
+							SELECT id, path, name, created_at
+							FROM projects
+							WHERE path = ${canonical}
+							LIMIT 1
+						`.pipe(Effect.orDie);
+						const [registered] = registeredRows;
+						if (registered === undefined) {
+							return yield* Effect.die(
+								new Error(`project registration did not persist ${canonical}`),
+							);
+						}
+						const folder = rowToFolder(registered);
 						yield* PubSub.publish(changes, yield* list());
 						return folder;
 					}),

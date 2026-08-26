@@ -130,7 +130,7 @@ describe("WorkspaceServiceLive project registration", () => {
 				yield* sql`
           CREATE TABLE projects (
             id TEXT PRIMARY KEY,
-            path TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -189,6 +189,65 @@ describe("WorkspaceServiceLive project registration", () => {
 			Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
 		);
 		expect(listed).toHaveLength(1);
+	});
+
+	it("converges across separate workspace service instances", async () => {
+		const databaseDirectory = await fs.mkdtemp(
+			Path.join(os.tmpdir(), "zuse-workspace-add-database-"),
+		);
+		const filename = Path.join(databaseDirectory, "zuse.sqlite");
+		const makeRuntime = () => {
+			const SqlLive = sqliteLayer({ filename });
+			return ManagedRuntime.make(
+				Layer.mergeAll(
+					SqlLive,
+					WorkspaceServiceLive.pipe(
+						Layer.provide(SqlLive),
+						Layer.provide(NodeServices.layer),
+					),
+				),
+			);
+		};
+		const firstRuntime = makeRuntime();
+		const secondRuntime = makeRuntime();
+		try {
+			await firstRuntime.runPromise(
+				Effect.gen(function* () {
+					const sql = yield* SqlClient.SqlClient;
+					yield* sql`
+						CREATE TABLE projects (
+							id TEXT PRIMARY KEY,
+							path TEXT NOT NULL UNIQUE,
+							name TEXT NOT NULL,
+							created_at TEXT NOT NULL,
+							updated_at TEXT NOT NULL
+						)
+					`;
+					yield* sql`
+						CREATE TABLE app_state (
+							key TEXT PRIMARY KEY,
+							value TEXT NOT NULL
+						)
+					`;
+				}),
+			);
+			const [first, second] = await Promise.all([
+				firstRuntime.runPromise(
+					Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
+				),
+				secondRuntime.runPromise(
+					Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
+				),
+			]);
+			expect(second.id).toBe(first.id);
+			const listed = await firstRuntime.runPromise(
+				Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
+			);
+			expect(listed).toHaveLength(1);
+		} finally {
+			await Promise.all([firstRuntime.dispose(), secondRuntime.dispose()]);
+			await fs.rm(databaseDirectory, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps case-distinct directories separate on case-sensitive filesystems", async () => {
