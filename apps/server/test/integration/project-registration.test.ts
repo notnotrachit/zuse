@@ -130,7 +130,7 @@ describe("WorkspaceServiceLive project registration", () => {
 				yield* sql`
           CREATE TABLE projects (
             id TEXT PRIMARY KEY,
-            path TEXT NOT NULL UNIQUE,
+            path TEXT NOT NULL,
             name TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -176,28 +176,38 @@ describe("WorkspaceServiceLive project registration", () => {
 		expect(listed).toHaveLength(1);
 	});
 
-	it("returns the existing folder when the path differs only by case", async () => {
-		const existingId = "case-duplicate-folder";
-		const casedPath = dir.replace(/[^/]+$/, (segment) => segment.toUpperCase());
-		expect(casedPath).not.toBe(dir);
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				const sql = yield* SqlClient.SqlClient;
-				const now = new Date().toISOString();
-				yield* sql`
-          INSERT INTO projects (id, path, name, created_at, updated_at)
-          VALUES (${existingId}, ${casedPath}, ${Path.basename(dir)}, ${now}, ${now})
-        `;
-			}),
+	it("serializes overlapping imports of the same folder", async () => {
+		const [first, second] = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) =>
+				Effect.all([workspace.add(dir), workspace.add(dir)], {
+					concurrency: "unbounded",
+				}),
+			),
 		);
-		const folder = await runtime.runPromise(
-			Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
-		);
-		expect(folder.id).toBe(existingId);
+		expect(second.id).toBe(first.id);
 		const listed = await runtime.runPromise(
 			Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
 		);
 		expect(listed).toHaveLength(1);
+	});
+
+	it("keeps case-distinct directories separate on case-sensitive filesystems", async () => {
+		const lower = Path.join(dir, "project");
+		const upper = Path.join(dir, "PROJECT");
+		await fs.mkdir(lower);
+		await fs.mkdir(upper, { recursive: true });
+		if ((await fs.realpath(lower)) === (await fs.realpath(upper))) return;
+
+		const [first, second] = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) =>
+				Effect.all([workspace.add(lower), workspace.add(upper)]),
+			),
+		);
+		expect(second.id).not.toBe(first.id);
+		const listed = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
+		);
+		expect(listed).toHaveLength(2);
 	});
 });
 

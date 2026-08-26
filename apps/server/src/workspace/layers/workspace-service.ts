@@ -5,7 +5,7 @@ import {
 	WorkspaceInvalidPathError,
 	WorkspaceNotFoundError,
 } from "@zuse/contracts";
-import { Effect, FileSystem, Layer, PubSub, Stream } from "effect";
+import { Effect, FileSystem, Layer, PubSub, Semaphore, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 
 import { prepareProjectRegistration } from "../project-registration.ts";
@@ -34,6 +34,7 @@ export const WorkspaceServiceLive = Layer.effect(
 		const sql = yield* SqlClient.SqlClient;
 		const fs = yield* FileSystem.FileSystem;
 		const changes = yield* PubSub.unbounded<ReadonlyArray<Folder>>();
+		const registrationLock = yield* Semaphore.make(1);
 
 		const list: WorkspaceService["Service"]["list"] = () =>
 			Effect.gen(function* () {
@@ -54,6 +55,35 @@ export const WorkspaceServiceLive = Layer.effect(
           LIMIT 1
         `.pipe(Effect.orDie);
 				return rows.length > 0 ? rowToFolder(rows[0]!) : null;
+			});
+
+		const findExistingByFilesystemIdentity = (
+			canonical: string,
+			resolved: string,
+		) =>
+			Effect.gen(function* () {
+				const exactRows = yield* sql<ProjectRow>`
+          SELECT id, path, name, created_at
+          FROM projects
+          WHERE path = ${canonical}
+             OR path = ${resolved}
+          LIMIT 1
+        `.pipe(Effect.orDie);
+				const [exact] = exactRows;
+				if (exact !== undefined) return exact;
+
+				const rows = yield* sql<ProjectRow>`
+          SELECT id, path, name, created_at
+          FROM projects
+          ORDER BY created_at ASC
+        `.pipe(Effect.orDie);
+				for (const row of rows) {
+					const existingCanonical = yield* fs
+						.realPath(row.path)
+						.pipe(Effect.catch(() => Effect.succeed(null)));
+					if (existingCanonical === canonical) return row;
+				}
+				return null;
 			});
 
 		const add: WorkspaceService["Service"]["add"] = (rawPath) =>
@@ -81,41 +111,43 @@ export const WorkspaceServiceLive = Layer.effect(
 					);
 				}
 
-				const existingRows = yield* sql<ProjectRow>`
-          SELECT id, path, name, created_at
-          FROM projects
-          WHERE path = ${canonical}
-             OR path = ${resolved}
-             OR lower(path) = lower(${canonical})
-             OR lower(path) = lower(${resolved})
-          LIMIT 1
-        `.pipe(Effect.orDie);
-				if (existingRows.length > 0) {
-					return rowToFolder(existingRows[0]!);
-				}
+				return yield* registrationLock.withPermits(1)(
+					Effect.gen(function* () {
+						const existing = yield* findExistingByFilesystemIdentity(
+							canonical,
+							resolved,
+						);
+						if (existing !== null) return rowToFolder(existing);
 
-				yield* Effect.tryPromise({
-					try: () => prepareProjectRegistration(canonical),
-					catch: (cause) =>
-						new WorkspaceInvalidPathError({
-							path: canonical,
-							reason: `could not prepare project metadata: ${String(cause)}`,
-						}),
-				});
+						yield* Effect.tryPromise({
+							try: () => prepareProjectRegistration(canonical),
+							catch: (cause) =>
+								new WorkspaceInvalidPathError({
+									path: canonical,
+									reason: `could not prepare project metadata: ${String(cause)}`,
+								}),
+						});
 
-				const id = FolderId.make(crypto.randomUUID());
-				const name = Path.basename(canonical) || canonical;
-				const now = new Date();
-				const nowIso = now.toISOString();
+						const id = FolderId.make(crypto.randomUUID());
+						const name = Path.basename(canonical) || canonical;
+						const now = new Date();
+						const nowIso = now.toISOString();
 
-				yield* sql`
+						yield* sql`
           INSERT INTO projects (id, path, name, created_at, updated_at)
           VALUES (${id}, ${canonical}, ${name}, ${nowIso}, ${nowIso})
         `.pipe(Effect.orDie);
 
-				const folder = Folder.make({ id, path: canonical, name, addedAt: now });
-				yield* PubSub.publish(changes, yield* list());
-				return folder;
+						const folder = Folder.make({
+							id,
+							path: canonical,
+							name,
+							addedAt: now,
+						});
+						yield* PubSub.publish(changes, yield* list());
+						return folder;
+					}),
+				);
 			});
 
 		const remove: WorkspaceService["Service"]["remove"] = (folderId) =>
