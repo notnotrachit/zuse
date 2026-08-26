@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import * as SecureStore from "expo-secure-store";
 
+import { classifyConnectionCredential } from "~/lib/connection-credential";
 import {
 	type ConnectionRecord,
 	type ConnectionSource,
@@ -375,14 +376,14 @@ const redeemPairingCodeIfNeeded = async ({
 	readonly environmentPublicKey?: string;
 	readonly transportCertificatePin?: string;
 }> => {
-	const trimmed = token?.trim();
-	if (!trimmed) return { token: null };
-	if (!trimmed.startsWith("zp_")) return { token: trimmed };
+	const credential = classifyConnectionCredential(token);
+	if (credential.kind === "none") return { token: null };
+	if (credential.kind === "bearer") return { token: credential.token };
 
 	return redeemPairingCode({
 		host,
 		port,
-		code: trimmed,
+		code: credential.code,
 		deviceId: await getOrCreateDeviceId(),
 		deviceLabel: deviceLabel(),
 		httpBaseUrl,
