@@ -9,7 +9,9 @@ import {
 	renameSidebarGroup,
 	setSidebarGroupCollapsed,
 	setSidebarGroupIconColor,
+	sidebarEmptyGroupAcceptsDrop,
 	sidebarGroupItemKey,
+	sidebarProjectRowAcceptsDrop,
 } from "../../src/lib/sidebar-project-layout.ts";
 
 const keys = ["alpha", "beta", "gamma"] as const;
@@ -115,6 +117,23 @@ describe("moveSidebarItem", () => {
 				{ kind: "group-end", groupId: "g1" },
 			),
 		).toEqual(two);
+	});
+});
+
+describe("sidebar drag targets", () => {
+	it("does not advertise nested project targets for group drags", () => {
+		const group = { kind: "group", id: "g1" } as const;
+		expect(sidebarProjectRowAcceptsDrop(group, "g2")).toBe(false);
+		expect(sidebarProjectRowAcceptsDrop(group, null)).toBe(true);
+	});
+
+	it("accepts only projects in an empty group", () => {
+		expect(
+			sidebarEmptyGroupAcceptsDrop({ kind: "project", key: "alpha" }),
+		).toBe(true);
+		expect(sidebarEmptyGroupAcceptsDrop({ kind: "group", id: "g1" })).toBe(
+			false,
+		);
 	});
 });
 

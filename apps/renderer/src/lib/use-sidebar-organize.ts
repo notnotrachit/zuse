@@ -6,7 +6,9 @@ import {
 	type SidebarDragSource,
 	type SidebarDropTarget,
 	type SidebarLayoutNode,
+	sidebarEmptyGroupAcceptsDrop,
 	sidebarGroupItemKey,
+	sidebarProjectRowAcceptsDrop,
 } from "./sidebar-project-layout.ts";
 
 export type SidebarDropLine = "before" | "after" | "into";
@@ -21,6 +23,8 @@ export type SidebarGroupDialog =
 
 const itemKeyOf = (node: SidebarLayoutNode): string =>
 	node.kind === "group" ? sidebarGroupItemKey(node.group.id) : node.key;
+
+const emptyGroupDropKey = (groupId: string): string => `empty-group:${groupId}`;
 
 export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 	const layout = useSidebarProjectLayoutStore((s) => s.layout);
@@ -114,7 +118,12 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 				event.dataTransfer.setData("text/plain", key);
 			},
 			onDragOver: (event: DragEvent<HTMLElement>) => {
-				if (dragSourceRef.current === null) return;
+				const source = dragSourceRef.current;
+				if (source === null) return;
+				if (!sidebarProjectRowAcceptsDrop(source, groupId)) {
+					setDrop(null);
+					return;
+				}
 				event.preventDefault();
 				event.stopPropagation();
 				event.dataTransfer.dropEffect = "move";
@@ -128,12 +137,51 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 				);
 			},
 			onDrop: (event: DragEvent<HTMLElement>) => {
+				const source = dragSourceRef.current;
+				if (source === null) return;
+				if (!sidebarProjectRowAcceptsDrop(source, groupId)) {
+					clearDrag();
+					return;
+				}
 				event.preventDefault();
 				event.stopPropagation();
 				const rect = event.currentTarget.getBoundingClientRect();
 				applyDrop(event.clientY < rect.top + rect.height / 2 ? before : after);
 			},
 			onDragEnd: () => clearDrag(),
+		};
+	};
+
+	const emptyGroupDropProps = (groupId: string) => {
+		const dropKey = emptyGroupDropKey(groupId);
+		return {
+			onDragOver: (event: DragEvent<HTMLElement>) => {
+				const source = dragSourceRef.current;
+				if (source === null || !sidebarEmptyGroupAcceptsDrop(source)) {
+					setDrop(null);
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				event.dataTransfer.dropEffect = "move";
+				setDrop((current) =>
+					current?.key === dropKey && current.line === "into"
+						? current
+						: { key: dropKey, line: "into" },
+				);
+			},
+			onDrop: (event: DragEvent<HTMLElement>) => {
+				const source = dragSourceRef.current;
+				if (source === null || !sidebarEmptyGroupAcceptsDrop(source)) {
+					clearDrag();
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				applyDrop({ kind: "group-end", groupId });
+			},
+			onDragLeave: () =>
+				setDrop((current) => (current?.key === dropKey ? null : current)),
 		};
 	};
 
@@ -200,6 +248,9 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 		dropLineFor,
 		projectDragProps,
 		groupDragProps,
+		emptyGroupDropProps,
+		isEmptyGroupDropActive: (groupId: string) =>
+			drop?.key === emptyGroupDropKey(groupId) && drop.line === "into",
 		consumeSkipClick,
 		inGroupId: (projectKey: string) => projectGroupIdFor(layout, projectKey),
 		groupDialog,

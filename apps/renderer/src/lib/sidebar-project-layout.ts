@@ -54,6 +54,15 @@ export type SidebarDropTarget =
 	  }
 	| { readonly kind: "group-end"; readonly groupId: string };
 
+export const sidebarProjectRowAcceptsDrop = (
+	source: SidebarDragSource,
+	groupId: string | null,
+): boolean => source.kind === "project" || groupId === null;
+
+export const sidebarEmptyGroupAcceptsDrop = (
+	source: SidebarDragSource,
+): boolean => source.kind === "project";
+
 const unique = (keys: ReadonlyArray<string>): string[] => {
 	const seen = new Set<string>();
 	const out: string[] = [];

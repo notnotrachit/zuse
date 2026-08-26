@@ -462,6 +462,10 @@ export function ProjectsSidebar() {
 										organize.sidebarGroupItemKey(node.group.id),
 									)}
 									dragProps={organize.groupDragProps(node.group.id)}
+									emptyDropActive={organize.isEmptyGroupDropActive(
+										node.group.id,
+									)}
+									emptyDropProps={organize.emptyGroupDropProps(node.group.id)}
 									onToggleCollapsed={() =>
 										organize.setGroupCollapsed(
 											node.group.id,
@@ -563,6 +567,10 @@ export function ProjectsSidebar() {
 										organize.sidebarGroupItemKey(node.group.id),
 									)}
 									dragProps={organize.groupDragProps(node.group.id)}
+									emptyDropActive={organize.isEmptyGroupDropActive(
+										node.group.id,
+									)}
+									emptyDropProps={organize.emptyGroupDropProps(node.group.id)}
 									onToggleCollapsed={() =>
 										organize.setGroupCollapsed(
 											node.group.id,
@@ -763,6 +771,8 @@ function UserProjectGroup({
 	group,
 	dropLine,
 	dragProps,
+	emptyDropActive,
+	emptyDropProps,
 	onToggleCollapsed,
 	onRename,
 	onDissolve,
@@ -773,6 +783,8 @@ function UserProjectGroup({
 	group: Organize["groups"][number];
 	dropLine: SidebarDropLine | null;
 	dragProps: ReturnType<Organize["groupDragProps"]>;
+	emptyDropActive: boolean;
+	emptyDropProps: ReturnType<Organize["emptyGroupDropProps"]>;
 	onToggleCollapsed: () => void;
 	onRename: () => void;
 	onDissolve: () => void;
@@ -853,7 +865,14 @@ function UserProjectGroup({
 			{group.collapsed ? null : (
 				<ul className="ms-2 flex flex-col gap-0.5 border-s border-sidebar-border/50 ps-1">
 					{group.projectKeys.length === 0 ? (
-						<li className="px-2 py-1 text-[12px] text-muted-foreground">
+						<li
+							{...emptyDropProps}
+							className={cn(
+								"rounded-md px-2 py-1 text-[12px] text-muted-foreground transition-colors",
+								emptyDropActive &&
+									"bg-sidebar-accent text-sidebar-accent-foreground ring-1 ring-inset ring-foreground/30",
+							)}
+						>
 							Drag projects here
 						</li>
 					) : (
