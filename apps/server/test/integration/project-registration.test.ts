@@ -175,6 +175,30 @@ describe("WorkspaceServiceLive project registration", () => {
 		);
 		expect(listed).toHaveLength(1);
 	});
+
+	it("returns the existing folder when the path differs only by case", async () => {
+		const existingId = "case-duplicate-folder";
+		const casedPath = dir.replace(/[^/]+$/, (segment) => segment.toUpperCase());
+		expect(casedPath).not.toBe(dir);
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				const sql = yield* SqlClient.SqlClient;
+				const now = new Date().toISOString();
+				yield* sql`
+          INSERT INTO projects (id, path, name, created_at, updated_at)
+          VALUES (${existingId}, ${casedPath}, ${Path.basename(dir)}, ${now}, ${now})
+        `;
+			}),
+		);
+		const folder = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
+		);
+		expect(folder.id).toBe(existingId);
+		const listed = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
+		);
+		expect(listed).toHaveLength(1);
+	});
 });
 
 const exists = async (filePath: string): Promise<boolean> => {

@@ -84,7 +84,10 @@ export const WorkspaceServiceLive = Layer.effect(
 				const existingRows = yield* sql<ProjectRow>`
           SELECT id, path, name, created_at
           FROM projects
-          WHERE path = ${canonical} OR path = ${resolved}
+          WHERE path = ${canonical}
+             OR path = ${resolved}
+             OR lower(path) = lower(${canonical})
+             OR lower(path) = lower(${resolved})
           LIMIT 1
         `.pipe(Effect.orDie);
 				if (existingRows.length > 0) {
