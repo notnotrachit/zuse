@@ -56,7 +56,7 @@ import {
 	environmentsLoadingAtom,
 	refreshEnvironments,
 } from "~/store/environments";
-import { localConnectivityAvailable } from "../../modules/local-connectivity";
+import { localConnectivityAvailable } from "../modules/local-connectivity";
 
 const formatBytes = (bytes: number | null): string => {
 	if (bytes === null) return "Calculating…";
