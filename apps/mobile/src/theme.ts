@@ -16,65 +16,79 @@ export const glass = {
 	hairlineLight: "rgba(0,0,0,0.08)",
 } as const;
 
-const platformColor = <T>(ios: T, android: T | undefined, fallback: T): T =>
-	Platform.select({ ios, android: android ?? fallback, default: fallback }) ??
-	fallback;
+const platformColor = <T>(
+	ios: () => T,
+	android: () => T | undefined,
+	fallback: T,
+): T => {
+	if (Platform.OS === "ios") return ios();
+	if (Platform.OS === "android") return android() ?? fallback;
+	return fallback;
+};
 
 /** Native semantic colors. UIKit/Material re-resolve these for light/dark mode. */
 export const colors = {
 	bg: platformColor(
-		DynamicColorIOS({ light: "#f7f7f5", dark: "hsl(0 0% 6%)" }),
-		Color.android.dynamic.surface,
+		() => DynamicColorIOS({ light: "#f7f7f5", dark: "hsl(0 0% 6%)" }),
+		() => Color.android.dynamic.surface,
 		"#ffffff",
 	),
 	fg: platformColor(
-		DynamicColorIOS({ light: "#171716", dark: "hsl(0 0% 93%)" }),
-		Color.android.dynamic.onSurface,
+		() => DynamicColorIOS({ light: "#171716", dark: "hsl(0 0% 93%)" }),
+		() => Color.android.dynamic.onSurface,
 		"#262626",
 	),
 	secondaryFg: platformColor(
-		Color.ios.secondaryLabel,
-		Color.android.dynamic.onSurfaceVariant,
+		() => Color.ios.secondaryLabel,
+		() => Color.android.dynamic.onSurfaceVariant,
 		"#686868",
 	),
 	tertiaryFg: platformColor(
-		Color.ios.tertiaryLabel,
-		Color.android.dynamic.onSurfaceVariant,
+		() => Color.ios.tertiaryLabel,
+		() => Color.android.dynamic.onSurfaceVariant,
 		"#8f8f8f",
 	),
 	mutedFg: platformColor(
-		Color.ios.secondaryLabel,
-		Color.android.dynamic.onSurfaceVariant,
+		() => Color.ios.secondaryLabel,
+		() => Color.android.dynamic.onSurfaceVariant,
 		"#686868",
 	),
 	card: platformColor(
-		DynamicColorIOS({ light: "#ffffff", dark: "hsl(0 0% 12%)" }),
-		Color.android.dynamic.surfaceContainer,
+		() => DynamicColorIOS({ light: "#ffffff", dark: "hsl(0 0% 12%)" }),
+		() => Color.android.dynamic.surfaceContainer,
 		"#ffffff",
 	),
 	cardElevated: platformColor(
-		DynamicColorIOS({ light: "#f0f0ed", dark: "hsl(0 0% 13%)" }),
-		Color.android.dynamic.surfaceContainerHigh,
+		() => DynamicColorIOS({ light: "#f0f0ed", dark: "hsl(0 0% 13%)" }),
+		() => Color.android.dynamic.surfaceContainerHigh,
 		"rgba(0,0,0,0.04)",
 	),
 	border: platformColor(
-		Color.ios.separator,
-		Color.android.dynamic.outlineVariant,
+		() => Color.ios.separator,
+		() => Color.android.dynamic.outlineVariant,
 		"rgba(0,0,0,0.08)",
 	),
-	accent: platformColor(NEON_GREEN, NEON_GREEN, NEON_GREEN),
+	accent: platformColor(
+		() => NEON_GREEN,
+		() => NEON_GREEN,
+		NEON_GREEN,
+	),
 	primaryForeground: PRIMARY_FOREGROUND,
 	danger: platformColor(
-		Color.ios.systemRed,
-		Color.android.dynamic.error,
+		() => Color.ios.systemRed,
+		() => Color.android.dynamic.error,
 		"#dc2626",
 	),
 	warning: platformColor(
-		Color.ios.systemOrange,
-		Color.android.material.yellow600,
+		() => Color.ios.systemOrange,
+		() => Color.android.material.yellow600,
 		"#d97706",
 	),
-	success: platformColor(NEON_GREEN, NEON_GREEN, NEON_GREEN),
+	success: platformColor(
+		() => NEON_GREEN,
+		() => NEON_GREEN,
+		NEON_GREEN,
+	),
 	diffAdded: "#269a3b",
 	diffRemoved: "#d93f4c",
 	diffHunk: "#a63aa5",
