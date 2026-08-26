@@ -34,7 +34,7 @@ export const WorkspaceServiceLive = Layer.effect(
 		const sql = yield* SqlClient.SqlClient;
 		const fs = yield* FileSystem.FileSystem;
 		const changes = yield* PubSub.unbounded<ReadonlyArray<Folder>>();
-		const registrationLock = yield* Semaphore.make(1);
+		const projectMutationLock = yield* Semaphore.make(1);
 
 		const list: WorkspaceService["Service"]["list"] = () =>
 			Effect.gen(function* () {
@@ -111,7 +111,7 @@ export const WorkspaceServiceLive = Layer.effect(
 					);
 				}
 
-				return yield* registrationLock.withPermits(1)(
+				return yield* projectMutationLock.withPermits(1)(
 					Effect.gen(function* () {
 						const existing = yield* findExistingByFilesystemIdentity(
 							canonical,
@@ -159,25 +159,27 @@ export const WorkspaceServiceLive = Layer.effect(
 			});
 
 		const remove: WorkspaceService["Service"]["remove"] = (folderId) =>
-			Effect.gen(function* () {
-				const existing = yield* sql<{ id: string }>`
+			projectMutationLock.withPermits(1)(
+				Effect.gen(function* () {
+					const existing = yield* sql<{ id: string }>`
           SELECT id FROM projects WHERE id = ${folderId} LIMIT 1
         `.pipe(Effect.orDie);
-				if (existing.length === 0) {
-					return yield* Effect.fail(new WorkspaceNotFoundError({ folderId }));
-				}
-				yield* sql`DELETE FROM projects WHERE id = ${folderId}`.pipe(
-					Effect.orDie,
-				);
-				// ON DELETE CASCADE on projects → sessions → messages handles the rest.
-				// If this was the selected project, clear the pointer so the persisted
-				// value never points to a missing id.
-				yield* sql`
+					if (existing.length === 0) {
+						return yield* Effect.fail(new WorkspaceNotFoundError({ folderId }));
+					}
+					yield* sql`DELETE FROM projects WHERE id = ${folderId}`.pipe(
+						Effect.orDie,
+					);
+					// ON DELETE CASCADE on projects → sessions → messages handles the rest.
+					// If this was the selected project, clear the pointer so the persisted
+					// value never points to a missing id.
+					yield* sql`
           DELETE FROM app_state
           WHERE key = ${SELECTED_KEY} AND value = ${folderId}
 			`.pipe(Effect.orDie);
-				yield* PubSub.publish(changes, yield* list());
-			});
+					yield* PubSub.publish(changes, yield* list());
+				}),
+			);
 
 		const streamChanges: WorkspaceService["Service"]["streamChanges"] = () =>
 			Stream.unwrap(

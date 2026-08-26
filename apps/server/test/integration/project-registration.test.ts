@@ -191,6 +191,23 @@ describe("WorkspaceServiceLive project registration", () => {
 		expect(listed).toHaveLength(1);
 	});
 
+	it("serializes removal with re-import", async () => {
+		const existing = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
+		);
+		const [, reimported] = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) =>
+				Effect.all([workspace.remove(existing.id), workspace.add(dir)], {
+					concurrency: "unbounded",
+				}),
+			),
+		);
+		const listed = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
+		);
+		expect(listed).toEqual([reimported]);
+	});
+
 	it("converges across separate workspace service instances", async () => {
 		const databaseDirectory = await fs.mkdtemp(
 			Path.join(os.tmpdir(), "zuse-workspace-add-database-"),
