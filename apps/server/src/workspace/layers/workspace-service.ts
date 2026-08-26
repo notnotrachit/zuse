@@ -2,7 +2,6 @@ import * as Path from "node:path";
 import {
 	Folder,
 	FolderId,
-	WorkspaceDuplicatePathError,
 	WorkspaceInvalidPathError,
 	WorkspaceNotFoundError,
 } from "@zuse/contracts";
@@ -60,12 +59,15 @@ export const WorkspaceServiceLive = Layer.effect(
 		const add: WorkspaceService["Service"]["add"] = (rawPath) =>
 			Effect.gen(function* () {
 				const resolved = Path.resolve(rawPath);
+				const canonical = yield* fs
+					.realPath(resolved)
+					.pipe(Effect.catch(() => Effect.succeed(resolved)));
 
-				const stat = yield* fs.stat(resolved).pipe(
+				const stat = yield* fs.stat(canonical).pipe(
 					Effect.mapError(
 						() =>
 							new WorkspaceInvalidPathError({
-								path: resolved,
+								path: canonical,
 								reason: "path does not exist",
 							}),
 					),
@@ -73,41 +75,42 @@ export const WorkspaceServiceLive = Layer.effect(
 				if (stat.type !== "Directory") {
 					return yield* Effect.fail(
 						new WorkspaceInvalidPathError({
-							path: resolved,
+							path: canonical,
 							reason: "path is not a directory",
 						}),
 					);
 				}
 
-				const dupes = yield* sql<{ id: string }>`
-          SELECT id FROM projects WHERE path = ${resolved} LIMIT 1
+				const existingRows = yield* sql<ProjectRow>`
+          SELECT id, path, name, created_at
+          FROM projects
+          WHERE path = ${canonical} OR path = ${resolved}
+          LIMIT 1
         `.pipe(Effect.orDie);
-				if (dupes.length > 0) {
-					return yield* Effect.fail(
-						new WorkspaceDuplicatePathError({ path: resolved }),
-					);
+				if (existingRows.length > 0) {
+					return rowToFolder(existingRows[0]!);
 				}
 
 				yield* Effect.tryPromise({
-					try: () => prepareProjectRegistration(resolved),
+					try: () => prepareProjectRegistration(canonical),
 					catch: (cause) =>
 						new WorkspaceInvalidPathError({
-							path: resolved,
+							path: canonical,
 							reason: `could not prepare project metadata: ${String(cause)}`,
 						}),
 				});
 
 				const id = FolderId.make(crypto.randomUUID());
-				const name = Path.basename(resolved) || resolved;
+				const name = Path.basename(canonical) || canonical;
 				const now = new Date();
 				const nowIso = now.toISOString();
 
 				yield* sql`
           INSERT INTO projects (id, path, name, created_at, updated_at)
-          VALUES (${id}, ${resolved}, ${name}, ${nowIso}, ${nowIso})
+          VALUES (${id}, ${canonical}, ${name}, ${nowIso}, ${nowIso})
         `.pipe(Effect.orDie);
 
-				const folder = Folder.make({ id, path: resolved, name, addedAt: now });
+				const folder = Folder.make({ id, path: canonical, name, addedAt: now });
 				yield* PubSub.publish(changes, yield* list());
 				return folder;
 			});

@@ -160,6 +160,21 @@ describe("WorkspaceServiceLive project registration", () => {
 			".context\n",
 		);
 	});
+
+	it("returns the existing folder when the same path is added again", async () => {
+		const first = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
+		);
+		const second = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.add(dir)),
+		);
+		expect(second.id).toBe(first.id);
+		expect(second.path).toBe(first.path);
+		const listed = await runtime.runPromise(
+			Effect.flatMap(WorkspaceService, (workspace) => workspace.list()),
+		);
+		expect(listed).toHaveLength(1);
+	});
 });
 
 const exists = async (filePath: string): Promise<boolean> => {
