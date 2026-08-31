@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The packaged `zusehq` CLI now discovers and authenticates to a foreground Serve process, reconnects after Serve restarts, and reports protocol mismatch, rejected credentials, and unavailable servers distinctly
+
 ## [0.20.13]
 
 ### Changed
