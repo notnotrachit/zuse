@@ -13,6 +13,7 @@ import type {
 	WorktreeId,
 } from "@zuse/contracts";
 import { CommandId, EnvironmentId, Session, SessionId } from "@zuse/contracts";
+import { cloudInteractionFailure } from "../lib/cloud-failure-presentation.ts";
 import { cloudSummaryForChat } from "../lib/cloud-workspace-catalog.ts";
 import {
 	activeSessionsByProject,
@@ -145,6 +146,7 @@ type SessionsState = {
 	 * answers to the driver, which returns them as the tool result.
 	 */
 	readonly answerQuestion: (
+		environmentId: EnvironmentId,
 		sessionId: SessionId,
 		itemId: AgentItemId,
 		answers: ReadonlyArray<UserQuestionAnswer>,
@@ -154,7 +156,10 @@ type SessionsState = {
 		toolCallId: AgentItemId,
 		outcome: PlanApprovalOutcome,
 		feedback?: string,
-		options?: { readonly silent?: boolean },
+		options?: {
+			readonly silent?: boolean;
+			readonly environmentId?: EnvironmentId;
+		},
 	) => Promise<"accepted" | "session-not-found" | "failed">;
 	/**
 	 * Switch the session's provider and model. Allowed only before the first
@@ -671,7 +676,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 			if (projectId !== null) await get().hydrate(projectId);
 		}
 	},
-	answerQuestion: async (sessionId, itemId, answers) => {
+	answerQuestion: async (environmentId, sessionId, itemId, answers) => {
 		set({ error: null });
 		try {
 			const commandId = nextCommandId("session-answer-question");
@@ -679,11 +684,13 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 				sessionId,
 				"session.answerQuestion",
 				commandId,
-				{ sessionId, itemId, answers },
-				"never",
+				{ commandId, sessionId, itemId, answers },
+				"safe",
+				environmentId,
 			);
 		} catch (err) {
-			set({ error: formatError(err) });
+			const failure = cloudInteractionFailure(err);
+			set({ error: failure.presentation?.message ?? formatError(err) });
 		}
 	},
 	respondToPlan: async (sessionId, toolCallId, outcome, feedback, options) => {
@@ -698,14 +705,17 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 					sessionId,
 					toolCallId,
 					outcome,
+					commandId,
 					...(feedback === undefined ? {} : { feedback }),
 				},
-				"never",
+				"safe",
+				options?.environmentId,
 			);
 			return "accepted";
 		} catch (error) {
-			const message = formatError(error);
-			if (message.includes("SessionNotFoundError")) {
+			const failure = cloudInteractionFailure(error);
+			const message = failure.presentation?.message ?? formatError(error);
+			if (failure.expired) {
 				if (options?.silent !== true) set({ error: message });
 				return "session-not-found";
 			}

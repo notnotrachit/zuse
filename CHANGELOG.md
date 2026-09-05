@@ -15,7 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Imported chats, Cloud Workspace setup, approval questions, and permission prompts are denser and easier to scan
 
 ### Fixed
+- Cloud sandbox images now preconfigure authenticated Git and GitHub CLI access, lazily minting and caching renewable repository credentials only when a GitHub command runs
+- Cloud text messages can now be accepted while compute sleeps, wake the workspace through a durable encrypted mailbox, survive client/runtime restarts without duplicate provider sends, and report queued, cancelled, expired, or unknown outcomes explicitly
+- Cloud chats now automatically reconnect a failed client when the control plane reports that sandbox compute is ready, instead of showing a dead chat beside a working cloud terminal
 - The packaged `zusehq` CLI now discovers and authenticates to a foreground Serve process, reconnects after Serve restarts, and reports protocol mismatch, rejected credentials, and unavailable servers distinctly
+- Cloud chats now show Codex authentication recovery when OpenAI rejects saved credentials instead of mislabeling the provider failure as a workspace connection failure
+- Recovered Cloud Workspaces now show that only the live client needs reconnecting, and Retry restores that client instead of leaving a stale connection failure
+- New Cloud Workspaces now carry the resolved global or repository permission default into the agent session instead of falling back to approval-required mode
 
 ## [0.20.13]
 

@@ -1,8 +1,10 @@
-import type { EnvironmentId, Message, SessionId } from "@zuse/contracts";
+import type { PendingCommand } from "@zuse/client-runtime/resource-state";
+import type { Message, SessionId } from "@zuse/contracts";
 import { useEffect, useMemo, useState } from "react";
 
 import { deriveAgentActivityState } from "../lib/agent-activity-state.ts";
 import { cloudSummaryForSession } from "../lib/cloud-workspace-catalog.ts";
+import { waitingCloudMessagePresentation } from "../lib/composer-delivery.ts";
 import { useActiveSessionById } from "../lib/environment-entity-hooks.ts";
 import { PROVIDER_LABEL } from "../lib/provider-labels.ts";
 import {
@@ -10,8 +12,9 @@ import {
 	useProviderStartupDelay,
 } from "../lib/provider-startup-delay.ts";
 import type { SessionRuntimeState } from "../lib/session-runtime-state.ts";
-import { useRendererSessionTimeline } from "../lib/session-timeline-hooks.ts";
+import { cancelSessionCommand } from "../lib/session-timeline-client-bus.ts";
 import { AgentActivityOrb } from "./ui/agent-activity-orb.tsx";
+import { Button } from "./ui/button.tsx";
 import { ShimmerText } from "./ui/shimmer-text.tsx";
 
 const formatElapsed = (ms: number): string => {
@@ -36,17 +39,15 @@ export const providerStartupIsActive = ({
 export function ChatWorkingRow({
 	messages,
 	sessionId,
-	environmentId,
+	pendingCommands,
+	runtimeState,
 }: {
 	readonly messages: ReadonlyArray<Message>;
 	readonly sessionId: SessionId;
-	readonly environmentId: EnvironmentId;
+	readonly pendingCommands: readonly PendingCommand[];
+	readonly runtimeState: SessionRuntimeState;
 }) {
-	const { runtime: runtimeState } = useRendererSessionTimeline(
-		sessionId,
-		"connect",
-		environmentId,
-	);
+	const waitingCommand = waitingCloudMessagePresentation(pendingCommands);
 	const session = useActiveSessionById(sessionId);
 	const providerLabel =
 		session === null || session === undefined
@@ -102,14 +103,29 @@ export function ChatWorkingRow({
 					showStartup && delayed ? "text-warning" : "text-muted-foreground"
 				}
 			>
-				{showStartup
-					? providerStartupLabel({
-							providerLabel,
-							failed: false,
-							delayed,
-						})
-					: `${providerLabel} is working`}
+				{waitingCommand !== null
+					? waitingCommand.label
+					: showStartup
+						? providerStartupLabel({
+								providerLabel,
+								failed: false,
+								delayed,
+							})
+						: `${providerLabel} is working`}
 			</span>
+			{waitingCommand?.cancellable === true ? (
+				<Button
+					size="xs"
+					variant="ghost"
+					onClick={() =>
+						void cancelSessionCommand(waitingCommand.commandId).catch(
+							() => undefined,
+						)
+					}
+				>
+					Cancel
+				</Button>
+			) : null}
 			<ShimmerText tone="lime" className="tabular-nums">
 				{formatElapsed(elapsed)}
 			</ShimmerText>

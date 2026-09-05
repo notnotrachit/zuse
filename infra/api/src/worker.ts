@@ -14,6 +14,14 @@ import { BetaAccessAllowAll, PostHogBetaAccessLayer } from "./beta-access.ts";
 import { resolveBillingRuntime } from "./billing-config.ts";
 import { CloudBillingStorePg } from "./cloud-billing-store.ts";
 import {
+	drainMailboxLifecycleOutbox,
+	reconcileCloudThenDrainMailboxLifecycleOutbox,
+} from "./cloud-mailbox-bookkeeping.ts";
+import {
+	coordinateCloudMailboxResponse,
+	deliverCloudMailboxLifecycle,
+} from "./cloud-mailbox-coordinator.ts";
+import {
 	CloudWorkspaceLaunchIntentCipher,
 	CloudWorkspaceLaunchIntentCipherLive,
 } from "./cloud-workspace-launch-intent.ts";
@@ -38,6 +46,7 @@ import { ApiStorePg } from "./store.ts";
 import { WorkosVerifierLive } from "./workos.ts";
 
 export { WorkspaceGateway } from "./workspace-gateway.ts";
+export { WorkspaceMailbox } from "./workspace-mailbox.ts";
 
 /**
  * Cloudflare Worker bindings. Secrets (`RELAY_MINT_PRIVATE_JWK`) are set via
@@ -47,6 +56,12 @@ export { WorkspaceGateway } from "./workspace-gateway.ts";
 interface Env {
 	readonly HYPERDRIVE: { readonly connectionString: string };
 	readonly WORKSPACE_GATEWAY: {
+		readonly idFromName: (name: string) => unknown;
+		readonly get: (id: unknown) => {
+			readonly fetch: (request: Request) => Promise<Response>;
+		};
+	};
+	readonly WORKSPACE_MAILBOX: {
 		readonly idFromName: (name: string) => unknown;
 		readonly get: (id: unknown) => {
 			readonly fetch: (request: Request) => Promise<Response>;
@@ -135,7 +150,29 @@ interface Env {
 	readonly CLOUD_BILLING_ENFORCEMENT_ENABLED?: string;
 	readonly CLOUD_BILLING_EXPORT_ENABLED?: string;
 	readonly CLOUD_BILLING_CUTOVER_AT?: string;
+	/** Additive rollout gate. Accepted rows continue draining when disabled. */
+	readonly CLOUD_COMMAND_MAILBOX_ENABLED?: string;
 }
+
+const flushMailboxLifecycleOutbox = (
+	env: Pick<Env, "WORKSPACE_MAILBOX">,
+	api: Pick<
+		ReturnType<typeof makeApi>,
+		"listPendingCloudMailboxLifecycles" | "acknowledgeCloudMailboxLifecycle"
+	>,
+): Promise<number> =>
+	drainMailboxLifecycleOutbox({
+		list: () => api.listPendingCloudMailboxLifecycles(100),
+		deliver: (lifecycle) =>
+			deliverCloudMailboxLifecycle(env.WORKSPACE_MAILBOX, lifecycle),
+		acknowledge: (lifecycle) =>
+			api.acknowledgeCloudMailboxLifecycle(lifecycle, Date.now()),
+		onFailure: (lifecycle, error) =>
+			console.error("[workspace-mailbox] lifecycle outbox retry failed", {
+				...lifecycle,
+				error,
+			}),
+	});
 
 const pollE2bLifecycleEvents = async (
 	env: Env,
@@ -375,6 +412,7 @@ const build = (env: Env): ReturnType<typeof makeApi> => {
 			: undefined,
 		cloudBillingEnforcementEnabled,
 		cloudBillingExportEnabled,
+		cloudCommandMailboxEnabled: env.CLOUD_COMMAND_MAILBOX_ENABLED === "true",
 		cloudBillingCutoverAtMs,
 		cloudBillingPolarMeterId: isConfigured(env.POLAR_CLOUD_OVERAGE_METER_ID)
 			? env.POLAR_CLOUD_OVERAGE_METER_ID
@@ -496,6 +534,14 @@ export default {
 			await api.dispose();
 			throw error;
 		}
+		const mailboxResponse = await coordinateCloudMailboxResponse({
+			response,
+			mailboxes: env.WORKSPACE_MAILBOX,
+			mailboxEnabled: env.CLOUD_COMMAND_MAILBOX_ENABLED === "true",
+			api,
+			context,
+		});
+		if (mailboxResponse !== undefined) return mailboxResponse;
 		const gatewayWorkspaceId = response.headers.get("x-zuse-gateway-workspace");
 		const gatewayRole = response.headers.get("x-zuse-gateway-role");
 		const gatewayGeneration = response.headers.get("x-zuse-gateway-generation");
@@ -576,9 +622,17 @@ export default {
 	): Promise<void> {
 		const api = build(env);
 		context.waitUntil(
-			Promise.all([
+			Promise.allSettled([
 				api.reconcile(`cron-${controller.scheduledTime}`),
-				api.reconcileCloud(),
+				reconcileCloudThenDrainMailboxLifecycleOutbox({
+					reconcile: () => api.reconcileCloud(),
+					drain: () => flushMailboxLifecycleOutbox(env, api),
+					onReconcileFailure: (error) =>
+						console.error(
+							"[cloud-workspace] scheduled reconciliation failed",
+							error,
+						),
+				}),
 				api.maintainCloudBilling(controller.scheduledTime),
 				pollE2bLifecycleEvents(env, api, controller.scheduledTime).catch(
 					(error) => {
@@ -589,7 +643,16 @@ export default {
 						return 0;
 					},
 				),
-			]).finally(() => api.dispose()),
+			])
+				.then((results) => {
+					for (const result of results)
+						if (result.status === "rejected")
+							console.error(
+								"[api] scheduled maintenance failed",
+								result.reason,
+							);
+				})
+				.finally(() => api.dispose()),
 		);
 	},
 };

@@ -103,12 +103,26 @@ export const ApiPaths = {
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/preview-url`,
 	cloudWorkspaceGateway: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/gateway`,
+	cloudWorkspaceCommands: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/commands`,
+	cloudWorkspaceDataKey: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/data-key`,
+	cloudWorkspaceCommand: (workspaceId: string, commandId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/commands/${encodeURIComponent(commandId)}`,
+	cloudWorkspaceCommandWatch: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/commands/watch`,
+	cloudWorkspaceRuntimeCommandLease: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/commands/lease`,
+	cloudWorkspaceRuntimeCommandAck: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/commands/ack`,
 	cloudWorkspaceBootstrap: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/bootstrap`,
 	cloudWorkspaceBootstrapAck: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/bootstrap/ack`,
 	cloudWorkspaceRuntimeCredentialsRenew: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/credentials/renew`,
+	cloudWorkspaceRuntimeGithubCredential: (workspaceId: string) =>
+		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/github-credential`,
 	cloudWorkspaceActivity: (workspaceId: string) =>
 		`/v1/cloud/workspaces/${encodeURIComponent(workspaceId)}/runtime/activity`,
 	cloudWorkspaceSummary: (workspaceId: string) =>

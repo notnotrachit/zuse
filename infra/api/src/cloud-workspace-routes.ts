@@ -1,9 +1,12 @@
+import { cloudCommandEnvelopeEligibility } from "@zuse/cloud-commands";
 import {
 	ApiPaths,
+	CLOUD_COMMAND_PROTOCOL_VERSION,
 	CloudAccountImageBuildRequest,
 	CloudAuthConfigureRequest,
 	CloudAuthLoginStartRequest,
 	CloudAuthProvider,
+	CloudCommandEnvelope,
 	CloudProjectConnectRequest,
 	CloudProjectPrepareRequest,
 	CloudTranscriptCheckpointUpload,
@@ -13,6 +16,9 @@ import {
 	CloudWorkspaceResumeRequest,
 	CloudWorkspaceRuntimeSummary,
 	CloudWorkspaceStartupTimings,
+	DEFAULT_RUNTIME_MODE,
+	RuntimeAcknowledgment,
+	RuntimeMode,
 } from "@zuse/contracts";
 import { POKEMON_BRANCH_CATALOG } from "@zuse/pokemon-data/branch-catalog";
 import { allocatePokemonName } from "@zuse/pokemon-data/name-allocator";
@@ -31,15 +37,24 @@ import {
 	provisionCloudAuth,
 	startCloudAuthLogin,
 } from "./cloud-auth-authority.ts";
-import { ensureAccountCloudBillingPeriod } from "./cloud-billing-period.ts";
-import { CloudBillingStore } from "./cloud-billing-store.ts";
+import {
+	type CloudBillingCapacity,
+	cloudBillingCapacity,
+} from "./cloud-billing-capacity.ts";
+import type { CloudBillingStore } from "./cloud-billing-store.ts";
 import { hasUsableCloudWorkspaceEntitlement } from "./cloud-entitlement.ts";
 import {
 	completeGithubInstallation,
+	githubInstallationCredentialForRepository,
 	githubInstallationGrants,
 	githubInstallCallbackForwardUrl,
 	makeGithubInstallUrl,
 } from "./cloud-github-app.ts";
+import {
+	attachCloudMailboxBillingDirective,
+	attachCloudMailboxCommandDirective,
+	attachCloudMailboxLifecycleDirective,
+} from "./cloud-mailbox-directive.ts";
 import {
 	cloudTranscriptMessagePageObjectKey,
 	cloudTranscriptObjectKey,
@@ -55,14 +70,22 @@ import {
 	makeCloudWorkspaceLaunchIntent,
 } from "./cloud-workspace-launch-intent.ts";
 import { cloudRepositoryWorkspacePath } from "./cloud-workspace-paths.ts";
-import { withoutRuntimeBootstrapReceipt } from "./cloud-workspace-reconciler.ts";
+import {
+	MAILBOX_RUNTIME_STALL_TIMEOUT_MS,
+	withoutRuntimeBootstrapReceipt,
+} from "./cloud-workspace-reconciler.ts";
 import {
 	type CloudProjectBuildRecord,
 	type CloudProjectRecord,
+	type CloudWorkspaceLifecycleAction,
 	type CloudWorkspaceRecord,
 	type CloudWorkspaceRuntimeSummaryRecord,
 	CloudWorkspaceStore,
+	mailboxLifecycleToDeliver,
 	runtimeBootstrapReceiptFromConfig,
+	workspaceDeletionRequested,
+	workspaceDestructionFence,
+	workspaceSupportsCloudCommandMailbox,
 } from "./cloud-workspace-store.ts";
 import { ApiConfiguration } from "./config.ts";
 import {
@@ -661,6 +684,15 @@ const publicWorkspace = (workspace: CloudWorkspaceRecord) => ({
 	lastActivityAt: workspace.lastActivityAtMs,
 });
 
+const runtimeModeFromRequestConfig = (
+	requestConfig: Readonly<Record<string, unknown>>,
+) => {
+	const decoded = Schema.decodeUnknownOption(RuntimeMode)(
+		requestConfig.runtimeMode,
+	);
+	return decoded._tag === "Some" ? decoded.value : DEFAULT_RUNTIME_MODE;
+};
+
 export const publicCloudWorkspaceSummary = (
 	workspace: CloudWorkspaceRecord,
 	project: CloudProjectRecord,
@@ -689,6 +721,7 @@ export const publicCloudWorkspaceSummary = (
 		typeof workspace.requestConfig.model === "string"
 			? workspace.requestConfig.model
 			: "",
+	runtimeMode: runtimeModeFromRequestConfig(workspace.requestConfig),
 	state: workspace.state,
 	desiredState: workspace.desiredState,
 	runtimeState: workspace.runtimeState,
@@ -803,6 +836,9 @@ const RuntimeReadyRequest = Schema.Struct({
 	launchCommandId: Schema.optional(Schema.String),
 	sessionHeadVersion: Schema.optional(Schema.Number),
 	errorCode: Schema.optional(Schema.String),
+	commandProtocolVersion: Schema.optional(
+		Schema.Literal(CLOUD_COMMAND_PROTOCOL_VERSION),
+	),
 });
 
 export const runtimeActivityLifecycle = (
@@ -839,32 +875,67 @@ const RuntimeCredentialRenewRequest = Schema.Struct({
 	proof: Schema.String,
 });
 
+const RuntimeCommandLeaseRequest = Schema.Struct({
+	storageIncarnationId: Schema.String,
+});
+
 const runtimeGeneration = (workspace: CloudWorkspaceRecord): number =>
 	typeof workspace.requestConfig.runtimeGeneration === "number"
 		? workspace.requestConfig.runtimeGeneration
 		: 1;
+
+const attachMailboxLifecycle = (
+	response: Response,
+	workspace: CloudWorkspaceRecord,
+): Response => {
+	const lifecycle = mailboxLifecycleToDeliver(workspace);
+	if (lifecycle === null) return response;
+	if (lifecycle.action !== "archive" && lifecycle.action !== "delete")
+		return response;
+	return attachCloudMailboxLifecycleDirective(response, lifecycle);
+};
+
+const attachMailboxBillingPolicy = (
+	response: Response,
+	capacity: CloudBillingCapacity,
+	accountId: string,
+): Response => {
+	return attachCloudMailboxBillingDirective(response, {
+		policy: capacity === "available" ? "available" : "blocked",
+		accountId,
+	});
+};
 
 const gatewayEpoch = (workspace: CloudWorkspaceRecord): number =>
 	typeof workspace.requestConfig.gatewayEpoch === "number"
 		? workspace.requestConfig.gatewayEpoch
 		: runtimeGeneration(workspace);
 
+const authenticateRuntime = Effect.fn("authenticateCloudWorkspaceRuntime")(
+	function* (request: Request, workspaceId: string, nowMs: number) {
+		const store = yield* CloudWorkspaceStore;
+		const workspace = yield* store.getWorkspace(workspaceId);
+		const token = bearer(request);
+		if (
+			workspace === null ||
+			token === undefined ||
+			workspace.runtimeCredentialHash !== (yield* sha256Hex(token)) ||
+			typeof workspace.requestConfig.runtimeCredentialExpiresAtMs !==
+				"number" ||
+			workspace.requestConfig.runtimeCredentialExpiresAtMs <= nowMs
+		)
+			return yield* Effect.fail(unauthorized("workspace_runtime_rejected"));
+		return workspace;
+	},
+);
+
 const requireRuntime = Effect.fn("requireCloudWorkspaceRuntime")(function* (
 	request: Request,
 	workspaceId: string,
 	nowMs: number,
 ) {
-	const store = yield* CloudWorkspaceStore;
-	const workspace = yield* store.getWorkspace(workspaceId);
-	const token = bearer(request);
-	if (
-		workspace === null ||
-		token === undefined ||
-		workspace.runtimeCredentialHash !== (yield* sha256Hex(token)) ||
-		typeof workspace.requestConfig.runtimeCredentialExpiresAtMs !== "number" ||
-		workspace.requestConfig.runtimeCredentialExpiresAtMs <= nowMs ||
-		workspace.state === "deleted"
-	)
+	const workspace = yield* authenticateRuntime(request, workspaceId, nowMs);
+	if (workspaceDeletionRequested(workspace))
 		return yield* Effect.fail(unauthorized("workspace_runtime_rejected"));
 	return workspace;
 });
@@ -1002,6 +1073,7 @@ export const routeCloudWorkspaceRequest = (
 				bootTokenHash === undefined ||
 				workspace.runtimeBootTokenHash !== bootTokenHash ||
 				(workspace.runtimeBootTokenExpiresAtMs ?? 0) <= nowMs ||
+				workspaceDeletionRequested(workspace) ||
 				workspace.desiredState !== "ready" ||
 				workspace.providerSandboxId === undefined
 			)
@@ -1077,6 +1149,9 @@ export const routeCloudWorkspaceRequest = (
 			});
 			if (enrolled === null)
 				return yield* Effect.fail(unauthorized("workspace_bootstrap_rejected"));
+			const providerSandboxId = enrolled.workspace.providerSandboxId;
+			if (providerSandboxId === undefined)
+				return yield* Effect.fail(unauthorized("workspace_bootstrap_rejected"));
 			const launchIntentRecord = enrolled.launchIntent;
 			const alreadyLaunched =
 				typeof enrolled.workspace.requestConfig.sessionHeadVersion ===
@@ -1115,6 +1190,7 @@ export const routeCloudWorkspaceRequest = (
 			});
 			return json({
 				workspaceId,
+				providerSandboxId,
 				runtimeCredential,
 				runtimeGatewayCredential,
 				// Wire-v5 runtimes published before machine-owned sandbox auth require
@@ -1224,6 +1300,27 @@ export const routeCloudWorkspaceRequest = (
 				generation: receipt.generation,
 				gatewayEpoch: receipt.gatewayEpoch,
 			});
+		}
+
+		const runtimeGithubCredentialMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/runtime\/github-credential$/u.exec(
+				path,
+			);
+		if (method === "POST" && runtimeGithubCredentialMatch !== null) {
+			const workspaceId = decodeURIComponent(
+				runtimeGithubCredentialMatch[1] ?? "",
+			);
+			const workspace = yield* requireRuntime(request, workspaceId, nowMs);
+			const project = yield* store.getProject(workspace.projectId);
+			if (project === null || project.accountId !== workspace.accountId)
+				return yield* Effect.fail(notFound("cloud_project_not_found"));
+			const credential = yield* githubInstallationCredentialForRepository(
+				workspace.accountId,
+				project.repositoryIdentity,
+			);
+			if (credential === null)
+				return yield* Effect.fail(forbidden("github_repository_not_granted"));
+			return json(credential);
 		}
 
 		const activityMatch =
@@ -1406,6 +1503,7 @@ export const routeCloudWorkspaceRequest = (
 				const updated = yield* store.markRuntimeRepositoryReady({
 					workspaceId,
 					currentCredentialHash: yield* sha256Hex(credential),
+					commandProtocolVersion: body.commandProtocolVersion,
 					nowMs,
 					nextIdleAtMs: nowMs + idlePauseMs,
 				});
@@ -1463,6 +1561,95 @@ export const routeCloudWorkspaceRequest = (
 		const gatewayMatch = /^\/v1\/cloud\/workspaces\/([^/]+)\/gateway$/u.exec(
 			path,
 		);
+		const runtimeCommandMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/runtime\/commands\/(lease|ack)$/u.exec(
+				path,
+			);
+		if (method === "POST" && runtimeCommandMatch !== null) {
+			const workspaceId = decodeURIComponent(runtimeCommandMatch[1] ?? "");
+			const action = runtimeCommandMatch[2] as "lease" | "ack";
+			// Delete fences all new delivery, but an exact still-current runtime
+			// credential must retain the bounded ability to publish the durable receipt
+			// for a lease it already owns. The mailbox validates that original token.
+			const workspace =
+				action === "ack"
+					? yield* authenticateRuntime(request, workspaceId, nowMs)
+					: yield* requireRuntime(request, workspaceId, nowMs);
+			const currentRuntimeGeneration = runtimeGeneration(workspace);
+			if (
+				action === "lease" &&
+				(workspace.state !== "ready" ||
+					workspace.desiredState !== "ready" ||
+					workspace.runtimeState !== "online" ||
+					workspace.providerSandboxId === undefined ||
+					!workspaceSupportsCloudCommandMailbox(workspace))
+			)
+				return yield* Effect.fail(
+					conflict("cloud_workspace_runtime_not_ready"),
+				);
+			const billingCapacity =
+				action === "lease"
+					? yield* cloudBillingCapacity(workspace.accountId, nowMs)
+					: undefined;
+			const mailboxWakePending =
+				workspace.requestConfig.cloudMailboxWakePending === true;
+			const wakeRevision =
+				action === "lease" && billingCapacity === "available"
+					? yield* store.recordMailboxRuntimePoll(
+							workspaceId,
+							workspace.accountId,
+							currentRuntimeGeneration,
+							nowMs,
+							nowMs + MAILBOX_RUNTIME_STALL_TIMEOUT_MS,
+						)
+					: null;
+			if (
+				action === "lease" &&
+				billingCapacity === "available" &&
+				mailboxWakePending &&
+				wakeRevision === null
+			)
+				return yield* Effect.fail(
+					conflict("cloud_workspace_runtime_not_ready"),
+				);
+			// Do not cross into the Durable Object on an idle poll. If an enqueue
+			// races after the atomic store observation, that enqueue owns a newer wake
+			// revision and the consumer's next poll will drain it. This closes the
+			// inverse race where an unobserved command could be leased between the
+			// store check and the DO request.
+			if (
+				action === "lease" &&
+				billingCapacity === "available" &&
+				wakeRevision === null
+			)
+				return json({ leases: [] });
+			const payload =
+				action === "lease"
+					? {
+							...(yield* decodeBody(RuntimeCommandLeaseRequest, request)),
+							runtimeGeneration: currentRuntimeGeneration,
+							providerSandboxId: workspace.providerSandboxId,
+							destructionFence: workspaceDestructionFence(workspace),
+						}
+					: yield* decodeBody(RuntimeAcknowledgment, request);
+			const response = json(payload);
+			if (action !== "lease")
+				return attachCloudMailboxCommandDirective(response, {
+					action,
+					workspaceId,
+				});
+			attachCloudMailboxCommandDirective(response, {
+				action,
+				workspaceId,
+				runtimeGeneration: currentRuntimeGeneration,
+				...(wakeRevision === null ? {} : { wakeRevision }),
+			});
+			return attachMailboxBillingPolicy(
+				response,
+				billingCapacity as CloudBillingCapacity,
+				workspace.accountId,
+			);
+		}
 		if (method === "GET" && gatewayMatch !== null) {
 			if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
 				return yield* Effect.fail(badRequest("websocket_upgrade_required"));
@@ -1589,6 +1776,148 @@ export const routeCloudWorkspaceRequest = (
 				actionMatch?.[2] === "delete");
 		const principal = yield* requireWorkos(request);
 		if (!isCleanupAction) yield* requireCloudBetaAccess(principal.accountId);
+
+		const commandCollectionMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/commands$/u.exec(path);
+		const commandItemMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/commands\/([^/]+)$/u.exec(path);
+		const commandWatchMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/commands\/watch$/u.exec(path);
+		const mailboxWorkspaceId = decodeURIComponent(
+			commandCollectionMatch?.[1] ??
+				commandItemMatch?.[1] ??
+				commandWatchMatch?.[1] ??
+				"",
+		);
+		const dataKeyMatch = /^\/v1\/cloud\/workspaces\/([^/]+)\/data-key$/u.exec(
+			path,
+		);
+		if (method === "GET" && dataKeyMatch !== null) {
+			const workspaceId = decodeURIComponent(dataKeyMatch[1] ?? "");
+			let workspace = yield* store.getWorkspace(workspaceId);
+			if (workspace === null || workspace.accountId !== principal.accountId)
+				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
+			if (workspace.state === "deleted" || workspace.state === "deleting")
+				return yield* Effect.fail(conflict("cloud_workspace_unavailable"));
+			if (workspace.wrappedTranscriptKey === undefined) {
+				const created = yield* createCloudTranscriptKey(
+					workspace.accountId,
+					workspace.workspaceId,
+				).pipe(
+					Effect.mapError(() =>
+						serviceUnavailable("cloud_transcript_key_unavailable"),
+					),
+				);
+				workspace =
+					(yield* store.installWrappedTranscriptKey(
+						workspace.workspaceId,
+						workspace.accountId,
+						created.envelope,
+						nowMs,
+					)) ?? workspace;
+			}
+			const wrappedKey = workspace.wrappedTranscriptKey;
+			if (wrappedKey === undefined)
+				return yield* Effect.fail(
+					serviceUnavailable("cloud_transcript_key_unavailable"),
+				);
+			const encodedKey = yield* openCloudTranscriptKey(
+				workspace.accountId,
+				workspace.workspaceId,
+				wrappedKey,
+			).pipe(
+				Effect.mapError(() =>
+					serviceUnavailable("cloud_transcript_key_unavailable"),
+				),
+			);
+			return json({
+				workspaceId,
+				encodedKey,
+				keyVersion: 1,
+				destructionFence: workspaceDestructionFence(workspace),
+				mailboxEnabled:
+					apiConfiguration.cloudCommandMailboxEnabled &&
+					workspaceSupportsCloudCommandMailbox(workspace),
+			});
+		}
+		if (
+			commandCollectionMatch !== null ||
+			commandItemMatch !== null ||
+			commandWatchMatch !== null
+		) {
+			const workspace = yield* store.getWorkspace(mailboxWorkspaceId);
+			if (workspace === null || workspace.accountId !== principal.accountId)
+				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
+			if (method === "POST" && commandCollectionMatch !== null) {
+				if (
+					workspaceDeletionRequested(workspace) ||
+					workspace.state === "archived" ||
+					workspace.state === "archiving" ||
+					workspace.desiredState === "archived"
+				)
+					return yield* Effect.fail(conflict("cloud_workspace_unavailable"));
+				if (!workspaceSupportsCloudCommandMailbox(workspace))
+					return yield* Effect.fail(
+						conflict("cloud_command_runtime_update_required"),
+					);
+				const envelope = yield* decodeBody(CloudCommandEnvelope, request);
+				if (
+					envelope.workspaceId !== mailboxWorkspaceId ||
+					cloudCommandEnvelopeEligibility(envelope) === undefined
+				)
+					return yield* Effect.fail(badRequest("cloud_command_not_eligible"));
+				const destructionFence = workspaceDestructionFence(workspace);
+				if (
+					envelope.keyVersion !== 1 ||
+					envelope.destructionFence !== destructionFence
+				)
+					return yield* Effect.fail(conflict("cloud_command_fence_stale"));
+				const response = json(envelope, 202);
+				return attachCloudMailboxCommandDirective(response, {
+					action: "enqueue",
+					workspaceId: mailboxWorkspaceId,
+					accountId: principal.accountId,
+				});
+			}
+			if (method === "GET" && commandWatchMatch !== null) {
+				const afterRevision = Number(
+					url.searchParams.get("afterRevision") ?? 0,
+				);
+				if (!Number.isSafeInteger(afterRevision) || afterRevision < 0)
+					return yield* Effect.fail(badRequest("invalid_mailbox_revision"));
+				const response = json({ afterRevision });
+				return attachMailboxBillingPolicy(
+					attachMailboxLifecycle(
+						attachCloudMailboxCommandDirective(response, {
+							action: "watch",
+							workspaceId: mailboxWorkspaceId,
+						}),
+						workspace,
+					),
+					yield* cloudBillingCapacity(workspace.accountId, nowMs),
+					workspace.accountId,
+				);
+			}
+			if (commandItemMatch !== null) {
+				const commandId = decodeURIComponent(commandItemMatch[2] ?? "");
+				const action =
+					method === "GET" ? "status" : method === "DELETE" ? "cancel" : null;
+				if (action === null)
+					return yield* Effect.fail(badRequest("invalid_mailbox_action"));
+				const response = json({ commandId });
+				attachCloudMailboxCommandDirective(response, {
+					action,
+					workspaceId: mailboxWorkspaceId,
+				});
+				return action === "status"
+					? attachMailboxBillingPolicy(
+							attachMailboxLifecycle(response, workspace),
+							yield* cloudBillingCapacity(workspace.accountId, nowMs),
+							workspace.accountId,
+						)
+					: attachMailboxLifecycle(response, workspace);
+			}
+		}
 		if (method === "GET" && path === "/v1/cloud/github") {
 			const installations = yield* store.listGithubInstallations(
 				principal.accountId,
@@ -1637,16 +1966,13 @@ export const routeCloudWorkspaceRequest = (
 		}
 		const requireBillingCapacity = Effect.fn("requireCloudBillingCapacity")(
 			function* () {
-				if (!(yield* ApiConfiguration).cloudBillingEnforcementEnabled) return;
-				const billingStore = yield* CloudBillingStore;
-				const period = yield* ensureAccountCloudBillingPeriod(
+				const capacity = yield* cloudBillingCapacity(
 					principal.accountId,
 					nowMs,
-				).pipe(Effect.provideService(CloudBillingStore, billingStore));
-				if (period === null)
+				);
+				if (capacity === "period-missing")
 					return yield* Effect.fail(forbidden("cloud_billing_period_missing"));
-				const summary = yield* billingStore.summary(period);
-				if (summary.status === "billing-hold" || summary.status === "ended")
+				if (capacity === "billing-hold")
 					return yield* Effect.fail(forbidden("cloud_billing_hold"));
 			},
 		);
@@ -2349,6 +2675,7 @@ export const routeCloudWorkspaceRequest = (
 				branch,
 				agent: body.agent,
 				model: body.model,
+				runtimeMode: body.runtimeMode ?? DEFAULT_RUNTIME_MODE,
 				permissions: body.permissions ?? [],
 				request: body,
 			});
@@ -2382,6 +2709,7 @@ export const routeCloudWorkspaceRequest = (
 					agent: body.agent,
 					authGrantRequired: false,
 					model: body.model,
+					runtimeMode: body.runtimeMode ?? DEFAULT_RUNTIME_MODE,
 					permissions: body.permissions ?? [],
 					repositoryCache: "account-image",
 					startupTimings: { requestedAt: nowMs },
@@ -2471,19 +2799,7 @@ export const routeCloudWorkspaceRequest = (
 			);
 			if (workspace === null || workspace.accountId !== principal.accountId)
 				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
-			const action = actionMatch[2] as
-				| "pause"
-				| "resume"
-				| "restart"
-				| "archive"
-				| "unarchive"
-				| "delete";
-			if (
-				action === "restart" &&
-				(workspace.state !== "ready" ||
-					workspace.providerSandboxId === undefined)
-			)
-				return yield* Effect.fail(badRequest("cloud_workspace_not_running"));
+			const action = actionMatch[2] as CloudWorkspaceLifecycleAction;
 			if (action === "resume") yield* requireBillingCapacity();
 			const actionRequest =
 				action === "resume"
@@ -2527,32 +2843,6 @@ export const routeCloudWorkspaceRequest = (
 				"commandId" in actionRequest && actionRequest.commandId !== undefined
 					? actionRequest.commandId
 					: `${action}:${workspace.workspaceId}:${nowMs}`;
-			const receivedAction = yield* store.getWorkspaceLifecycleCommand(
-				workspace.workspaceId,
-				commandId,
-			);
-			if (receivedAction !== null) {
-				if (receivedAction !== action)
-					return yield* Effect.fail(
-						badRequest("cloud_workspace_command_id_reused"),
-					);
-				return json(publicWorkspace(workspace));
-			}
-			// Sending while a workspace is waking can issue resume more than once.
-			// Treat those requests as one operation: rewriting the workspace here can
-			// release the reconciler lease and replace its freshly staged boot token.
-			if (
-				action === "resume" &&
-				!recoverRuntime &&
-				cloudWorkspaceResumeIsAlreadyRequested(workspace)
-			) {
-				const response = json(publicWorkspace(workspace));
-				response.headers.set(
-					"x-zuse-reconcile-cloud-workspace",
-					workspace.workspaceId,
-				);
-				return response;
-			}
 			const desiredState =
 				action === "resume" || action === "restart"
 					? "ready"
@@ -2661,18 +2951,56 @@ export const routeCloudWorkspaceRequest = (
 							}
 						: {}),
 			};
-			yield* store.saveWorkspaceLifecycleCommand({
+			const transition = yield* store.transitionWorkspaceLifecycle({
 				workspace: received,
+				expectedRevision: workspace.revision,
+				expectedUpdatedAtMs: workspace.updatedAtMs,
+				expectedState: workspace.state,
+				expectedDesiredState: workspace.desiredState,
 				commandId,
 				action,
+				deduplicateRequestedResume:
+					action === "resume" &&
+					!recoverRuntime &&
+					cloudWorkspaceResumeIsAlreadyRequested(workspace),
 				createdAtMs: nowMs,
 			});
-			const response = json(publicWorkspace(received));
+			if (transition.kind === "missing")
+				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
+			if (transition.kind === "contended")
+				return yield* Effect.fail(
+					serviceUnavailable("cloud_workspace_transition_contended"),
+				);
+			if (transition.kind === "rejected") {
+				if (transition.reason === "command-id-reused")
+					return yield* Effect.fail(
+						badRequest("cloud_workspace_command_id_reused"),
+					);
+				if (transition.reason === "workspace-not-running")
+					return yield* Effect.fail(badRequest("cloud_workspace_not_running"));
+				if (transition.reason === "mailbox-wake-pending")
+					return yield* Effect.fail(
+						conflict("cloud_workspace_mailbox_wake_pending"),
+					);
+				return yield* Effect.fail(
+					conflict(
+						transition.reason === "workspace-deleted"
+							? "cloud_workspace_deleted"
+							: transition.reason === "workspace-archived"
+								? "cloud_workspace_archived"
+								: transition.reason === "workspace-not-archived"
+									? "cloud_workspace_not_archived"
+									: "cloud_workspace_destruction_fence_exhausted",
+					),
+				);
+			}
+			const canonicalWorkspace = transition.workspace;
+			const response = json(publicWorkspace(canonicalWorkspace));
 			response.headers.set(
 				"x-zuse-reconcile-cloud-workspace",
-				workspace.workspaceId,
+				canonicalWorkspace.workspaceId,
 			);
-			return response;
+			return attachMailboxLifecycle(response, canonicalWorkspace);
 		}
 
 		return null;

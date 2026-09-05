@@ -1,5 +1,6 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import type { PendingCommand } from "@zuse/client-runtime/resource-state";
 import type {
 	ChatCreationPhase,
 	EnvironmentId,
@@ -48,6 +49,7 @@ import {
 	sessionCommandErrorKey,
 	useSessionCommandErrors,
 } from "../lib/session-actions.ts";
+import type { SessionRuntimeState } from "../lib/session-runtime-state.ts";
 import { hasPendingTurnStart } from "../lib/session-runtime-state.ts";
 import { timelineReadingPositionStore } from "../lib/session-timeline-cache.ts";
 import { restartProvisionalSessionTimeline } from "../lib/session-timeline-client-bus.ts";
@@ -181,9 +183,7 @@ export function ChatView({
 	const commandError = localError ?? pendingSessionCommandError(sessionRef);
 	const recoveredPreAckError =
 		commandError !== null &&
-		(isRecoveredPreAckSessionError(commandError.message, timeline.view) ||
-			(session !== null &&
-				commandError.message.includes("SessionNotFoundError")));
+		isRecoveredPreAckSessionError(commandError, timeline.view);
 	const error = recoveredPreAckError ? null : commandError;
 	useEffect(() => {
 		if (recoveredPreAckError) clearSessionCommandError(sessionRef);
@@ -699,11 +699,21 @@ export function ChatView({
 			<TimelineRow
 				chatId={session?.chatId ?? null}
 				environmentId={timeline.ref.environmentId}
+				providerId={session.providerId}
+				pendingCommands={timeline.view.pendingCommands}
 				row={item}
+				runtimeState={timeline.runtime}
 				sessionId={sessionId}
 			/>
 		),
-		[session?.chatId, sessionId, timeline.ref.environmentId],
+		[
+			session.chatId,
+			session.providerId,
+			sessionId,
+			timeline.ref.environmentId,
+			timeline.runtime,
+			timeline.view.pendingCommands,
+		],
 	);
 	const readingReady = readingState?.sessionId === sessionId;
 	const effectiveReadingPosition =
@@ -884,11 +894,17 @@ function TimelineRow({
 	row,
 	sessionId,
 	environmentId,
+	providerId,
+	pendingCommands,
+	runtimeState,
 }: {
 	readonly chatId: import("@zuse/contracts").ChatId | null;
 	readonly row: ChatTimelineRow;
 	readonly sessionId: SessionId;
 	readonly environmentId: EnvironmentId;
+	readonly providerId: import("@zuse/contracts").ProviderId;
+	readonly pendingCommands: readonly PendingCommand[];
+	readonly runtimeState: SessionRuntimeState;
 }) {
 	let content: ReactNode;
 	switch (row.kind) {
@@ -898,6 +914,7 @@ function TimelineRow({
 					message={row.message}
 					sessionId={sessionId}
 					environmentId={environmentId}
+					providerId={providerId}
 					showAssistantCommands={row.showAssistantCommands}
 				/>
 			);
@@ -935,8 +952,9 @@ function TimelineRow({
 		case "working":
 			content = (
 				<ChatWorkingRow
-					environmentId={environmentId}
 					messages={row.messages}
+					pendingCommands={pendingCommands}
+					runtimeState={runtimeState}
 					sessionId={sessionId}
 				/>
 			);

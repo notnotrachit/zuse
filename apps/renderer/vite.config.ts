@@ -78,15 +78,21 @@ export default defineConfig({
 			...iconAliases,
 			"~": fileURLToPath(new URL("./src", import.meta.url)),
 		},
+		dedupe: ["react", "react-dom"],
 	},
 	optimizeDeps: {
+		// Most renderer screens are lazy. Crawl their source before serving so a
+		// newly opened screen cannot replace the optimizer graph under live React.
+		entries: ["index.html", "notch.html", "src/**/*.{ts,tsx}"],
+		holdUntilCrawlEnd: true,
 		include: [
 			"react",
+			"react-dom",
 			"react-dom/client",
+			"@legendapp/list/react",
 			"metal-fx",
 			"effect",
 			"@pierre/diffs",
-			"codemirror",
 			"@xterm/xterm",
 		],
 	},
