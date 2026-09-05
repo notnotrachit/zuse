@@ -821,7 +821,7 @@ function UserProjectGroup({
 					anchorRef.current = { getBoundingClientRect: () => rect };
 					setMenuOpen(true);
 				}}
-				className="group relative flex cursor-grab items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-sidebar-accent/30 active:cursor-grabbing"
+				className="group relative flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-sidebar-accent/30 active:cursor-grabbing"
 			>
 				<DropLine line={dropLine} />
 				<HugeiconsIcon
@@ -1523,7 +1523,7 @@ function LogicalCatalogGroup({
 		<li>
 			<div
 				className={cn(
-					"group relative flex min-h-7 cursor-grab items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-sidebar-accent/30 motion-reduce:transition-none active:cursor-grabbing",
+					"group relative flex min-h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-sidebar-accent/30 motion-reduce:transition-none active:cursor-grabbing",
 					nested && "ms-0",
 				)}
 				{...dragProps}
@@ -1913,7 +1913,7 @@ function ProjectGroup({
 								}
 							}}
 							className={cn(
-								"group relative flex cursor-grab items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors hover:bg-sidebar-accent/40 focus-visible:bg-sidebar-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+								"group relative flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors hover:bg-sidebar-accent/40 focus-visible:bg-sidebar-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
 								nested && "ms-0",
 							)}
 						>
