@@ -1,5 +1,13 @@
-import { type DragEvent, useMemo, useRef, useState } from "react";
+import {
+	type DragEvent,
+	type PointerEvent,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useSidebarProjectLayoutStore } from "../store/sidebar-project-layout.ts";
+import { startSidebarPointerDrag } from "./sidebar-pointer-drag.ts";
 import {
 	materializeSidebarLayout,
 	projectGroupIdFor,
@@ -24,6 +32,17 @@ export type SidebarGroupDialog =
 const itemKeyOf = (node: SidebarLayoutNode): string =>
 	node.kind === "group" ? sidebarGroupItemKey(node.group.id) : node.key;
 
+type Drop = {
+	readonly key: string;
+	readonly line: SidebarDropLine;
+	readonly target: SidebarDropTarget;
+};
+type DropResolver = (
+	source: SidebarDragSource,
+	element: HTMLElement,
+	clientY: number,
+) => Drop | null;
+
 const emptyGroupDropKey = (groupId: string): string => `empty-group:${groupId}`;
 
 export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
@@ -44,8 +63,9 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 		[layout, projectKeys],
 	);
 
-	const dragSourceRef = useRef<SidebarDragSource | null>(null);
-	const skipClickRef = useRef(false);
+	const cancelDragRef = useRef<(() => void) | null>(null);
+	const dropTargets = useRef(new WeakMap<HTMLElement, DropResolver>());
+	useEffect(() => () => cancelDragRef.current?.(), []);
 	const [drop, setDrop] = useState<{
 		readonly key: string;
 		readonly line: SidebarDropLine;
@@ -62,23 +82,66 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 	};
 
 	const clearDrag = (): void => {
-		dragSourceRef.current = null;
 		setDrop(null);
 	};
 
-	const applyDrop = (target: SidebarDropTarget): void => {
-		const source = dragSourceRef.current;
-		if (source === null) return;
-		move(source, target, projectKeys);
-		skipClickRef.current = true;
-		clearDrag();
-	};
+	const targetProps = (resolve: DropResolver) => ({
+		ref: (element: HTMLElement | null) => {
+			if (element !== null) dropTargets.current.set(element, resolve);
+		},
+	});
 
-	const consumeSkipClick = (): boolean => {
-		if (!skipClickRef.current) return false;
-		skipClickRef.current = false;
-		return true;
-	};
+	const sourceProps = (source: SidebarDragSource) => ({
+		draggable: false,
+		onDragStart: (event: DragEvent<HTMLElement>) => event.preventDefault(),
+		onPointerDown: (event: PointerEvent<HTMLElement>) => {
+			if (
+				!event.isPrimary ||
+				event.button !== 0 ||
+				event.pointerType === "touch"
+			)
+				return;
+			const element = event.currentTarget;
+			cancelDragRef.current?.();
+			const targetAt = (point: {
+				clientX: number;
+				clientY: number;
+			}): Drop | null => {
+				let target = element.ownerDocument.elementFromPoint(
+					point.clientX,
+					point.clientY,
+				);
+				while (target !== null) {
+					if (target instanceof HTMLElement) {
+						const resolve = dropTargets.current.get(target);
+						if (resolve !== undefined)
+							return resolve(source, target, point.clientY);
+					}
+					target = target.parentElement;
+				}
+				return null;
+			};
+			cancelDragRef.current = startSidebarPointerDrag(
+				element,
+				event.nativeEvent,
+				{
+					onMove: (point) => {
+						const next = targetAt(point);
+						setDrop((current) =>
+							current?.key === next?.key && current?.line === next?.line
+								? current
+								: next,
+						);
+					},
+					onDrop: (point) => {
+						const next = targetAt(point);
+						if (next !== null) move(source, next.target, projectKeys);
+					},
+					onEnd: clearDrag,
+				},
+			);
+		},
+	});
 
 	const projectDragProps = (key: string, groupId: string | null) => {
 		const nodeIndex = nodes.findIndex((node) =>
@@ -111,79 +174,26 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 						};
 
 		return {
-			draggable: true,
-			onDragStart: (event: DragEvent<HTMLElement>) => {
-				dragSourceRef.current = { kind: "project", key };
-				event.dataTransfer.effectAllowed = "move";
-				event.dataTransfer.setData("text/plain", key);
-			},
-			onDragOver: (event: DragEvent<HTMLElement>) => {
-				const source = dragSourceRef.current;
-				if (source === null) return;
-				if (!sidebarProjectRowAcceptsDrop(source, groupId)) {
-					setDrop(null);
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				event.dataTransfer.dropEffect = "move";
-				const rect = event.currentTarget.getBoundingClientRect();
-				const line: SidebarDropLine =
-					event.clientY < rect.top + rect.height / 2 ? "before" : "after";
-				setDrop((current) =>
-					current?.key === key && current.line === line
-						? current
-						: { key, line },
-				);
-			},
-			onDrop: (event: DragEvent<HTMLElement>) => {
-				const source = dragSourceRef.current;
-				if (source === null) return;
-				if (!sidebarProjectRowAcceptsDrop(source, groupId)) {
-					clearDrag();
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				const rect = event.currentTarget.getBoundingClientRect();
-				applyDrop(event.clientY < rect.top + rect.height / 2 ? before : after);
-			},
-			onDragEnd: () => clearDrag(),
+			...sourceProps({ kind: "project", key }),
+			...targetProps((source, element, clientY) => {
+				if (!sidebarProjectRowAcceptsDrop(source, groupId)) return null;
+				const rect = element.getBoundingClientRect();
+				const line = clientY < rect.top + rect.height / 2 ? "before" : "after";
+				return { key, line, target: line === "before" ? before : after };
+			}),
 		};
 	};
 
-	const emptyGroupDropProps = (groupId: string) => {
-		const dropKey = emptyGroupDropKey(groupId);
-		return {
-			onDragOver: (event: DragEvent<HTMLElement>) => {
-				const source = dragSourceRef.current;
-				if (source === null || !sidebarEmptyGroupAcceptsDrop(source)) {
-					setDrop(null);
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				event.dataTransfer.dropEffect = "move";
-				setDrop((current) =>
-					current?.key === dropKey && current.line === "into"
-						? current
-						: { key: dropKey, line: "into" },
-				);
-			},
-			onDrop: (event: DragEvent<HTMLElement>) => {
-				const source = dragSourceRef.current;
-				if (source === null || !sidebarEmptyGroupAcceptsDrop(source)) {
-					clearDrag();
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				applyDrop({ kind: "group-end", groupId });
-			},
-			onDragLeave: () =>
-				setDrop((current) => (current?.key === dropKey ? null : current)),
-		};
-	};
+	const emptyGroupDropProps = (groupId: string) =>
+		targetProps((source) =>
+			sidebarEmptyGroupAcceptsDrop(source)
+				? {
+						key: emptyGroupDropKey(groupId),
+						line: "into",
+						target: { kind: "group-end", groupId },
+					}
+				: null,
+		);
 
 	const groupDragProps = (id: string) => {
 		const itemKey = sidebarGroupItemKey(id);
@@ -191,51 +201,26 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 			(node) => node.kind === "group" && node.group.id === id,
 		);
 		return {
-			draggable: true,
-			onDragStart: (event: DragEvent<HTMLElement>) => {
-				dragSourceRef.current = { kind: "group", id };
-				event.dataTransfer.effectAllowed = "move";
-				event.dataTransfer.setData("text/plain", itemKey);
-			},
-			onDragOver: (event: DragEvent<HTMLElement>) => {
-				if (dragSourceRef.current === null) return;
-				event.preventDefault();
-				event.stopPropagation();
-				event.dataTransfer.dropEffect = "move";
-				const rect = event.currentTarget.getBoundingClientRect();
-				const y = (event.clientY - rect.top) / rect.height;
-				const source = dragSourceRef.current;
-				const line: SidebarDropLine =
+			...sourceProps({ kind: "group", id }),
+			...targetProps((source, element, clientY) => {
+				const rect = element.getBoundingClientRect();
+				const y = (clientY - rect.top) / rect.height;
+				const line =
 					source.kind === "project" && y > 0.28 && y < 0.78
 						? "into"
 						: y < 0.5
 							? "before"
 							: "after";
-				setDrop((current) =>
-					current?.key === itemKey && current.line === line
-						? current
-						: { key: itemKey, line },
-				);
-			},
-			onDrop: (event: DragEvent<HTMLElement>) => {
-				event.preventDefault();
-				event.stopPropagation();
-				const rect = event.currentTarget.getBoundingClientRect();
-				const y = (event.clientY - rect.top) / rect.height;
-				const source = dragSourceRef.current;
-				if (source?.kind === "project" && y > 0.28 && y < 0.78) {
-					applyDrop({ kind: "group-end", groupId: id });
-					return;
-				}
-				applyDrop(
-					y < 0.5
-						? { kind: "before", itemKey }
-						: nodeIndex >= 0
-							? topAfter(nodeIndex)
-							: { kind: "end" },
-				);
-			},
-			onDragEnd: () => clearDrag(),
+				const target: SidebarDropTarget =
+					line === "into"
+						? { kind: "group-end", groupId: id }
+						: line === "before"
+							? { kind: "before", itemKey }
+							: nodeIndex >= 0
+								? topAfter(nodeIndex)
+								: { kind: "end" };
+				return { key: itemKey, line, target };
+			}),
 		};
 	};
 
@@ -251,7 +236,6 @@ export const useSidebarOrganize = (projectKeys: ReadonlyArray<string>) => {
 		emptyGroupDropProps,
 		isEmptyGroupDropActive: (groupId: string) =>
 			drop?.key === emptyGroupDropKey(groupId) && drop.line === "into",
-		consumeSkipClick,
 		inGroupId: (projectKey: string) => projectGroupIdFor(layout, projectKey),
 		groupDialog,
 		setGroupDialog,

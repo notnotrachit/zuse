@@ -418,7 +418,10 @@ export function ProjectsSidebar() {
 			) : null}
 			<SidebarErrorToasts />
 
-			<ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
+			<ul
+				data-sidebar-scroll
+				className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-1.5"
+			>
 				{desktopCatalogEnabled ? (
 					<>
 						{catalogViewState === "loading" ? (
@@ -480,7 +483,6 @@ export function ProjectsSidebar() {
 										})
 									}
 									onDissolve={() => organize.dissolveGroup(node.group.id)}
-									onSkipClick={organize.consumeSkipClick}
 									onSetIconColor={(color) =>
 										organize.setGroupIconColor(node.group.id, color)
 									}
@@ -507,7 +509,6 @@ export function ProjectsSidebar() {
 													key,
 													node.group.id,
 												)}
-												onSkipClick={organize.consumeSkipClick}
 												onToggleExpanded={onToggleExpanded}
 												onToggleKey={onToggleKey}
 												onSelect={select}
@@ -536,7 +537,6 @@ export function ProjectsSidebar() {
 											expanded={expanded}
 											dropLine={organize.dropLineFor(node.key)}
 											dragProps={organize.projectDragProps(node.key, null)}
-											onSkipClick={organize.consumeSkipClick}
 											onToggleExpanded={onToggleExpanded}
 											onToggleKey={onToggleKey}
 											onSelect={select}
@@ -585,7 +585,6 @@ export function ProjectsSidebar() {
 										})
 									}
 									onDissolve={() => organize.dissolveGroup(node.group.id)}
-									onSkipClick={organize.consumeSkipClick}
 									onSetIconColor={(color) =>
 										organize.setGroupIconColor(node.group.id, color)
 									}
@@ -609,7 +608,6 @@ export function ProjectsSidebar() {
 													folder.id,
 													node.group.id,
 												)}
-												onSkipClick={organize.consumeSkipClick}
 												onToggleExpanded={onToggleExpanded}
 												onSelect={select}
 												onRemove={remove}
@@ -634,7 +632,6 @@ export function ProjectsSidebar() {
 											expanded={expanded}
 											dropLine={organize.dropLineFor(folder.id)}
 											dragProps={organize.projectDragProps(folder.id, null)}
-											onSkipClick={organize.consumeSkipClick}
 											onToggleExpanded={onToggleExpanded}
 											onSelect={select}
 											onRemove={remove}
@@ -776,7 +773,6 @@ function UserProjectGroup({
 	onToggleCollapsed,
 	onRename,
 	onDissolve,
-	onSkipClick,
 	onSetIconColor,
 	children,
 }: {
@@ -788,7 +784,6 @@ function UserProjectGroup({
 	onToggleCollapsed: () => void;
 	onRename: () => void;
 	onDissolve: () => void;
-	onSkipClick: () => boolean;
 	onSetIconColor: (color: ProjectIconColorId | null) => void;
 	children: ReactNode;
 }) {
@@ -805,7 +800,6 @@ function UserProjectGroup({
 				tabIndex={0}
 				{...dragProps}
 				onClick={() => {
-					if (onSkipClick()) return;
 					onToggleCollapsed();
 				}}
 				onKeyDown={(event) => {
@@ -821,7 +815,7 @@ function UserProjectGroup({
 					anchorRef.current = { getBoundingClientRect: () => rect };
 					setMenuOpen(true);
 				}}
-				className="group relative flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-sidebar-accent/30 active:cursor-grabbing"
+				className="group relative flex cursor-pointer select-none items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-sidebar-accent/30"
 			>
 				<DropLine line={dropLine} />
 				<HugeiconsIcon
@@ -896,7 +890,6 @@ function SidebarLogicalRow({
 	nested = false,
 	dropLine,
 	dragProps,
-	onSkipClick,
 	onToggleExpanded,
 	onToggleKey,
 	onSelect,
@@ -924,7 +917,6 @@ function SidebarLogicalRow({
 	nested?: boolean;
 	dropLine: SidebarDropLine | null;
 	dragProps: ReturnType<Organize["projectDragProps"]>;
-	onSkipClick: () => boolean;
 	onToggleExpanded: (environmentId: string, id: FolderId) => void;
 	onToggleKey: (key: string) => void;
 	onSelect: (folderId: FolderId) => Promise<void>;
@@ -959,7 +951,6 @@ function SidebarLogicalRow({
 				nested={nested}
 				dropLine={dropLine}
 				dragProps={dragProps}
-				onSkipClick={onSkipClick}
 				organize={organize}
 				projectKey={group.key}
 				onSelect={() => void onSelect(folder.id)}
@@ -977,7 +968,6 @@ function SidebarLogicalRow({
 			nested={nested}
 			dropLine={dropLine}
 			dragProps={dragProps}
-			onSkipClick={onSkipClick}
 			onToggle={() => onToggleKey(group.key)}
 		/>
 	);
@@ -994,7 +984,6 @@ function SidebarFolderRow({
 	nested = false,
 	dropLine,
 	dragProps,
-	onSkipClick,
 	onToggleExpanded,
 	onSelect,
 	onRemove,
@@ -1020,7 +1009,6 @@ function SidebarFolderRow({
 	nested?: boolean;
 	dropLine: SidebarDropLine | null;
 	dragProps: ReturnType<Organize["projectDragProps"]>;
-	onSkipClick: () => boolean;
 	onToggleExpanded: (environmentId: string, id: FolderId) => void;
 	onSelect: (folderId: FolderId) => Promise<void>;
 	onRemove: (folderId: FolderId) => Promise<void>;
@@ -1046,7 +1034,6 @@ function SidebarFolderRow({
 			nested={nested}
 			dropLine={dropLine}
 			dragProps={dragProps}
-			onSkipClick={onSkipClick}
 			organize={organize}
 			projectKey={folder.id}
 			onSelect={() => void onSelect(folder.id)}
@@ -1500,7 +1487,6 @@ function LogicalCatalogGroup({
 	nested = false,
 	dropLine = null,
 	dragProps,
-	onSkipClick,
 }: {
 	group: LogicalProjectGroup;
 	isExpanded: boolean;
@@ -1508,7 +1494,6 @@ function LogicalCatalogGroup({
 	nested?: boolean;
 	dropLine?: SidebarDropLine | null;
 	dragProps?: ReturnType<Organize["projectDragProps"]>;
-	onSkipClick?: () => boolean;
 }) {
 	const preferred = preferredGroupMember(group);
 	const rows = remoteChatRows(group);
@@ -1523,7 +1508,7 @@ function LogicalCatalogGroup({
 		<li>
 			<div
 				className={cn(
-					"group relative flex min-h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-sidebar-accent/30 motion-reduce:transition-none active:cursor-grabbing",
+					"group relative flex min-h-7 cursor-pointer select-none items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-sidebar-accent/30 motion-reduce:transition-none",
 					nested && "ms-0",
 				)}
 				{...dragProps}
@@ -1535,7 +1520,6 @@ function LogicalCatalogGroup({
 					aria-controls={listId}
 					className="flex min-w-0 flex-1 items-center gap-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
 					onClick={() => {
-						if (onSkipClick?.()) return;
 						onToggle();
 					}}
 				>
@@ -1724,7 +1708,6 @@ function ProjectGroup({
 	nested = false,
 	dropLine = null,
 	dragProps,
-	onSkipClick,
 	organize,
 	projectKey,
 }: {
@@ -1751,7 +1734,6 @@ function ProjectGroup({
 	nested?: boolean;
 	dropLine?: SidebarDropLine | null;
 	dragProps?: ReturnType<Organize["projectDragProps"]>;
-	onSkipClick?: () => boolean;
 	organize?: Organize;
 	projectKey?: string;
 }) {
@@ -1903,7 +1885,6 @@ function ProjectGroup({
 								setMenuOpen(true);
 							}}
 							onClick={() => {
-								if (onSkipClick?.()) return;
 								onToggleExpanded();
 							}}
 							onKeyDown={(e) => {
@@ -1913,7 +1894,7 @@ function ProjectGroup({
 								}
 							}}
 							className={cn(
-								"group relative flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors hover:bg-sidebar-accent/40 focus-visible:bg-sidebar-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+								"group relative flex cursor-pointer select-none items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors hover:bg-sidebar-accent/40 focus-visible:bg-sidebar-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 								nested && "ms-0",
 							)}
 						>
