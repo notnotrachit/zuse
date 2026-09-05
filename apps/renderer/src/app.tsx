@@ -31,9 +31,10 @@ import { AppearanceController } from "./lib/appearance.tsx";
 import { selectChatSurface } from "./lib/chat-surface-selection.ts";
 import { installClientBusOnlineBridge } from "./lib/client-bus-online.ts";
 import { closeActiveChatTab } from "./lib/close-chat-tab.ts";
+import { cloudSummaryActiveSessionId } from "./lib/cloud-workspace-catalog.ts";
 import {
 	cloudSessionPlaceholder,
-	useCloudChatSummaryForSession,
+	useCloudChatSummaryForSelection,
 } from "./lib/cloud-workspaces.ts";
 import { useActiveSessionById } from "./lib/environment-entity-hooks.ts";
 import { useGitWorkspaceResource } from "./lib/git-workspace-client-bus.ts";
@@ -436,7 +437,10 @@ function MainShell() {
 	const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
 	const selectedSessionId = useSessionsStore((s) => s.selectedSessionId);
 	const selectedChatId = useChatsStore((s) => s.selectedChatId);
-	const selectedCloudSummary = useCloudChatSummaryForSession(selectedSessionId);
+	const selectedCloudSummary = useCloudChatSummaryForSelection({
+		chatId: selectedChatId,
+		sessionId: selectedSessionId,
+	});
 	const selectedEnvironmentId = EnvironmentId.make(
 		selectedCloudSummary?.workspaceId ?? activeEnvironmentId,
 	);
@@ -460,9 +464,24 @@ function MainShell() {
 	const activeSelectedSession = useActiveSessionById(selectedSessionId);
 	const selectedSession = useMemo<Session | null>(() => {
 		if (activeSelectedSession !== null) return activeSelectedSession;
-		if (selectedCloudSummary === null || selectedFolderId === null) return null;
-		return cloudSessionPlaceholder(selectedCloudSummary, selectedFolderId);
-	}, [activeSelectedSession, selectedCloudSummary, selectedFolderId]);
+		if (
+			selectedCloudSummary === null ||
+			selectedFolderId === null ||
+			selectedSessionId === null ||
+			cloudSummaryActiveSessionId(selectedCloudSummary) !== selectedSessionId
+		)
+			return null;
+		return cloudSessionPlaceholder(
+			selectedCloudSummary,
+			selectedFolderId,
+			selectedSessionId,
+		);
+	}, [
+		activeSelectedSession,
+		selectedCloudSummary,
+		selectedFolderId,
+		selectedSessionId,
+	]);
 	const directoryStatus = useChatDirectoryStatus(
 		selectedEnvironmentId,
 		pendingCreation === null ? (selectedSession?.chatId ?? null) : null,
@@ -559,9 +578,9 @@ function MainShell() {
 				closeChangesTab();
 				return;
 			}
-			void closeActiveChatTab();
+			void closeActiveChatTab(selectedEnvironmentId);
 		});
-	}, []);
+	}, [selectedEnvironmentId]);
 
 	const emptyTabLabel = selectedFolder
 		? selectedFolder.name

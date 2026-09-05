@@ -130,6 +130,13 @@ export const CloudCodexAuthMode = Schema.Literals([
 ]);
 export type CloudCodexAuthMode = typeof CloudCodexAuthMode.Type;
 
+/**
+ * Account-provider credential ownership for a cloud workspace. Missing values
+ * are legacy so retained workspaces never begin requesting broker grants.
+ */
+export const CloudProviderAuthMode = CloudCodexAuthMode;
+export type CloudProviderAuthMode = CloudCodexAuthMode;
+
 export class CloudProviderOption extends Schema.Class<CloudProviderOption>(
 	"CloudProviderOption",
 )({
@@ -261,6 +268,7 @@ export class CloudAccountImage extends Schema.Class<CloudAccountImage>(
 	providers: Schema.Array(CloudAccountImageProvider),
 	builds: Schema.Array(CloudAccountImageBuildAttempt),
 	codexAuthDeliveryVersion: Schema.optional(Schema.Literal(1)),
+	providerAuthDeliveryVersion: Schema.optional(Schema.Literal(1)),
 	builtAt: Schema.optional(Schema.Number),
 	updatedAt: Schema.Number,
 }) {}
@@ -296,6 +304,10 @@ export class CloudWorkspace extends Schema.Class<CloudWorkspace>(
 		Schema.withConstructorDefault(Effect.succeed("legacy-image" as const)),
 		Schema.withDecodingDefaultType(Effect.succeed("legacy-image" as const)),
 	),
+	providerAuthMode: CloudProviderAuthMode.pipe(
+		Schema.withConstructorDefault(Effect.succeed("legacy-image" as const)),
+		Schema.withDecodingDefaultType(Effect.succeed("legacy-image" as const)),
+	),
 	branch: Schema.String,
 	baseRef: Schema.String,
 	state: CloudWorkspaceState,
@@ -319,6 +331,8 @@ export class CloudWorkspaceLaunch extends Schema.Class<CloudWorkspaceLaunch>(
 	workspace: CloudWorkspace,
 	chatId: ChatId,
 	initialSessionId: AgentSessionId,
+	/** Server acknowledgment that the launch intent excludes the first prompt. */
+	initialMessageDelivery: Schema.optional(Schema.Literal("mailbox-v1")),
 }) {}
 
 export class CloudWorkspaceConnection extends Schema.Class<CloudWorkspaceConnection>(
@@ -344,6 +358,8 @@ export class CloudWorkspaceRuntimeSummary extends Schema.Class<CloudWorkspaceRun
 	summaryRevision: Schema.Number,
 	title: Schema.String,
 	lastActivityAt: Schema.Number,
+	/** Optional during the additive rollout; null means the chat has no live thread. */
+	activeSessionId: Schema.optional(Schema.NullOr(AgentSessionId)),
 	sessionHeadVersion: Schema.Number,
 }) {}
 
@@ -357,10 +373,16 @@ export class CloudChatSummary extends Schema.Class<CloudChatSummary>(
 	repositoryDisplayName: Schema.String,
 	chatId: ChatId,
 	initialSessionId: AgentSessionId,
+	/** Current live thread. Missing rows are legacy summaries and use the initial id. */
+	activeSessionId: Schema.optional(Schema.NullOr(AgentSessionId)),
 	title: Schema.String,
 	branch: Schema.String,
 	providerId: Schema.String,
 	codexAuthMode: CloudCodexAuthMode.pipe(
+		Schema.withConstructorDefault(Effect.succeed("legacy-image" as const)),
+		Schema.withDecodingDefaultType(Effect.succeed("legacy-image" as const)),
+	),
+	providerAuthMode: CloudProviderAuthMode.pipe(
 		Schema.withConstructorDefault(Effect.succeed("legacy-image" as const)),
 		Schema.withDecodingDefaultType(Effect.succeed("legacy-image" as const)),
 	),
@@ -382,7 +404,7 @@ export class CloudChatSummary extends Schema.Class<CloudChatSummary>(
 		Schema.withConstructorDefault(Effect.succeed(0)),
 		Schema.withDecodingDefaultType(Effect.succeed(0)),
 	),
-	/** Authoritative runtime session head represented by this summary. */
+	/** Authoritative head for activeSessionId represented by this summary. */
 	sessionHeadVersion: Schema.Number.pipe(
 		Schema.withConstructorDefault(Effect.succeed(0)),
 		Schema.withDecodingDefaultType(Effect.succeed(0)),
@@ -501,6 +523,11 @@ export class CloudWorkspaceCreateRequest extends Schema.Class<CloudWorkspaceCrea
 	secretBindings: Schema.optional(Schema.Array(Schema.String)),
 	permissions: Schema.optional(Schema.Array(Schema.String)),
 	firstMessage: Schema.optional(Schema.String),
+	/**
+	 * The client will deliver the initial prompt through the durable workspace
+	 * mailbox after the launch intent creates the session shell.
+	 */
+	initialMessageDelivery: Schema.optional(Schema.Literal("mailbox-v1")),
 	idempotencyKey: Schema.String,
 }) {}
 

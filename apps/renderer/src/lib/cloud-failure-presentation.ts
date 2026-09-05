@@ -11,6 +11,7 @@ export type CloudFailureKind =
 	| "cloud-access-unavailable"
 	| "credentials-required"
 	| "workspace-deleted"
+	| "workspace-storage-unavailable"
 	| "interaction-expired"
 	| "session-unavailable"
 	| "outcome-unknown"
@@ -60,6 +61,12 @@ const CATEGORY_KIND: Readonly<Record<string, CloudFailureKind>> = {
 	"authentication-required": "sign-in-required",
 	"codex-auth-reconnect-required": "sign-in-required",
 	"codex-auth-legacy-workspace": "sign-in-required",
+	"claude-auth-reconnect-required": "sign-in-required",
+	"claude-auth-legacy-workspace": "sign-in-required",
+	"cursor-auth-reconnect-required": "sign-in-required",
+	"cursor-auth-legacy-workspace": "sign-in-required",
+	"grok-auth-reconnect-required": "sign-in-required",
+	"grok-auth-legacy-workspace": "sign-in-required",
 	"not-allowed": "sign-in-required",
 	"billing-blocked": "billing-blocked",
 	"billing-hold": "billing-blocked",
@@ -70,6 +77,10 @@ const CATEGORY_KIND: Readonly<Record<string, CloudFailureKind>> = {
 	"command-schema-not-supported": "update-required",
 	"command-dependencies-not-supported": "update-required",
 	"codex-auth-update-required": "update-required",
+	"claude-auth-update-required": "update-required",
+	"cursor-auth-update-required": "update-required",
+	"grok-auth-update-required": "update-required",
+	"provider-auth-update-required": "update-required",
 	"beta-access-required": "cloud-access-required",
 	"beta-access-unavailable": "cloud-access-unavailable",
 	"credential-required": "credentials-required",
@@ -80,11 +91,16 @@ const CATEGORY_KIND: Readonly<Record<string, CloudFailureKind>> = {
 	"workspace-deleted-after-lease": "workspace-deleted",
 	"workspace-archived-after-lease": "workspace-deleted",
 	"workspace-destruction-fence-advanced-after-lease": "workspace-deleted",
+	"runtime-storage-replaced": "workspace-storage-unavailable",
+	"runtime-storage-incarnation-mismatch": "workspace-storage-unavailable",
 	"interaction-expired": "interaction-expired",
 	"reservation-expired": "interaction-expired",
 	"session-not-found": "session-unavailable",
 	"session-unavailable": "session-unavailable",
 	"codex-auth-reconnecting": "network",
+	"claude-auth-reconnecting": "network",
+	"cursor-auth-reconnecting": "network",
+	"grok-auth-reconnecting": "network",
 };
 
 const BLOCKED_KIND: Partial<
@@ -232,6 +248,12 @@ const FAILURE_COPY: Readonly<Record<CloudFailureKind, FailureCopy>> = {
 		message:
 			"This workspace was archived or deleted before the command could finish.",
 	},
+	"workspace-storage-unavailable": {
+		label: "Workspace data unavailable",
+		headline: "Workspace data unavailable",
+		message:
+			"This sandbox no longer has this chat's runtime data. Your cached transcript is still available; start a replacement chat to continue.",
+	},
 	"interaction-expired": {
 		label: "Interaction expired",
 		headline: "Interaction expired",
@@ -309,6 +331,7 @@ export const cloudInteractionFailure = (
 	const presentation = cloudFailurePresentation({ cause });
 	const expired =
 		presentation?.kind === "session-unavailable" ||
+		presentation?.kind === "workspace-storage-unavailable" ||
 		presentation?.kind === "interaction-expired";
 	return {
 		expired,

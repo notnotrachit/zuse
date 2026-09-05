@@ -8,6 +8,13 @@ import {
 describe("cloud failure presentation", () => {
 	it("uses storage-loss copy only for storage replacement outcomes", () => {
 		expect(
+			cloudFailurePresentation({ category: "runtime-storage-replaced" }),
+		).toMatchObject({
+			kind: "workspace-storage-unavailable",
+			headline: "Workspace data unavailable",
+			message: expect.stringContaining("cached transcript"),
+		});
+		expect(
 			cloudFailurePresentation({
 				state: "outcome-unknown",
 				category: "runtime-storage-replaced",
@@ -90,6 +97,10 @@ describe("cloud failure presentation", () => {
 		["codex-auth-legacy-workspace", "sign-in-required"],
 		["codex-auth-update-required", "update-required"],
 		["codex-auth-reconnecting", "network"],
+		["claude-auth-reconnect-required", "sign-in-required"],
+		["grok-auth-legacy-workspace", "sign-in-required"],
+		["cursor-auth-update-required", "update-required"],
+		["grok-auth-reconnecting", "network"],
 	] as const)("maps broker status %s to %s", (cause, kind) => {
 		expect(cloudFailurePresentation({ cause })).toMatchObject({ kind });
 	});
@@ -114,6 +125,10 @@ describe("cloud failure presentation", () => {
 				kind: "interaction-expired",
 				headline: "Interaction expired",
 			},
+		});
+		expect(cloudInteractionFailure("runtime-storage-replaced")).toMatchObject({
+			expired: true,
+			presentation: { kind: "interaction-expired" },
 		});
 	});
 });

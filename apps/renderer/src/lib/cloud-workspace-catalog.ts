@@ -1,4 +1,5 @@
 import {
+	type ChatId,
 	CloudChatSummary,
 	type EnvironmentId,
 	type FolderId,
@@ -383,13 +384,65 @@ export const cloudSummaryForChat = (chatId: string): CloudChatSummary | null =>
 		.getState()
 		.summaries.find((summary) => summary.chatId === chatId) ?? null;
 
+/** Legacy catalog rows predate active-session summaries and use the launch id. */
+export const cloudSummaryActiveSessionId = (
+	summary: CloudChatSummary,
+): SessionId | null =>
+	summary.activeSessionId === undefined
+		? summary.initialSessionId
+		: summary.activeSessionId;
+
 export const cloudSummaryForSession = (
 	sessionId: SessionId,
 ): CloudChatSummary | null =>
 	useCloudChatCatalogStore
 		.getState()
-		.summaries.find((summary) => summary.initialSessionId === sessionId) ??
-	null;
+		.summaries.find(
+			(summary) =>
+				summary.initialSessionId === sessionId ||
+				cloudSummaryActiveSessionId(summary) === sessionId,
+		) ?? null;
+
+/**
+ * Resolve cloud ownership for a selected chat surface.
+ *
+ * A catalog row only carries the workspace's initial session id, while every
+ * later tab keeps the same chat id. Prefer the chat identity so secondary
+ * sessions never fall back to whichever environment happens to be globally
+ * active; retain the session lookup for startup selections whose chat row has
+ * not hydrated yet.
+ */
+export const findCloudSummaryForSelection = (
+	summaries: ReadonlyArray<CloudChatSummary>,
+	{
+		chatId,
+		sessionId,
+	}: {
+		readonly chatId: ChatId | null;
+		readonly sessionId: SessionId | null;
+	},
+): CloudChatSummary | null => {
+	if (chatId !== null) {
+		const byChat = summaries.find((summary) => summary.chatId === chatId);
+		if (byChat !== undefined) return byChat;
+	}
+	return sessionId === null
+		? null
+		: (summaries.find(
+				(summary) =>
+					summary.initialSessionId === sessionId ||
+					cloudSummaryActiveSessionId(summary) === sessionId,
+			) ?? null);
+};
+
+export const cloudSummaryForSelection = (input: {
+	readonly chatId: ChatId | null;
+	readonly sessionId: SessionId | null;
+}): CloudChatSummary | null =>
+	findCloudSummaryForSelection(
+		useCloudChatCatalogStore.getState().summaries,
+		input,
+	);
 
 export const cloudSummaryForEnvironment = (
 	environmentId: EnvironmentId | string,

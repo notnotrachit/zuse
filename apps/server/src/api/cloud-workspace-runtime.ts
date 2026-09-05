@@ -26,9 +26,11 @@ import {
 	AgentSessionId,
 	AgentTurnId,
 	ApiPaths,
+	type Chat,
 	ChatId,
 	CLOUD_COMMAND_PROTOCOL_VERSION,
 	CLOUD_TRANSCRIPT_CHECKPOINT_SCHEMA_VERSION,
+	type CloudAuthProvider,
 	CloudTranscriptCheckpointPayload,
 	CloudTranscriptMessagePagePayload,
 	CloudWorkspaceRuntimeSummary,
@@ -44,6 +46,8 @@ import {
 	RuntimeLease,
 	RuntimeMode,
 	SealedCodexGrant,
+	SealedProviderGrant,
+	type Session,
 	SessionId,
 	WIRE_PROTOCOL_VERSION,
 	WORKSPACE_GATEWAY_AUTH_EXPIRED_CLOSE,
@@ -96,11 +100,13 @@ import {
 import { LanAuthService } from "../lan-auth/services/lan-auth-service.ts";
 import { isProviderAuthenticationRequired } from "../provider/provider-auth-failure.ts";
 import { CredentialsService } from "../provider/services/credentials-service.ts";
+import { RuntimeProviderCredentials } from "../provider/services/runtime-provider-credentials.ts";
 import {
 	WorkspaceService,
 	type WorkspaceServiceShape,
 } from "../workspace/services/workspace-service.ts";
 import { CloudCodexAuth } from "./cloud-codex-auth.ts";
+import { CloudProviderAuth } from "./cloud-provider-auth.ts";
 import { cloudStorageIncarnationId } from "./cloud-storage-incarnation.ts";
 
 const CREDENTIALS_READY_MARKER = "/var/lib/zuse/workspace/credentials-ready";
@@ -240,6 +246,9 @@ const BootstrapResponse = Schema.Struct({
 	chatId: Schema.String,
 	initialSessionId: Schema.String,
 	codexAuthMode: Schema.optional(
+		Schema.Literals(["legacy-image", "broker-v1"]),
+	),
+	providerAuthMode: Schema.optional(
 		Schema.Literals(["legacy-image", "broker-v1"]),
 	),
 	launchIntent: Schema.optional(
@@ -477,7 +486,12 @@ interface RuntimeCredentialState {
 	gatewayEpoch: number;
 }
 
-type RuntimeSummaryReason = "initial" | "activity" | "title" | "settled";
+type RuntimeSummaryReason =
+	| "initial"
+	| "activity"
+	| "title"
+	| "settled"
+	| "session";
 
 interface CloudRuntimeSummaryPublisher {
 	readonly publish: (
@@ -658,6 +672,7 @@ export const makeCloudRuntimeSummaryPublisher = Effect.fn(
 		{
 			readonly title: string;
 			readonly lastActivityAt: number;
+			readonly activeSessionId: SessionId | null;
 			readonly sessionHeadVersion: number;
 		},
 		CloudWorkspaceRuntimeError
@@ -678,6 +693,7 @@ export const makeCloudRuntimeSummaryPublisher = Effect.fn(
 		snapshot: {
 			readonly title: string;
 			readonly lastActivityAt: number;
+			readonly activeSessionId: SessionId | null;
 			readonly sessionHeadVersion: number;
 		},
 		summaryRevision: number,
@@ -707,6 +723,27 @@ export const makeCloudRuntimeSummaryPublisher = Effect.fn(
 		);
 	return { publish } satisfies CloudRuntimeSummaryPublisher;
 });
+
+/** Resolve stale chat pointers against the authoritative runtime session rows. */
+export const resolveCloudRuntimeActiveSession = (
+	chat: Pick<Chat, "activeSessionId" | "id">,
+	sessions: ReadonlyArray<Pick<Session, "chatId" | "id">>,
+): SessionId | null => {
+	const live = sessions.filter((session) => session.chatId === chat.id);
+	if (
+		chat.activeSessionId !== null &&
+		live.some((session) => session.id === chat.activeSessionId)
+	)
+		return chat.activeSessionId;
+	return live[0]?.id ?? null;
+};
+
+/** A retained runtime without its control-plane chat proves SQLite was replaced. */
+export const retainedCloudRuntimeStorageFailure = (
+	hasLaunchIntent: boolean,
+	hasRuntimeChat: boolean,
+): "runtime-storage-replaced" | null =>
+	!hasLaunchIntent && !hasRuntimeChat ? "runtime-storage-replaced" : null;
 
 export const signRuntimeRenewalProof = (input: {
 	readonly privateKey: CryptoKey;
@@ -1759,12 +1796,13 @@ const waitForRepository = Effect.callback<void, CloudWorkspaceRuntimeError>(
 	},
 );
 
-const recoverCodexAuthFailedSessions = Effect.fn(
-	"CloudWorkspaceRuntime.recoverCodexAuthFailedSessions",
+const recoverProviderAuthFailedSessions = Effect.fn(
+	"CloudWorkspaceRuntime.recoverProviderAuthFailedSessions",
 )(function* (input: {
 	readonly workspaces: WorkspaceServiceShape;
 	readonly sessions: SessionServiceShape;
 	readonly messages: MessageService["Service"];
+	readonly providerId: CloudAuthProvider;
 	readonly consumerIds?: ReadonlyArray<string>;
 }) {
 	const consumerIds =
@@ -1778,7 +1816,7 @@ const recoverCodexAuthFailedSessions = Effect.fn(
 	yield* Effect.forEach(
 		sessions.filter(
 			(session) =>
-				session.providerId === "codex" &&
+				session.providerId === input.providerId &&
 				session.status === "error" &&
 				(consumerIds === null || consumerIds.has(session.id)),
 		),
@@ -1915,6 +1953,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 	| MessageService
 	| SessionService
 	| CredentialsService
+	| RuntimeProviderCredentials
 	| SessionDomain
 	| SqlClient.SqlClient
 > =>
@@ -1929,7 +1968,7 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					const sessions = yield* SessionService;
 					const sql = yield* SqlClient.SqlClient;
 					const credentials = yield* CredentialsService;
-					yield* installImageProviderSecrets(credentials);
+					const runtimeProviderCredentials = yield* RuntimeProviderCredentials;
 					const sessionDomain = yield* SessionDomain;
 					const storageIncarnationId = yield* cloudStorageIncarnationId.pipe(
 						Effect.mapError(() =>
@@ -1969,12 +2008,100 @@ export const makeCloudWorkspaceRuntimeLayer = (
 						generation: bootstrap.runtimeGeneration,
 						gatewayEpoch: bootstrap.gatewayEpoch,
 					};
+					if (bootstrap.providerAuthMode !== "broker-v1")
+						yield* installImageProviderSecrets(credentials);
 					yield* writeGithubBrokerState(config, runtimeCredential.credential);
 					yield* superviseRuntimeCredential({
 						config,
 						signingPrivateKey: signingKeyPair.privateKey,
 						state: runtimeCredential,
 					}).pipe(Effect.forkScoped({ startImmediately: true }));
+					if (bootstrap.providerAuthMode === "broker-v1") {
+						if (bootstrap.zuseAccountId === undefined)
+							return yield* Effect.fail(fail("provider-auth-update-required"));
+						const cloudProviderAuth = new CloudProviderAuth({
+							zuseAccountId: bootstrap.zuseAccountId,
+							workspaceId: config.workspaceId,
+							runtimeGeneration: bootstrap.runtimeGeneration,
+							credentialPublicJwk,
+							credentialPrivateKey: credentialKeyPair.privateKey,
+							issueGrant: (providerId, request) =>
+								Effect.runPromise(
+									Effect.suspend(() =>
+										requestJson({
+											schema: SealedProviderGrant,
+											url: `${config.apiUrl}${ApiPaths.cloudWorkspaceRuntimeProviderGrant(config.workspaceId, providerId)}`,
+											token: runtimeCredential.credential,
+											method: "POST",
+											body: request,
+											timeoutMs: 30_000,
+										}),
+									).pipe(
+										Effect.retry({
+											while: (error) =>
+												!error.reason.includes("reconnect-required") &&
+												!error.reason.includes("update-required") &&
+												!error.reason.includes("legacy-workspace") &&
+												error.reason !== "workspace_runtime_fenced" &&
+												error.reason !==
+													"runtime_credential_key_binding_mismatch",
+											schedule: cloudRuntimeRetrySchedule,
+										}),
+									),
+								),
+							onStatus: (providerId, status) =>
+								console.info("[cloud-provider-auth] status", {
+									providerId,
+									status,
+								}),
+							onRecovered: (providerId) => {
+								void Effect.runPromise(
+									recoverProviderAuthFailedSessions({
+										workspaces,
+										sessions,
+										messages,
+										providerId,
+									}).pipe(Effect.catch(() => Effect.void)),
+								);
+							},
+						});
+						yield* Effect.acquireRelease(
+							Effect.tryPromise({
+								try: async () => {
+									await cloudProviderAuth.startGrokBridge();
+									const supported = new Set<CloudAuthProvider>([
+										"claude",
+										"codex",
+										"cursor",
+										"grok",
+									]);
+									const uninstall = runtimeProviderCredentials.install(
+										(providerId) =>
+											providerId === "codex" &&
+											bootstrap.codexAuthMode === "broker-v1"
+												? Promise.resolve(null)
+												: supported.has(providerId as CloudAuthProvider)
+													? cloudProviderAuth.resolve(
+															providerId as CloudAuthProvider,
+														)
+													: Promise.resolve(null),
+									);
+									return { uninstall };
+								},
+								catch: (cause) =>
+									fail(
+										cause instanceof Error
+											? cause.message
+											: "provider-auth-reconnecting",
+									),
+							}),
+							({ uninstall }) =>
+								Effect.sync(() => {
+									uninstall();
+									cloudProviderAuth.close();
+								}),
+						);
+					}
 					if (bootstrap.codexAuthMode === "broker-v1") {
 						if (bootstrap.zuseAccountId === undefined)
 							return yield* Effect.fail(fail("codex-auth-update-required"));
@@ -2012,10 +2139,11 @@ export const makeCloudWorkspaceRuntimeLayer = (
 								console.info("[cloud-codex-auth] status", { status }),
 							onConsumersRecovered: (consumerIds) => {
 								void Effect.runPromise(
-									recoverCodexAuthFailedSessions({
+									recoverProviderAuthFailedSessions({
 										workspaces,
 										sessions,
 										messages,
+										providerId: "codex",
 										...(consumerIds.length === 0 ? {} : { consumerIds }),
 									}).pipe(
 										Effect.catch((cause) =>
@@ -2054,10 +2182,11 @@ export const makeCloudWorkspaceRuntimeLayer = (
 									setDefaultCodexExternalAuthProvider(cloudCodexAuth);
 									if (initialized) {
 										void Effect.runPromise(
-											recoverCodexAuthFailedSessions({
+											recoverProviderAuthFailedSessions({
 												workspaces,
 												sessions,
 												messages,
+												providerId: "codex",
 											}).pipe(Effect.catch(() => Effect.void)),
 										);
 									}
@@ -2159,28 +2288,40 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					console.info("[cloud-workspace-runtime] local rpc auth ready");
 
 					const readRuntimeSummary = Effect.gen(function* () {
-						const [chat, sessionHeadVersion, lastActivityAt] =
-							yield* Effect.all(
-								[
-									chats
-										.getChat(ChatId.make(bootstrap.chatId))
-										.pipe(
-											Effect.mapError(() =>
-												fail("workspace_summary_chat_unavailable"),
-											),
-										),
-									sessionDomain
-										.currentStreamVersion(bootstrap.initialSessionId)
+						const chat = yield* chats
+							.getChat(ChatId.make(bootstrap.chatId))
+							.pipe(
+								Effect.mapError(() =>
+									fail("workspace_summary_chat_unavailable"),
+								),
+							);
+						const [liveSessions, lastActivityAt] = yield* Effect.all(
+							[
+								sessions.listSessions(chat.projectId, false),
+								Clock.currentTimeMillis,
+							],
+							{ concurrency: "unbounded" },
+						);
+						const activeSessionId = resolveCloudRuntimeActiveSession(
+							chat,
+							liveSessions,
+						);
+						const sessionHeadVersion =
+							activeSessionId === null
+								? 0
+								: yield* sessionDomain
+										.currentStreamVersion(activeSessionId)
 										.pipe(
 											Effect.mapError(() =>
 												fail("workspace_summary_head_unavailable"),
 											),
-										),
-									Clock.currentTimeMillis,
-								],
-								{ concurrency: "unbounded" },
-							);
-						return { title: chat.title, lastActivityAt, sessionHeadVersion };
+										);
+						return {
+							title: chat.title,
+							lastActivityAt,
+							activeSessionId,
+							sessionHeadVersion,
+						};
 					});
 					const summaryPublisher = yield* makeCloudRuntimeSummaryPublisher({
 						now: Clock.currentTimeMillis,
@@ -2458,6 +2599,22 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					// not on the disposable UI gateway. A gateway outage must never stop
 					// this runtime from draining its workspace mailbox.
 					yield* waitForRepository;
+					const launchIntent = bootstrap.launchIntent;
+					const existingRuntimeChat = yield* chats
+						.getChat(ChatId.make(bootstrap.chatId))
+						.pipe(Effect.result);
+					const storageFailure = retainedCloudRuntimeStorageFailure(
+						launchIntent !== undefined,
+						existingRuntimeChat._tag === "Success",
+					);
+					if (storageFailure !== null) {
+						yield* postCurrentRuntimeReady(
+							"launch-failed",
+							undefined,
+							storageFailure,
+						).pipe(Effect.retry(cloudRuntimeRetrySchedule));
+						return yield* Effect.fail(fail(storageFailure));
+					}
 					// Record the local prerequisite first. If the gateway opens while the
 					// control-plane update is in flight, its callback publishes another
 					// ready revision after the socket is actually usable.
@@ -2465,15 +2622,6 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					yield* postCurrentRuntimeReady("repository-ready").pipe(
 						Effect.retry(cloudRuntimeRetrySchedule),
 					);
-					yield* runCloudMailboxConsumer({
-						config,
-						runtimeCredential,
-						providerSandboxId: bootstrap.providerSandboxId,
-						transcriptKey,
-						storageIncarnationId,
-						messages,
-						sql,
-					}).pipe(Effect.forkScoped({ startImmediately: true }));
 					yield* acknowledgeBootstrap.pipe(
 						Effect.forkScoped({ startImmediately: true }),
 					);
@@ -2485,11 +2633,30 @@ export const makeCloudWorkspaceRuntimeLayer = (
 					const sessionEventCursor = yield* sessionDomain.currentSequence.pipe(
 						Effect.mapError(() => fail("workspace_summary_cursor_unavailable")),
 					);
+					const knownChatSessionIds = new Set<string>([
+						bootstrap.initialSessionId,
+					]);
+					if (existingRuntimeChat._tag === "Success") {
+						const existingSessions = yield* sessions.listSessions(
+							existingRuntimeChat.success.projectId,
+							true,
+						);
+						for (const session of existingSessions) {
+							if (session.chatId === bootstrap.chatId)
+								knownChatSessionIds.add(session.id);
+						}
+					}
 					yield* sessionDomain
 						.allEvents({ afterSequence: sessionEventCursor })
 						.pipe(
 							Stream.runForEach((record) =>
 								Effect.gen(function* () {
+									const createdForWorkspace =
+										record.event._tag === "SessionCreated" &&
+										record.event.chatId === bootstrap.chatId;
+									if (createdForWorkspace)
+										knownChatSessionIds.add(record.streamId);
+									if (!knownChatSessionIds.has(record.streamId)) return;
 									const reason: RuntimeSummaryReason | null =
 										record.event._tag === "SessionTitleSet"
 											? "title"
@@ -2497,28 +2664,34 @@ export const makeCloudWorkspaceRuntimeLayer = (
 												? "settled"
 												: record.event._tag === "MessagePersisted"
 													? "activity"
-													: null;
+													: record.event._tag === "SessionCreated" ||
+															record.event._tag === "SessionArchived" ||
+															record.event._tag === "SessionUnarchived" ||
+															record.event._tag === "SessionDeleted"
+														? "session"
+														: null;
 									if (reason === null) return;
-									const checkpointPublisher = yield* checkpointPublisherFor(
-										record.streamId,
-									);
-									checkpointPublisher.mark(reason === "settled");
-									if (reason === "settled") {
-										void Effect.runPromise(
-											checkpointPublisher.flush.pipe(Effect.ignore),
+									if (reason !== "session") {
+										const checkpointPublisher = yield* checkpointPublisherFor(
+											record.streamId,
 										);
+										checkpointPublisher.mark(reason === "settled");
+										if (reason === "settled") {
+											void Effect.runPromise(
+												checkpointPublisher.flush.pipe(Effect.ignore),
+											);
+										}
 									}
-									if (record.streamId === bootstrap.initialSessionId) {
-										yield* summaryPublisher
-											.publish(reason)
-											.pipe(Effect.retry(cloudRuntimeRetrySchedule));
-									}
+									yield* summaryPublisher
+										.publish(reason)
+										.pipe(Effect.retry(cloudRuntimeRetrySchedule));
+									if (record.event._tag === "SessionDeleted")
+										knownChatSessionIds.delete(record.streamId);
 								}),
 							),
 							Effect.forkScoped({ startImmediately: true }),
 						);
 
-					const launchIntent = bootstrap.launchIntent;
 					if (launchIntent !== undefined) {
 						const started = yield* startCloudWorkspaceLaunchIntent({
 							workspaces,
@@ -2549,6 +2722,18 @@ export const makeCloudWorkspaceRuntimeLayer = (
 								),
 						).pipe(Effect.retry(cloudRuntimeRetrySchedule));
 					}
+					// The launch intent creates the deterministic chat/session shell. Only
+					// then may the mailbox lease the independently accepted first message;
+					// otherwise messages.send can race the session transaction by milliseconds.
+					yield* runCloudMailboxConsumer({
+						config,
+						runtimeCredential,
+						providerSandboxId: bootstrap.providerSandboxId,
+						transcriptKey,
+						storageIncarnationId,
+						messages,
+						sql,
+					}).pipe(Effect.forkScoped({ startImmediately: true }));
 					yield* summaryPublisher
 						.publish("initial")
 						.pipe(Effect.retry(cloudRuntimeRetrySchedule));

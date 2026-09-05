@@ -7,7 +7,7 @@ import {
 	SandboxProviderError,
 	SandboxProviders,
 } from "@zuse/sandbox-providers";
-import { Clock, Data, Duration, Effect } from "effect";
+import { Cause, Clock, Data, Duration, Effect } from "effect";
 import PROJECT_BUILDER_SOURCE from "../../cloud-sandboxes/project-builder.sh";
 import WORKSPACE_BOOTSTRAP_SOURCE from "../../cloud-sandboxes/workspace-bootstrap.sh";
 import { snapshotCloudAuthAuthority } from "./cloud-auth-authority.ts";
@@ -212,6 +212,8 @@ export const snapshotSanitizationFailures = (input: {
 	readonly expectedConfigurationDigest: string;
 	readonly codexAuthDeliveryVersion?: number;
 	readonly expectedCodexAuthDeliveryVersion?: number;
+	readonly providerAuthDeliveryVersion?: number;
+	readonly expectedProviderAuthDeliveryVersion?: number;
 }): ReadonlyArray<string> => {
 	const failures = input.forbiddenPaths.filter(
 		(_path, index) => input.forbiddenResults[index] === true,
@@ -224,6 +226,11 @@ export const snapshotSanitizationFailures = (input: {
 		failures.push("configuration digest mismatch");
 	if (input.codexAuthDeliveryVersion !== input.expectedCodexAuthDeliveryVersion)
 		failures.push("Codex auth delivery capability mismatch");
+	if (
+		input.providerAuthDeliveryVersion !==
+		input.expectedProviderAuthDeliveryVersion
+	)
+		failures.push("Provider auth delivery capability mismatch");
 	return failures;
 };
 
@@ -299,6 +306,16 @@ export const workspaceRuntimeProcessSelector = () => ({
 	// fail with EADDRINUSE.
 	legacyCleanup: "matching-command" as const,
 });
+
+/** A missing provider sandbox must never be replaced after SQLite became authoritative. */
+export const cloudWorkspaceHasRetainedRuntimeData = (
+	workspace: Pick<CloudWorkspaceRecord, "requestConfig" | "statusCode">,
+): boolean =>
+	typeof workspace.requestConfig.sessionHeadVersion === "number" ||
+	workspace.requestConfig.runtimeSessionRecoveryPending === true ||
+	workspace.statusCode === "agent-starting" ||
+	workspace.statusCode === "agent-running";
+
 export const WORKSPACE_RUNTIME_RESUME_SCRIPT = `set -e; runtime=/opt/zuse/current/bin.mjs; fallback=/usr/local/bin/zuse; log=/var/lib/zuse/workspace/runtime.log; rm -f /var/lib/zuse/workspace/failed /var/lib/zuse/workspace/credentials-ready /var/lib/zuse/workspace/credentials-ready-event; if [ -n "\${ZUSE_RUNTIME_MANIFEST_URL:-}" ] && [ -f "\${ZUSE_RUNTIME_PUBLIC_KEY_FILE:-}" ]; then ZUSE_RUNTIME_INSTALL_ONLY=1 ZUSE_RUNTIME_SKIP_TOOLCHAIN=1 node /usr/local/lib/zuse/runtime-updater.mjs >> "$log" 2>&1; fi; if [ -f "$runtime" ]; then exec node "$runtime" serve >> "$log" 2>&1; else exec "$fallback" serve --foreground >> "$log" 2>&1 </dev/null; fi`;
 const providerLabel = (kind: "build" | "workspace", id: string): string =>
 	`zuse-cloud-${kind}-${id.replace(/[^A-Za-z0-9-]/gu, "-")}`.slice(0, 63);
@@ -651,13 +668,22 @@ const reconcileBuildRecord = Effect.fn("reconcileCloudAccountImageBuild")(
 					const repositoryName = candidate.repositoryIdentity
 						.replace(/^github\.com\//u, "")
 						.toLowerCase();
-					return `${candidate.projectId}\t${candidate.repositoryUrl}\t${candidate.defaultBranch}\t${candidate.visibility}\t${tokenFileByRepository.get(repositoryName) ?? ""}\t${cloudRepositoryWorkspacePath(candidate.repositoryIdentity)}`;
+					return JSON.stringify({
+						projectId: candidate.projectId,
+						repositoryUrl: candidate.repositoryUrl,
+						defaultBranch: candidate.defaultBranch,
+						visibility: candidate.visibility,
+						tokenFile: tokenFileByRepository.get(repositoryName) ?? null,
+						workspacePath: cloudRepositoryWorkspacePath(
+							candidate.repositoryIdentity,
+						),
+					});
 				})
 				.join("\n");
 			yield* provider
 				.writeTextFile(
 					sandbox.providerSandboxId,
-					"/var/lib/zuse/project-build/repositories.tsv",
+					"/var/lib/zuse/project-build/repositories.jsonl",
 					`${repositoryManifest}\n`,
 					"zuse",
 				)
@@ -674,6 +700,14 @@ const reconcileBuildRecord = Effect.fn("reconcileCloudAccountImageBuild")(
 						ZUSE_CONFIGURATION_DIGEST: build.configurationDigest,
 						...(build.settings?.codexAuthDeliveryVersion === 1
 							? { ZUSE_CODEX_AUTH_DELIVERY_VERSION: "1" }
+							: {}),
+						...(build.settings?.providerAuthDeliveryVersion === 1
+							? {
+									ZUSE_PROVIDER_AUTH_DELIVERY_VERSION: "1",
+									ZUSE_PROVIDER_STATUS_JSON: JSON.stringify(
+										build.settings.providers ?? [],
+									),
+								}
 							: {}),
 						ZUSE_REPOSITORY_CACHE_MAX_BYTES: String(
 							apiConfig.cloudRepositoryCacheMaxBytes,
@@ -804,6 +838,14 @@ const reconcileBuildRecord = Effect.fn("reconcileCloudAccountImageBuild")(
 				...(build.settings?.codexAuthDeliveryVersion === 1
 					? ["/home/zuse/.codex/auth.json"]
 					: []),
+				...(build.settings?.providerAuthDeliveryVersion === 1
+					? [
+							"/home/zuse/.codex/auth.json",
+							"/home/zuse/.grok/auth.json",
+							"/home/zuse/.zuse-image/provider-secrets.json",
+							"/home/zuse/.zuse/cloud-auth",
+						]
+					: []),
 			];
 			const forbiddenResults = yield* Effect.forEach(forbiddenPaths, (path) =>
 				provider.pathExists(build.providerSandboxId as string, path, "zuse"),
@@ -853,6 +895,12 @@ const reconcileBuildRecord = Effect.fn("reconcileCloudAccountImageBuild")(
 						: undefined,
 				expectedCodexAuthDeliveryVersion:
 					build.settings?.codexAuthDeliveryVersion === 1 ? 1 : undefined,
+				providerAuthDeliveryVersion:
+					typeof manifest.providerAuthDeliveryVersion === "number"
+						? manifest.providerAuthDeliveryVersion
+						: undefined,
+				expectedProviderAuthDeliveryVersion:
+					build.settings?.providerAuthDeliveryVersion === 1 ? 1 : undefined,
 			});
 			if (sanitizationFailures.length > 0) {
 				const sanitizationDiagnostic = `Snapshot validation failed: ${sanitizationFailures.join(", ")}.`;
@@ -1138,7 +1186,7 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 		provider: SandboxProviderAdapter,
 		nowMs: number,
 		saveWorkspace: SaveClaimedWorkspace,
-		providerAlreadyRunning = false,
+		providerAlreadyRunning?: boolean,
 	) {
 		const store = yield* CloudWorkspaceStore;
 		const config = yield* SandboxOfferConfiguration;
@@ -1149,7 +1197,19 @@ const restartWorkspaceRuntime = Effect.fn("restartCloudWorkspaceRuntime")(
 			project.repositoryIdentity,
 		);
 
-		if (!providerAlreadyRunning)
+		const running =
+			typeof providerAlreadyRunning === "boolean"
+				? providerAlreadyRunning
+				: yield* provider
+						.inspect(providerSandboxId)
+						.pipe(
+							Effect.flatMap((sandbox) =>
+								sandbox === null
+									? Effect.fail(new SandboxProviderError({ code: "not-found" }))
+									: Effect.succeed(sandbox.state === "running"),
+							),
+						);
+		if (!running)
 			yield* provider.resume(
 				providerSandboxId,
 				config.keepAliveTimeoutSeconds,
@@ -1252,9 +1312,7 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 		saveWorkspace: SaveClaimedWorkspace,
 	) {
 		const store = yield* CloudWorkspaceStore;
-		const provider = yield* (yield* SandboxProviders)
-			.get(workspace.provider)
-			.pipe(Effect.orDie);
+		const provider = yield* (yield* SandboxProviders).get(workspace.provider);
 		const config = yield* SandboxOfferConfiguration;
 		const apiConfig = yield* ApiConfiguration;
 		const nowMs = yield* Clock.currentTimeMillis;
@@ -1694,8 +1752,6 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 				provider,
 				nowMs,
 				saveWorkspace,
-				workspace.statusCode === "resume-runtime-waking" ||
-					workspace.statusCode === "restart-queued",
 			);
 		}
 
@@ -1838,28 +1894,52 @@ const reconcileWorkspaceRecord = Effect.fn("reconcileCloudWorkspace")(
 	},
 );
 
+export const reconcileCloudResourceBatch = <Item, Error, Requirements>(input: {
+	readonly resourceKind: "build" | "workspace";
+	readonly items: ReadonlyArray<Item>;
+	readonly resourceId: (item: Item) => string;
+	readonly concurrency: number;
+	readonly reconcile: (
+		item: Item,
+	) => Effect.Effect<unknown, Error, Requirements>;
+}): Effect.Effect<void, never, Requirements> =>
+	Effect.forEach(
+		input.items,
+		(item) =>
+			input.reconcile(item).pipe(
+				Effect.catchCause((cause) =>
+					Effect.sync(() => {
+						console.error("[cloud-workspace] isolated reconciliation failure", {
+							resourceKind: input.resourceKind,
+							resourceId: input.resourceId(item),
+							cause: Cause.pretty(cause),
+						});
+					}),
+				),
+			),
+		{ concurrency: input.concurrency, discard: true },
+	);
+
 export const reconcileCloudResources = Effect.fn("reconcileCloudResources")(
 	function* () {
 		const store = yield* CloudWorkspaceStore;
 		const nowMs = yield* Clock.currentTimeMillis;
 		const builds = yield* store.listDueBuilds(nowMs, 10);
 		const workspaces = yield* store.listDueWorkspaces(nowMs, 25);
-		yield* Effect.forEach(
-			builds,
-			(build) => reconcileCloudBuild(build.buildId),
-			{
-				concurrency: 2,
-				discard: true,
-			},
-		);
-		yield* Effect.forEach(
-			workspaces,
-			(workspace) => reconcileCloudWorkspace(workspace.workspaceId),
-			{
-				concurrency: 5,
-				discard: true,
-			},
-		);
+		yield* reconcileCloudResourceBatch({
+			resourceKind: "build",
+			items: builds,
+			resourceId: (build) => build.buildId,
+			concurrency: 2,
+			reconcile: (build) => reconcileCloudBuild(build.buildId),
+		});
+		yield* reconcileCloudResourceBatch({
+			resourceKind: "workspace",
+			items: workspaces,
+			resourceId: (workspace) => workspace.workspaceId,
+			concurrency: 5,
+			reconcile: (workspace) => reconcileCloudWorkspace(workspace.workspaceId),
+		});
 		return { builds: builds.length, workspaces: workspaces.length };
 	},
 );
@@ -1911,6 +1991,20 @@ export const reconcileCloudWorkspace = (workspaceId: string) =>
 					),
 				);
 		yield* reconcileWorkspaceRecord(workspace, saveWorkspace).pipe(
+			Effect.catchTag("ProviderSelectionError", () =>
+				Effect.gen(function* () {
+					const failedAtMs = yield* Clock.currentTimeMillis;
+					yield* saveWorkspace({
+						...currentWorkspace,
+						state: "failed",
+						statusCode: "provider-unavailable",
+						runtimeState: "offline",
+						nextActionAtMs: Number.MAX_SAFE_INTEGER,
+						revision: currentWorkspace.revision + 1,
+						updatedAtMs: failedAtMs,
+					});
+				}),
+			),
 			Effect.catchTag("SandboxProviderError", (error) =>
 				Effect.gen(function* () {
 					const failedAtMs = yield* Clock.currentTimeMillis;
@@ -1940,6 +2034,28 @@ export const reconcileCloudWorkspace = (workspaceId: string) =>
 						return;
 					}
 					if (error.code === "not-found") {
+						if (cloudWorkspaceHasRetainedRuntimeData(currentWorkspace)) {
+							yield* saveWorkspace({
+								...currentWorkspace,
+								providerSandboxId: undefined,
+								runtimeBootTokenHash: undefined,
+								runtimeBootTokenExpiresAtMs: undefined,
+								runtimeCredentialHash: undefined,
+								state: "failed",
+								desiredState: "ready",
+								statusCode: "runtime-storage-replaced",
+								runtimeState: "offline",
+								requestConfig: {
+									...currentWorkspace.requestConfig,
+									runtimeSessionRecoveryPending: true,
+									launchErrorCode: "runtime-storage-replaced",
+								},
+								nextActionAtMs: Number.MAX_SAFE_INTEGER,
+								revision: currentWorkspace.revision + 1,
+								updatedAtMs: failedAtMs,
+							});
+							return;
+						}
 						yield* saveWorkspace({
 							...currentWorkspace,
 							providerSandboxId: undefined,

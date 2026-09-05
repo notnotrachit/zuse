@@ -4,14 +4,17 @@ import {
 	SandboxProvidersFake,
 } from "@zuse/sandbox-providers/testing";
 import { Effect, Layer, Redacted, Ref } from "effect";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { CloudBillingStoreMemory } from "../../src/cloud-billing-store-memory.ts";
 import { cloudRepositoryWorkspacePath } from "../../src/cloud-workspace-paths.ts";
 import {
 	ARCHIVED_WORKSPACE_RETENTION_MS,
+	cloudWorkspaceHasRetainedRuntimeData,
 	cloudWorkspaceStartupNeedsObservation,
 	MAILBOX_RUNTIME_STALL_TIMEOUT_MS,
 	RUNTIME_CONNECTION_TIMEOUT_MS,
+	reconcileCloudResourceBatch,
+	reconcileCloudResources,
 	reconcileCloudWorkspace,
 	reusableAccountBuildSnapshot,
 	sanitizeProjectBuildDiagnostic,
@@ -153,6 +156,108 @@ const seedWorkspace = Effect.fn("seedArchiveWorkspace")(function* (
 });
 
 describe("cloud workspace reconciler", () => {
+	test("isolates reconciliation defects so later resources still run", async () => {
+		const error = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		try {
+			const completed = await Effect.runPromise(
+				Effect.gen(function* () {
+					const completed = yield* Ref.make<ReadonlyArray<string>>([]);
+					yield* reconcileCloudResourceBatch({
+						resourceKind: "workspace",
+						items: ["broken", "healthy"],
+						resourceId: (id) => id,
+						concurrency: 1,
+						reconcile: (id) =>
+							id === "broken"
+								? Effect.die("unexpected provider defect")
+								: Ref.update(completed, (ids) => [...ids, id]),
+					});
+					return yield* Ref.get(completed);
+				}),
+			);
+
+			expect(completed).toEqual(["healthy"]);
+			expect(error).toHaveBeenCalledWith(
+				"[cloud-workspace] isolated reconciliation failure",
+				expect.objectContaining({
+					resourceKind: "workspace",
+					resourceId: "broken",
+				}),
+			);
+		} finally {
+			error.mockRestore();
+		}
+	});
+
+	test("retires unsupported legacy providers without starving due workspaces", async () => {
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const store = yield* CloudWorkspaceStore;
+				const unsupported = yield* seedWorkspace({
+					workspaceId: "workspace-unsupported-provider",
+					state: "paused",
+					desiredState: "ready",
+					statusCode: "resume-queued",
+					requestConfig: {},
+				});
+				yield* store.saveWorkspace({
+					...unsupported,
+					provider: "box",
+					revision: unsupported.revision + 1,
+					updatedAtMs: unsupported.updatedAtMs + 1,
+				});
+				const healthy = yield* seedWorkspace({
+					workspaceId: "workspace-supported-provider",
+					state: "paused",
+					desiredState: "ready",
+					statusCode: "resume-queued",
+					requestConfig: {},
+				});
+
+				yield* reconcileCloudResources();
+				return {
+					unsupported: yield* store.getWorkspace(unsupported.workspaceId),
+					healthy: yield* store.getWorkspace(healthy.workspaceId),
+				};
+			}).pipe(Effect.provide(testLayer)),
+		);
+
+		expect(result.unsupported).toMatchObject({
+			state: "failed",
+			runtimeState: "offline",
+			statusCode: "provider-unavailable",
+			nextActionAtMs: Number.MAX_SAFE_INTEGER,
+		});
+		expect(result.healthy).toMatchObject({
+			state: "resuming",
+			runtimeState: "connecting",
+			statusCode: "resume-runtime-waking",
+		});
+	});
+
+	test("recognizes established runtime storage before provider replacement", () => {
+		expect(
+			cloudWorkspaceHasRetainedRuntimeData({
+				statusCode: "agent-running",
+				requestConfig: {},
+			}),
+		).toBe(true);
+		expect(
+			cloudWorkspaceHasRetainedRuntimeData({
+				statusCode: "runtime-starting",
+				requestConfig: { sessionHeadVersion: 0 },
+			}),
+		).toBe(true);
+		expect(
+			cloudWorkspaceHasRetainedRuntimeData({
+				statusCode: "runtime-starting",
+				requestConfig: {},
+			}),
+		).toBe(false);
+	});
+
 	test("maps GitHub repositories to stable folders outside the runtime home", () => {
 		expect(cloudRepositoryWorkspacePath("github.com/swarajbachu/zuse")).toBe(
 			"/home/repos/swarajbachu/zuse",
@@ -238,6 +343,44 @@ describe("cloud workspace reconciler", () => {
 				requestConfig: { cloudMailboxWakePending: true },
 			}),
 		).toBe(true);
+	});
+
+	test("rechecks provider state when a queued restart auto-paused before cron", async () => {
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const control = yield* FakeSandboxProviderControlService;
+				const workspace = yield* seedWorkspace({
+					workspaceId: "workspace-restart-auto-paused",
+					state: "resuming",
+					desiredState: "ready",
+					statusCode: "restart-queued",
+					requestConfig: { runtimeGeneration: 4, gatewayEpoch: 4 },
+				});
+				yield* Ref.update(control.sandboxes, (sandboxes) => {
+					const next = new Map(sandboxes);
+					const sandbox = next.get(workspace.providerSandboxId ?? "");
+					if (sandbox !== undefined)
+						next.set(sandbox.providerSandboxId, {
+							...sandbox,
+							state: "paused",
+						});
+					return next;
+				});
+
+				yield* reconcileCloudWorkspace(workspace.workspaceId);
+				return {
+					resumeInputs: yield* Ref.get(control.resumeInputs),
+					startProcessCalls: yield* Ref.get(control.startProcessCalls),
+				};
+			}).pipe(Effect.provide(testLayer)),
+		);
+
+		expect(result.resumeInputs).toEqual([
+			{ timeoutSeconds: 600, onTimeout: "pause" },
+		]);
+		expect(result.startProcessCalls).toEqual([
+			"source-workspace-restart-auto-paused",
+		]);
 	});
 
 	test("gives an enrolled runtime a fresh gateway connection window", async () => {
@@ -378,6 +521,21 @@ describe("cloud workspace reconciler", () => {
 		]);
 	});
 
+	test("rejects an image missing the provider-auth sanitation capability", () => {
+		expect(
+			snapshotSanitizationFailures({
+				forbiddenPaths: [],
+				forbiddenResults: [],
+				sourceCommit: "a".repeat(64),
+				templateVersion: "runtime",
+				expectedTemplateVersion: "runtime",
+				configurationDigest: "config",
+				expectedConfigurationDigest: "config",
+				expectedProviderAuthDeliveryVersion: 1,
+			}),
+		).toEqual(["Provider auth delivery capability mismatch"]);
+	});
+
 	test("reuses account snapshots only from the current template", () => {
 		const build = {
 			templateVersion: "old-template",
@@ -482,7 +640,7 @@ describe("cloud workspace reconciler", () => {
 		expect(result.sandboxes.has("source-expired-archive")).toBe(false);
 	});
 
-	test("preserves a paused runtime before falling back to a restart", async () => {
+	test("preserves a paused runtime and refuses a storage-destructive replacement", async () => {
 		const result = await Effect.runPromise(
 			Effect.gen(function* () {
 				const store = yield* CloudWorkspaceStore;
@@ -536,7 +694,7 @@ describe("cloud workspace reconciler", () => {
 					desiredState: "paused" as const,
 					statusCode: "agent-running",
 					idempotencyKey: "workspace-resume-key",
-					requestConfig: {},
+					requestConfig: { sessionHeadVersion: 5 },
 					nextActionAtMs: nowMs,
 					revision: 1,
 					createdAtMs: nowMs,
@@ -642,10 +800,11 @@ describe("cloud workspace reconciler", () => {
 			kind: "open",
 		});
 		expect(result.missing).toMatchObject({
-			state: "queued",
+			state: "failed",
 			providerSandboxId: undefined,
-			statusCode: "provider-sandbox-replacing",
+			statusCode: "runtime-storage-replaced",
 			runtimeState: "offline",
+			nextActionAtMs: Number.MAX_SAFE_INTEGER,
 		});
 		expect(result.missing?.leaseOwner).toBeUndefined();
 	});

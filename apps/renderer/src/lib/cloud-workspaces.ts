@@ -6,6 +6,7 @@ import type {
 import type { SessionTimelineProjection } from "@zuse/contracts";
 import {
 	Chat,
+	type ChatId,
 	CLOUD_TRANSCRIPT_CHECKPOINT_SCHEMA_VERSION,
 	type CloudChatSummary,
 	CloudTranscriptCheckpointPayload,
@@ -57,10 +58,11 @@ import { useSessionsStore } from "../store/sessions.ts";
 import { useUiStore } from "../store/ui.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
 import {
+	cloudSummaryActiveSessionId,
 	cloudSummaryForChat,
 	cloudSummaryForEnvironment,
-	cloudSummaryForSession,
 	compareCloudChatSummaryVersion,
+	findCloudSummaryForSelection,
 	hydrateCloudChatCatalogPersistence,
 	localProjectForCloudChat,
 	localProjectForCloudEnvironment,
@@ -314,6 +316,7 @@ const refreshSummaryFromWorkspace = (
 ): CloudChatSummary => ({
 	...summary,
 	codexAuthMode: workspace.codexAuthMode,
+	providerAuthMode: workspace.providerAuthMode,
 	state: workspace.state,
 	runtimeState: workspace.runtimeState,
 	statusCode: workspace.statusCode,
@@ -349,10 +352,11 @@ const sessionStatus = (summary: CloudChatSummary): Session["status"] =>
 export const cloudSessionPlaceholder = (
 	summary: CloudChatSummary,
 	projectId: FolderId,
+	sessionId: SessionId = summary.initialSessionId,
 ): Session => {
 	const now = new Date(summary.createdAt);
 	return Session.make({
-		id: summary.initialSessionId,
+		id: sessionId,
 		projectId,
 		title: summary.title,
 		titleProvenance: "manual",
@@ -381,7 +385,7 @@ export const cloudSessionPlaceholder = (
 export const stageCloudChat = (
 	summary: CloudChatSummary,
 	projectId: FolderId,
-	firstMessage?: string,
+	legacyFirstMessage?: string,
 ): void => {
 	const previous = cloudSummaryForEnvironment(summary.workspaceId);
 	if (
@@ -395,13 +399,14 @@ export const stageCloudChat = (
 	const now = new Date(accepted.createdAt);
 	const archivedAt =
 		accepted.archivedAt === undefined ? null : new Date(accepted.archivedAt);
+	const activeSessionId = cloudSummaryActiveSessionId(accepted);
 	const chat = Chat.make({
 		id: accepted.chatId,
 		projectId,
 		worktreeId: null,
 		title: accepted.title,
 		titleProvenance: "manual",
-		activeSessionId: accepted.initialSessionId,
+		activeSessionId,
 		originSessionId: null,
 		archivedAt,
 		lastMessageAt:
@@ -410,7 +415,10 @@ export const stageCloudChat = (
 		createdAt: now,
 		updatedAt: new Date(accepted.updatedAt),
 	});
-	const session = cloudSessionPlaceholder(accepted, projectId);
+	const session =
+		activeSessionId === null
+			? null
+			: cloudSessionPlaceholder(accepted, projectId, activeSessionId);
 	overlayActiveEnvironmentShell((shell) => ({
 		...shell,
 		chatsByProject: {
@@ -424,15 +432,21 @@ export const stageCloudChat = (
 		},
 		sessionsByProject: {
 			...shell.sessionsByProject,
-			[projectId]: [
-				session,
-				...(shell.sessionsByProject[projectId] ?? []).filter(
-					(candidate) => candidate.id !== session.id,
-				),
-			],
+			[projectId]:
+				session === null
+					? (shell.sessionsByProject[projectId] ?? [])
+					: [
+							session,
+							...(shell.sessionsByProject[projectId] ?? []).filter(
+								(candidate) => candidate.id !== session.id,
+							),
+						],
 		},
 	}));
-	if (firstMessage !== undefined) {
+	// Compatibility only: an API that did not acknowledge mailbox-v1 still owns
+	// the prompt in its encrypted launch intent. The stable ID is replaced by the
+	// authoritative launch message rather than producing a duplicate.
+	if (legacyFirstMessage !== undefined) {
 		addOptimisticSessionMessage(
 			{
 				environmentId: EnvironmentId.make(accepted.workspaceId),
@@ -442,7 +456,7 @@ export const stageCloudChat = (
 				id: MessageId.make(`launch:${accepted.workspaceId}:message`),
 				sessionId: accepted.initialSessionId,
 				role: "user",
-				content: { _tag: "user", text: firstMessage, goal: false },
+				content: { _tag: "user", text: legacyFirstMessage, goal: false },
 				createdAt: now,
 			}),
 		);
@@ -458,6 +472,7 @@ export const openCloudChat = (
 	if (existing !== undefined) return existing;
 	const operation = Promise.resolve().then(() => {
 		stageCloudChat(summary, projectId);
+		const activeSessionId = cloudSummaryActiveSessionId(summary);
 		// Catalog selection must not depend on a paused runtime shell. Select the
 		// durable ids now so the qualified timeline cache can hydrate immediately.
 		useUiStore.getState().setActiveMainTab("chat");
@@ -469,10 +484,10 @@ export const openCloudChat = (
 			},
 		}));
 		useSessionsStore.setState((state) => ({
-			selectedSessionId: summary.initialSessionId,
+			selectedSessionId: activeSessionId,
 			selectedSessionByProject: {
 				...state.selectedSessionByProject,
-				[projectId]: summary.initialSessionId,
+				[projectId]: activeSessionId,
 			},
 		}));
 		if (useWorkspaceStore.getState().selectedFolderId !== projectId) {
@@ -613,6 +628,7 @@ export const summaryFromLaunch = (input: {
 	branch: input.workspace.branch,
 	providerId: input.workspace.providerId,
 	codexAuthMode: input.workspace.codexAuthMode,
+	providerAuthMode: input.workspace.providerAuthMode,
 	agent: input.agent,
 	model: input.model,
 	runtimeMode: input.runtimeMode,
@@ -788,16 +804,19 @@ export const useCloudChatsStore = create<CloudChatsState>((set) => ({
 
 registerCloudChatCatalogRefresh(() => useCloudChatsStore.getState().hydrate());
 
-export const useCloudChatSummaryForSession = (
-	sessionId: SessionId | null,
-): CloudChatSummary | null => {
-	const registered =
-		sessionId === null ? null : cloudSummaryForSession(sessionId);
+export const useCloudChatSummaryForSelection = ({
+	chatId,
+	sessionId,
+}: {
+	readonly chatId: ChatId | null;
+	readonly sessionId: SessionId | null;
+}): CloudChatSummary | null => {
 	return useCloudChatCatalogStore((state) =>
-		sessionId === null
-			? null
-			: (state.summaries.find(
-					(summary) => summary.initialSessionId === sessionId,
-				) ?? registered),
+		findCloudSummaryForSelection(state.summaries, { chatId, sessionId }),
 	);
 };
+
+export const useCloudChatSummaryForSession = (
+	sessionId: SessionId | null,
+): CloudChatSummary | null =>
+	useCloudChatSummaryForSelection({ chatId: null, sessionId });

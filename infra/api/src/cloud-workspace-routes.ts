@@ -18,6 +18,7 @@ import {
 	CloudWorkspaceStartupTimings,
 	CodexGrantRequest,
 	DEFAULT_RUNTIME_MODE,
+	ProviderGrantRequest,
 	RuntimeAcknowledgment,
 	RuntimeMode,
 } from "@zuse/contracts";
@@ -35,6 +36,7 @@ import {
 	configureCloudAuth,
 	disconnectCloudAuth,
 	issueCodexGrant,
+	issueProviderGrant,
 	pollCloudAuthLogin,
 	provisionCloudAuth,
 	startCloudAuthLogin,
@@ -70,6 +72,7 @@ import {
 import {
 	CloudWorkspaceLaunchIntentCipher,
 	makeCloudWorkspaceLaunchIntent,
+	selectCloudWorkspaceInitialMessageDelivery,
 } from "./cloud-workspace-launch-intent.ts";
 import { cloudRepositoryWorkspacePath } from "./cloud-workspace-paths.ts";
 import {
@@ -85,6 +88,7 @@ import {
 	CloudWorkspaceStore,
 	mailboxLifecycleToDeliver,
 	runtimeBootstrapReceiptFromConfig,
+	workspaceAcceptsCloudCommandMailbox,
 	workspaceDeletionRequested,
 	workspaceDestructionFence,
 	workspaceSupportsCloudCommandMailbox,
@@ -209,6 +213,7 @@ export const decodeRuntimeSummary = (
 						"summaryRevision",
 						"title",
 						"lastActivityAt",
+						"activeSessionId",
 						"sessionHeadVersion",
 					]).has(key),
 			)
@@ -466,6 +471,8 @@ export const isCloudAccountImageOutdated = (input: {
 	}>;
 	readonly codexAuthDeliveryVersion?: 1;
 	readonly requiredCodexAuthDeliveryVersion?: 1;
+	readonly providerAuthDeliveryVersion?: 1;
+	readonly requiredProviderAuthDeliveryVersion?: 1;
 }) =>
 	input.projects.some(
 		(project) =>
@@ -474,6 +481,7 @@ export const isCloudAccountImageOutdated = (input: {
 	) ||
 	input.providers.some(
 		(status) =>
+			input.providerAuthDeliveryVersion !== 1 &&
 			!(
 				input.codexAuthDeliveryVersion === 1 && status.providerId === "codex"
 			) &&
@@ -482,7 +490,9 @@ export const isCloudAccountImageOutdated = (input: {
 	) ||
 	input.imageTemplateVersion !== input.currentTemplateVersion ||
 	(input.requiredCodexAuthDeliveryVersion === 1 &&
-		input.codexAuthDeliveryVersion !== 1);
+		input.codexAuthDeliveryVersion !== 1) ||
+	(input.requiredProviderAuthDeliveryVersion === 1 &&
+		input.providerAuthDeliveryVersion !== 1);
 
 export const selectActiveAccountImageBuild = (
 	builds: ReadonlyArray<CloudProjectBuildRecord>,
@@ -516,6 +526,14 @@ export const codexAuthModeForAccountBuild = (
 		? "broker-v1"
 		: "legacy-image";
 };
+
+export const providerAuthModeForAccountBuild = (
+	build: CloudProjectBuildRecord,
+	brokerEnrollmentEnabled: boolean,
+): "legacy-image" | "broker-v1" =>
+	brokerEnrollmentEnabled && build.settings?.providerAuthDeliveryVersion === 1
+		? "broker-v1"
+		: "legacy-image";
 
 const cloudAccountImage = Effect.fn("cloudAccountImage")(function* (
 	accountId: string,
@@ -556,6 +574,7 @@ const cloudAccountImage = Effect.fn("cloudAccountImage")(function* (
 	}));
 	const authBroken = providers.some(
 		(status) =>
+			active?.settings?.providerAuthDeliveryVersion !== 1 &&
 			!(
 				active?.settings?.codexAuthDeliveryVersion === 1 &&
 				status.providerId === "codex"
@@ -574,8 +593,14 @@ const cloudAccountImage = Effect.fn("cloudAccountImage")(function* (
 			...(active.settings?.codexAuthDeliveryVersion === 1
 				? { codexAuthDeliveryVersion: 1 as const }
 				: {}),
+			...(active.settings?.providerAuthDeliveryVersion === 1
+				? { providerAuthDeliveryVersion: 1 as const }
+				: {}),
 			...(apiConfiguration.cloudCodexAuthBrokerEnrollmentEnabled
 				? { requiredCodexAuthDeliveryVersion: 1 as const }
+				: {}),
+			...(apiConfiguration.cloudProviderAuthBrokerEnrollmentEnabled
+				? { requiredProviderAuthDeliveryVersion: 1 as const }
 				: {}),
 		});
 	const latestFailedAfterActive =
@@ -629,6 +654,9 @@ const cloudAccountImage = Effect.fn("cloudAccountImage")(function* (
 		})),
 		...(active?.settings?.codexAuthDeliveryVersion === 1
 			? { codexAuthDeliveryVersion: 1 as const }
+			: {}),
+		...(active?.settings?.providerAuthDeliveryVersion === 1
+			? { providerAuthDeliveryVersion: 1 as const }
 			: {}),
 		builtAt: active?.updatedAtMs,
 		updatedAt:
@@ -706,6 +734,15 @@ export const runtimeUnavailableResumeTarget = (
 				providerSandboxId: workspace.providerSandboxId,
 			} as const);
 
+const workspaceFailureDiagnostic = (
+	workspace: CloudWorkspaceRecord,
+): string | undefined =>
+	typeof workspace.requestConfig.startupFailureDiagnostic === "string"
+		? workspace.requestConfig.startupFailureDiagnostic
+		: typeof workspace.requestConfig.launchErrorCode === "string"
+			? workspace.requestConfig.launchErrorCode
+			: undefined;
+
 const publicWorkspace = (workspace: CloudWorkspaceRecord) => ({
 	workspaceId: workspace.workspaceId,
 	projectId: workspace.projectId,
@@ -716,15 +753,16 @@ const publicWorkspace = (workspace: CloudWorkspaceRecord) => ({
 		workspace.requestConfig.codexAuthMode === "broker-v1"
 			? ("broker-v1" as const)
 			: ("legacy-image" as const),
+	providerAuthMode:
+		workspace.requestConfig.providerAuthMode === "broker-v1"
+			? ("broker-v1" as const)
+			: ("legacy-image" as const),
 	branch: workspace.branch,
 	baseRef: workspace.baseRef,
 	state: workspace.state,
 	desiredState: workspace.desiredState,
 	statusCode: workspace.statusCode,
-	failureDiagnostic:
-		typeof workspace.requestConfig.startupFailureDiagnostic === "string"
-			? workspace.requestConfig.startupFailureDiagnostic
-			: undefined,
+	failureDiagnostic: workspaceFailureDiagnostic(workspace),
 	startupPhase: startupPhase(workspace),
 	startupTimings: startupTimings(workspace),
 	runtimeState: workspace.runtimeState,
@@ -745,65 +783,102 @@ const runtimeModeFromRequestConfig = (
 	return decoded._tag === "Some" ? decoded.value : DEFAULT_RUNTIME_MODE;
 };
 
+const runtimeGeneration = (workspace: CloudWorkspaceRecord): number =>
+	typeof workspace.requestConfig.runtimeGeneration === "number"
+		? workspace.requestConfig.runtimeGeneration
+		: 1;
+
+/** Runtime-derived metadata is authoritative only inside its generation fence. */
+export const currentCloudRuntimeSummary = (
+	workspace: CloudWorkspaceRecord,
+	runtimeSummary?: CloudWorkspaceRuntimeSummaryRecord | null,
+): CloudWorkspaceRuntimeSummaryRecord | null =>
+	runtimeSummary?.runtimeGeneration === runtimeGeneration(workspace)
+		? runtimeSummary
+		: null;
+
+const workspaceRuntimeStorageUnavailable = (
+	workspace: CloudWorkspaceRecord,
+): boolean =>
+	workspace.statusCode === "runtime-storage-replaced" ||
+	workspace.requestConfig.launchErrorCode === "runtime-storage-replaced";
+
 export const publicCloudWorkspaceSummary = (
 	workspace: CloudWorkspaceRecord,
 	project: CloudProjectRecord,
 	unread: boolean,
 	lastMessageAt: number | null,
 	runtimeSummary?: CloudWorkspaceRuntimeSummaryRecord | null,
-) => ({
-	workspaceId: workspace.workspaceId,
-	projectId: project.projectId,
-	repositoryIdentity: project.repositoryIdentity,
-	repositoryDisplayName: project.displayName,
-	chatId: workspace.chatId,
-	initialSessionId: workspace.initialSessionId,
-	title:
-		runtimeSummary?.title ??
-		(typeof workspace.requestConfig.title === "string"
-			? workspace.requestConfig.title
-			: workspace.branch),
-	branch: workspace.branch,
-	providerId: workspace.provider,
-	codexAuthMode:
-		workspace.requestConfig.codexAuthMode === "broker-v1"
-			? ("broker-v1" as const)
-			: ("legacy-image" as const),
-	agent:
-		typeof workspace.requestConfig.agent === "string"
-			? workspace.requestConfig.agent
-			: "codex",
-	model:
-		typeof workspace.requestConfig.model === "string"
-			? workspace.requestConfig.model
-			: "",
-	runtimeMode: runtimeModeFromRequestConfig(workspace.requestConfig),
-	state: workspace.state,
-	desiredState: workspace.desiredState,
-	runtimeState: workspace.runtimeState,
-	statusCode: workspace.statusCode,
-	failureDiagnostic:
-		typeof workspace.requestConfig.startupFailureDiagnostic === "string"
-			? workspace.requestConfig.startupFailureDiagnostic
-			: undefined,
-	startupPhase: startupPhase(workspace),
-	revision: workspace.revision,
-	summaryRevision: runtimeSummary?.summaryRevision ?? 0,
-	sessionHeadVersion:
-		runtimeSummary?.sessionHeadVersion ??
-		(typeof workspace.requestConfig.sessionHeadVersion === "number"
-			? workspace.requestConfig.sessionHeadVersion
-			: 0),
-	unread,
-	lastMessageAt: runtimeSummary?.lastActivityAtMs ?? lastMessageAt,
-	...(workspace.state === "archived" || workspace.desiredState === "archived"
-		? {
-				archivedAt: workspace.archiveRequestedAtMs ?? workspace.updatedAtMs,
-			}
-		: {}),
-	createdAt: workspace.createdAtMs,
-	updatedAt: Math.max(workspace.updatedAtMs, runtimeSummary?.updatedAtMs ?? 0),
-});
+) => {
+	const currentSummary = currentCloudRuntimeSummary(workspace, runtimeSummary);
+	const recoveringRetainedStorage =
+		workspace.requestConfig.runtimeSessionRecoveryPending === true;
+	return {
+		workspaceId: workspace.workspaceId,
+		projectId: project.projectId,
+		repositoryIdentity: project.repositoryIdentity,
+		repositoryDisplayName: project.displayName,
+		chatId: workspace.chatId,
+		initialSessionId: workspace.initialSessionId,
+		activeSessionId:
+			currentSummary === null
+				? recoveringRetainedStorage
+					? null
+					: workspace.initialSessionId
+				: currentSummary.activeSessionId,
+		title:
+			currentSummary?.title ??
+			(typeof workspace.requestConfig.title === "string"
+				? workspace.requestConfig.title
+				: workspace.branch),
+		branch: workspace.branch,
+		providerId: workspace.provider,
+		codexAuthMode:
+			workspace.requestConfig.codexAuthMode === "broker-v1"
+				? ("broker-v1" as const)
+				: ("legacy-image" as const),
+		providerAuthMode:
+			workspace.requestConfig.providerAuthMode === "broker-v1"
+				? ("broker-v1" as const)
+				: ("legacy-image" as const),
+		agent:
+			typeof workspace.requestConfig.agent === "string"
+				? workspace.requestConfig.agent
+				: "codex",
+		model:
+			typeof workspace.requestConfig.model === "string"
+				? workspace.requestConfig.model
+				: "",
+		runtimeMode: runtimeModeFromRequestConfig(workspace.requestConfig),
+		state: workspace.state,
+		desiredState: workspace.desiredState,
+		runtimeState: workspace.runtimeState,
+		statusCode: workspace.statusCode,
+		failureDiagnostic: workspaceFailureDiagnostic(workspace),
+		startupPhase: startupPhase(workspace),
+		revision: workspace.revision,
+		summaryRevision: currentSummary?.summaryRevision ?? 0,
+		sessionHeadVersion:
+			currentSummary?.sessionHeadVersion ??
+			(recoveringRetainedStorage
+				? 0
+				: typeof workspace.requestConfig.sessionHeadVersion === "number"
+					? workspace.requestConfig.sessionHeadVersion
+					: 0),
+		unread,
+		lastMessageAt: currentSummary?.lastActivityAtMs ?? lastMessageAt,
+		...(workspace.state === "archived" || workspace.desiredState === "archived"
+			? {
+					archivedAt: workspace.archiveRequestedAtMs ?? workspace.updatedAtMs,
+				}
+			: {}),
+		createdAt: workspace.createdAtMs,
+		updatedAt: Math.max(
+			workspace.updatedAtMs,
+			currentSummary?.updatedAtMs ?? 0,
+		),
+	};
+};
 
 const selectedProvider = Effect.fn("selectedCloudProvider")(function* (
 	requested?: string,
@@ -935,11 +1010,6 @@ const RuntimeCommandLeaseRequest = Schema.Struct({
 	storageIncarnationId: Schema.String,
 });
 
-const runtimeGeneration = (workspace: CloudWorkspaceRecord): number =>
-	typeof workspace.requestConfig.runtimeGeneration === "number"
-		? workspace.requestConfig.runtimeGeneration
-		: 1;
-
 export const codexGrantRuntimeBindingError = (
 	workspace: CloudWorkspaceRecord,
 	request: Pick<CodexGrantRequest, "runtimeGeneration">,
@@ -962,6 +1032,73 @@ export const codexGrantRuntimeBindingError = (
 		return "runtime_credential_key_binding_mismatch";
 	return null;
 };
+
+export const launchFailureNextActionAt = (input: {
+	readonly errorCode?: string;
+	readonly nowMs: number;
+	readonly idlePauseMs: number;
+}): number =>
+	input.errorCode === "runtime-storage-replaced"
+		? Number.MAX_SAFE_INTEGER
+		: input.nowMs + input.idlePauseMs;
+
+export const providerGrantRuntimeBindingError = (
+	workspace: CloudWorkspaceRecord,
+	request: Pick<ProviderGrantRequest, "runtimeGeneration">,
+	keyThumbprint: string,
+):
+	| "provider-auth-legacy-workspace"
+	| "workspace_runtime_fenced"
+	| "runtime_credential_key_binding_mismatch"
+	| null => {
+	if (workspace.requestConfig.providerAuthMode !== "broker-v1")
+		return "provider-auth-legacy-workspace";
+	if (request.runtimeGeneration !== runtimeGeneration(workspace))
+		return "workspace_runtime_fenced";
+	const receipt = runtimeBootstrapReceiptFromConfig(workspace.requestConfig);
+	if (
+		receipt === null ||
+		receipt.generation !== request.runtimeGeneration ||
+		receipt.credentialKeyThumbprint !== keyThumbprint
+	)
+		return "runtime_credential_key_binding_mismatch";
+	return null;
+};
+
+const issueBoundProviderGrant = Effect.fn("issueBoundProviderGrant")(function* (
+	request: Request,
+	workspace: CloudWorkspaceRecord,
+	workspaceId: string,
+	providerId: CloudAuthProvider,
+) {
+	const body = yield* decodeBody(ProviderGrantRequest, request);
+	const publicJwk = yield* parseJwk(body.credentialPublicJwk);
+	const keyThumbprint = yield* runtimeCredentialKeyThumbprint(publicJwk);
+	const bindingError = providerGrantRuntimeBindingError(
+		workspace,
+		body,
+		keyThumbprint,
+	);
+	if (bindingError === "provider-auth-legacy-workspace")
+		return yield* Effect.fail(conflict(`${providerId}-auth-legacy-workspace`));
+	if (bindingError !== null)
+		return yield* Effect.fail(unauthorized(bindingError));
+	return json(
+		yield* issueProviderGrant({
+			accountId: workspace.accountId,
+			workspaceId,
+			providerId,
+			runtimeGeneration: body.runtimeGeneration,
+			recipientPublicJwk: body.credentialPublicJwk,
+			recipientKeyThumbprint: keyThumbprint,
+			requestId: body.requestId,
+			reason: body.reason,
+			...(body.previousProviderAccountId === undefined
+				? {}
+				: { previousProviderAccountId: body.previousProviderAccountId }),
+		}),
+	);
+});
 
 const attachMailboxLifecycle = (
 	response: Response,
@@ -1111,8 +1248,17 @@ export const routeCloudWorkspaceRequest = (
 			},
 		);
 		const repairAcknowledgedLaunch = Effect.fn("repairAcknowledgedLaunch")(
-			function* (workspace: CloudWorkspaceRecord, sessionHeadVersion = 0) {
+			function* (
+				workspace: CloudWorkspaceRecord,
+				runtimeSummary?: CloudWorkspaceRuntimeSummaryRecord | null,
+			) {
 				if (workspace.statusCode !== "agent-starting") return workspace;
+				const currentSummary = currentCloudRuntimeSummary(
+					workspace,
+					runtimeSummary,
+				);
+				if (currentSummary === null || currentSummary.sessionHeadVersion <= 0)
+					return workspace;
 				const launchIntent = yield* store.getLaunchIntent(
 					workspace.workspaceId,
 					nowMs,
@@ -1121,7 +1267,7 @@ export const routeCloudWorkspaceRequest = (
 				const completion = yield* store.completeLaunchIntent({
 					workspaceId: workspace.workspaceId,
 					commandId: `launch:${workspace.workspaceId}`,
-					sessionHeadVersion,
+					sessionHeadVersion: currentSummary.sessionHeadVersion,
 					nowMs,
 					nextActionAtMs: nowMs + idlePauseMs,
 				});
@@ -1286,6 +1432,10 @@ export const routeCloudWorkspaceRequest = (
 					enrolled.workspace.requestConfig.codexAuthMode === "broker-v1"
 						? "broker-v1"
 						: "legacy-image",
+				providerAuthMode:
+					enrolled.workspace.requestConfig.providerAuthMode === "broker-v1"
+						? "broker-v1"
+						: "legacy-image",
 				runtimeGeneration: enrolled.receipt.generation,
 				gatewayEpoch: enrolled.receipt.gatewayEpoch,
 				runtimeCredentialExpiresAt:
@@ -1393,6 +1543,18 @@ export const routeCloudWorkspaceRequest = (
 		if (method === "POST" && runtimeCodexGrantMatch !== null) {
 			const workspaceId = decodeURIComponent(runtimeCodexGrantMatch[1] ?? "");
 			const workspace = yield* requireRuntime(request, workspaceId, nowMs);
+			if (workspace.requestConfig.codexAuthMode !== "broker-v1") {
+				if (!apiConfiguration.cloudProviderAuthBrokerServingEnabled)
+					return yield* Effect.fail(
+						serviceUnavailable("codex-auth-update-required"),
+					);
+				return yield* issueBoundProviderGrant(
+					request,
+					workspace,
+					workspaceId,
+					"codex",
+				);
+			}
 			if (!apiConfiguration.cloudCodexAuthBrokerServingEnabled)
 				return yield* Effect.fail(
 					serviceUnavailable("codex-auth-update-required"),
@@ -1424,6 +1586,30 @@ export const routeCloudWorkspaceRequest = (
 								previousChatgptAccountId: body.previousChatgptAccountId,
 							}),
 				}),
+			);
+		}
+
+		const runtimeProviderGrantMatch =
+			/^\/v1\/cloud\/workspaces\/([^/]+)\/runtime\/providers\/([^/]+)\/grant$/u.exec(
+				path,
+			);
+		if (method === "POST" && runtimeProviderGrantMatch !== null) {
+			const workspaceId = decodeURIComponent(
+				runtimeProviderGrantMatch[1] ?? "",
+			);
+			const providerId = yield* Schema.decodeUnknownEffect(CloudAuthProvider)(
+				decodeURIComponent(runtimeProviderGrantMatch[2] ?? ""),
+			).pipe(Effect.mapError(() => notFound("cloud_provider_not_found")));
+			const workspace = yield* requireRuntime(request, workspaceId, nowMs);
+			if (!apiConfiguration.cloudProviderAuthBrokerServingEnabled)
+				return yield* Effect.fail(
+					serviceUnavailable(`${providerId}-auth-update-required`),
+				);
+			return yield* issueBoundProviderGrant(
+				request,
+				workspace,
+				workspaceId,
+				providerId,
 			);
 		}
 
@@ -1464,6 +1650,10 @@ export const routeCloudWorkspaceRequest = (
 				summaryRevision: body.summaryRevision,
 				title: body.title,
 				lastActivityAtMs: body.lastActivityAt,
+				activeSessionId:
+					body.activeSessionId === undefined
+						? workspace.initialSessionId
+						: body.activeSessionId,
 				sessionHeadVersion: body.sessionHeadVersion,
 				updatedAtMs: nowMs,
 			});
@@ -1647,7 +1837,14 @@ export const routeCloudWorkspaceRequest = (
 				const updated: CloudWorkspaceRecord = {
 					...workspace,
 					state: "failed",
-					statusCode: "launch-failed",
+					runtimeState: "offline",
+					runtimeBootTokenHash: undefined,
+					runtimeBootTokenExpiresAtMs: undefined,
+					runtimeCredentialHash: undefined,
+					statusCode:
+						body.errorCode === "runtime-storage-replaced"
+							? "runtime-storage-replaced"
+							: "launch-failed",
 					requestConfig: {
 						...workspace.requestConfig,
 						launchErrorCode: body.errorCode ?? "workspace_launch_failed",
@@ -1656,7 +1853,11 @@ export const routeCloudWorkspaceRequest = (
 							connectedAt: timings.connectedAt ?? nowMs,
 						},
 					},
-					nextActionAtMs: nowMs + idlePauseMs,
+					nextActionAtMs: launchFailureNextActionAt({
+						errorCode: body.errorCode,
+						nowMs,
+						idlePauseMs,
+					}),
 					lastActivityAtMs: nowMs,
 					revision: workspace.revision + 1,
 					updatedAtMs: nowMs,
@@ -1962,7 +2163,8 @@ export const routeCloudWorkspaceRequest = (
 				destructionFence: workspaceDestructionFence(workspace),
 				mailboxEnabled:
 					apiConfiguration.cloudCommandMailboxEnabled &&
-					workspaceSupportsCloudCommandMailbox(workspace),
+					!workspaceRuntimeStorageUnavailable(workspace) &&
+					workspaceAcceptsCloudCommandMailbox(workspace),
 			});
 		}
 		if (
@@ -1981,7 +2183,9 @@ export const routeCloudWorkspaceRequest = (
 					workspace.desiredState === "archived"
 				)
 					return yield* Effect.fail(conflict("cloud_workspace_unavailable"));
-				if (!workspaceSupportsCloudCommandMailbox(workspace))
+				if (workspaceRuntimeStorageUnavailable(workspace))
+					return yield* Effect.fail(conflict("runtime-storage-replaced"));
+				if (!workspaceAcceptsCloudCommandMailbox(workspace))
 					return yield* Effect.fail(
 						conflict("cloud_command_runtime_update_required"),
 					);
@@ -2327,6 +2531,7 @@ export const routeCloudWorkspaceRequest = (
 			const auth = yield* cloudAuthStatus(principal.accountId);
 			const authenticationChanged = auth.providers.some(
 				(status) =>
+					!apiConfiguration.cloudProviderAuthBrokerEnrollmentEnabled &&
 					!(
 						apiConfiguration.cloudCodexAuthBrokerEnrollmentEnabled &&
 						status.providerId === "codex"
@@ -2353,6 +2558,8 @@ export const routeCloudWorkspaceRequest = (
 					templateVersion: provider.templateVersion,
 					codexAuthDeliveryVersion:
 						apiConfiguration.cloudCodexAuthBrokerEnrollmentEnabled ? 1 : 0,
+					providerAuthDeliveryVersion:
+						apiConfiguration.cloudProviderAuthBrokerEnrollmentEnabled ? 1 : 0,
 					repositories: projects
 						.map((project) => ({
 							projectId: project.projectId,
@@ -2375,6 +2582,9 @@ export const routeCloudWorkspaceRequest = (
 					mode: effectiveMode,
 					...(apiConfiguration.cloudCodexAuthBrokerEnrollmentEnabled
 						? { codexAuthDeliveryVersion: 1 }
+						: {}),
+					...(apiConfiguration.cloudProviderAuthBrokerEnrollmentEnabled
+						? { providerAuthDeliveryVersion: 1 }
 						: {}),
 					repositories: accountImageRepositories(projects),
 					providers: auth.providers.map((status) => ({
@@ -2449,7 +2659,7 @@ export const routeCloudWorkspaceRequest = (
 						]);
 						const repaired = yield* repairAcknowledgedLaunch(
 							workspace,
-							runtimeSummary?.sessionHeadVersion ?? 0,
+							runtimeSummary,
 						);
 						return project === null
 							? null
@@ -2582,9 +2792,7 @@ export const routeCloudWorkspaceRequest = (
 				url.searchParams.get("projectId") ?? undefined,
 			);
 			return json({
-				workspaces: yield* Effect.forEach(workspaces, (workspace) =>
-					repairAcknowledgedLaunch(workspace).pipe(Effect.map(publicWorkspace)),
-				),
+				workspaces: workspaces.map(publicWorkspace),
 			});
 		}
 
@@ -2595,7 +2803,7 @@ export const routeCloudWorkspaceRequest = (
 			);
 			if (workspace === null || workspace.accountId !== principal.accountId)
 				return yield* Effect.fail(notFound("cloud_workspace_not_found"));
-			return json(publicWorkspace(yield* repairAcknowledgedLaunch(workspace)));
+			return json(publicWorkspace(workspace));
 		}
 
 		const connectionTicketMatch =
@@ -2787,9 +2995,18 @@ export const routeCloudWorkspaceRequest = (
 				build.settings?.codexAuthDeliveryVersion !== 1
 			)
 				return yield* Effect.fail(conflict("codex-auth-update-required"));
+			if (
+				apiConfiguration.cloudProviderAuthBrokerEnrollmentEnabled &&
+				build.settings?.providerAuthDeliveryVersion !== 1
+			)
+				return yield* Effect.fail(conflict("provider-auth-update-required"));
 			const codexAuthMode = codexAuthModeForAccountBuild(
 				build,
 				apiConfiguration.cloudCodexAuthBrokerEnrollmentEnabled,
+			);
+			const providerAuthMode = providerAuthModeForAccountBuild(
+				build,
+				apiConfiguration.cloudProviderAuthBrokerEnrollmentEnabled,
 			);
 			const workspaceId = yield* randomToken("workspace", 12);
 			const chatId = `chat_${crypto.randomUUID()}`;
@@ -2813,6 +3030,12 @@ export const routeCloudWorkspaceRequest = (
 				!/^[A-Za-z0-9._/#-]+$/u.test(body.baseRef)
 			)
 				return yield* Effect.fail(badRequest("invalid_git_ref"));
+			const initialMessageDelivery = selectCloudWorkspaceInitialMessageDelivery(
+				{
+					mailboxEnabled: apiConfiguration.cloudCommandMailboxEnabled,
+					requested: body.initialMessageDelivery,
+				},
+			);
 			const launchIntent = makeCloudWorkspaceLaunchIntent({
 				workspaceId,
 				branch,
@@ -2820,7 +3043,7 @@ export const routeCloudWorkspaceRequest = (
 				model: body.model,
 				runtimeMode: body.runtimeMode ?? DEFAULT_RUNTIME_MODE,
 				permissions: body.permissions ?? [],
-				request: body,
+				request: { ...body, initialMessageDelivery },
 			});
 			const { commandId, turnId, title } = launchIntent;
 			const transcriptKey = yield* createCloudTranscriptKey(
@@ -2851,12 +3074,19 @@ export const routeCloudWorkspaceRequest = (
 					title,
 					agent: body.agent,
 					codexAuthMode,
+					providerAuthMode,
 					authGrantRequired: false,
 					model: body.model,
 					runtimeMode: body.runtimeMode ?? DEFAULT_RUNTIME_MODE,
 					permissions: body.permissions ?? [],
 					repositoryCache: "account-image",
 					startupTimings: { requestedAt: nowMs },
+					...(initialMessageDelivery === undefined
+						? {}
+						: {
+								cloudCommandEnrollmentProtocolVersion:
+									CLOUD_COMMAND_PROTOCOL_VERSION,
+							}),
 				},
 				nextActionAtMs: nowMs,
 				revision: 0,
@@ -2921,6 +3151,11 @@ export const routeCloudWorkspaceRequest = (
 					workspace: publicWorkspace(launchedWorkspace),
 					chatId: launchedWorkspace.chatId,
 					initialSessionId: launchedWorkspace.initialSessionId,
+					...(launchedWorkspace.requestConfig
+						.cloudCommandEnrollmentProtocolVersion ===
+					CLOUD_COMMAND_PROTOCOL_VERSION
+						? { initialMessageDelivery: "mailbox-v1" as const }
+						: {}),
 				},
 				outcome.kind === "created" ? 201 : 200,
 			);
