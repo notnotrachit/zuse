@@ -1,0 +1,3 @@
+Okay. We'll do that later. Currently, I want to make the whole egg experience smooth. For example, when I open a project or close a project to show all the threads and all the chats, there is a lot of lag.
+
+In general, there is a lot of lag in the Android app. What can we do to make it much better
