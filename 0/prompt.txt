@@ -1,0 +1,1 @@
+See this app, and there is one issue. I cannot see my recently added projects. I think it was due to a case issue of GitHub with H capital and github with h small. Basically, see the database of the prod beta application, not the dev version, and see the product list and all in that. I think the database has 15, but the sidebar just shows me 11.
