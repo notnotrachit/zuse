@@ -1,0 +1,49 @@
+Greptile Summary
+The PR publishes workspace folders before Git-origin discovery completes, bounds origin lookups, and makes repeated imports return existing project records. The import deduplication currently conflates distinct case-only directories and remains non-atomic under overlapping requests.
+
+Emits folder snapshots immediately and resolves missing Git origins in the background.
+Adds a five-second timeout and benign fallback for Git-origin discovery.
+Canonicalizes imported paths and returns an existing project for matching paths.
+Adds renderer and server tests for delayed origins and repeated imports.
+Confidence Score: 3/5
+The PR should not merge until path identity is made filesystem-aware and repeated imports are made atomic under overlapping requests.
+
+The new deduplication can return the wrong project for distinct case-only Linux directories, while concurrent imports can still create duplicate rows because lookup and insertion are separated and the schema does not enforce path uniqueness.
+
+Files Needing Attention: apps/server/src/workspace/layers/workspace-service.ts
+
+Important Files Changed
+Flowchart
+Reviews (1): Last reviewed commit: "fix: publish project snapshots before or..." | Re-trigger Greptile
+
+greptile-apps[bot]
+greptile-apps Bot reviewed 2 minutes ago
+apps/server/src/workspace/layers/workspace-service.ts
+Comment on lines +89 to +90
+             OR lower(path) = lower(${canonical})
+             OR lower(path) = lower(${resolved})
+@greptile-apps
+greptile-apps Bot
+2 minutes ago
+P1 Case Folding Breaks Identity
+
+When two distinct directories differ only by case on a supported case-sensitive filesystem, the lower(path) predicates return the first project's folder, causing the requested directory to remain unregistered while callers select and read content from the other directory.
+
+@rachitk-ht	Reply...
+apps/server/src/workspace/layers/workspace-service.ts
+Comment on lines +84 to 92
+				const existingRows = yield* sql<ProjectRow>`
+          SELECT id, path, name, created_at
+          FROM projects
+          WHERE path = ${canonical}
+             OR path = ${resolved}
+             OR lower(path) = lower(${canonical})
+             OR lower(path) = lower(${resolved})
+          LIMIT 1
+        `.pipe(Effect.orDie);
+@greptile-apps
+greptile-apps Bot
+2 minutes ago
+P1 Concurrent Imports Duplicate Rows
+
+If two imports for the same new directory overlap, both can pass this lookup before either insertion because preparation occurs between the separate SQL operations; without a unique projects.path constraint, both inserts succeed and create separate project IDs for the same folder.
