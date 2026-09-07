@@ -1,0 +1,4 @@
+Let's come back to Android app now. 
+
+
+run it again on my connected adb phone
