@@ -1,0 +1,1 @@
+see the expo logs, the app isn't starting, stuck at black screen
