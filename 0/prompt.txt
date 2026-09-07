@@ -1,0 +1,1 @@
+Firstly, how do I connect it? I tried creating a link on the desktop and scanning the QR on my phone. It shows "could not reach that desktop."
