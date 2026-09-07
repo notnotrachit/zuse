@@ -1,0 +1,20 @@
+Greptile Summary
+The PR emits workspace folders before Git-origin discovery completes and resolves missing origins asynchronously. It also makes repeated project registration return an existing folder, replaces case folding with filesystem identity checks, and serializes registration within a workspace-service instance.
+
+Reuses cached origins and emits newly discovered folders immediately.
+Bounds Git-origin lookup to five seconds and treats expected lookup failures as no origin.
+Canonicalizes imported paths and preserves existing project IDs on repeated imports.
+Adds regression coverage for asynchronous origin resolution, repeated imports, overlapping imports, and case-distinct directories.
+Confidence Score: 4/5
+The PR is not yet safe to merge because concurrent imports through separate workspace-service instances can still create duplicate project rows.
+
+The registration semaphore is scoped to one WorkspaceServiceLive instance, while duplicate detection and insertion remain separate operations and the database provides no unique path constraint, leaving the previously reported concurrent-import failure reachable across instances.
+
+Files Needing Attention: apps/server/src/workspace/layers/workspace-service.ts; apps/server/src/persistence/migrations/0001_initial.ts
+
+Important Files Changed
+Filename	Overview
+apps/server/src/workspace/layers/workspace-service.ts	Adds canonical-path identity checks and an instance-local registration semaphore, but the previously reported cross-instance duplicate-insert race remains without database uniqueness.
+apps/renderer/src/lib/environment-shell-client-bus.ts	Publishes folder snapshots immediately, reuses known origins, and emits a later origins-only update for unresolved folders.
+packages/git/src/git-service-live.ts	Adds a five-second origin timeout and maps timeout and non-repository failures to a null origin.
+apps/server/test/integration/project-registration.test.ts	Covers idempotent and same-instance concurrent registration plus case-sensitive filesystem behavior, but does not exercise registration through separate service instances.
