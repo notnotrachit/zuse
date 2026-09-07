@@ -1,0 +1,64 @@
+from now on, I will run it manually . 
+
+╭─rachit at Rachits-MacBook-Air-1157 in ⌁/Documents/GitHub-Personal/zuse/apps/mobile (feat/mobile-relay-endpoint-racing ✚11…3⚑2)
+╰─λ bun run android                                                                                                                                 0 (0.257s) < 13:32:25
+$ expo run:android
+› Skipping dev server
+› Building app...
+Starting a Gradle Daemon, 1 busy Daemon could not be reused, use --status for details
+Configuration on demand is an incubating feature.
+
+> Configure project :
+[ExpoRootProject] Using the following versions:
+  - buildTools:  36.0.0
+  - minSdk:      24
+  - compileSdk:  36
+  - targetSdk:   36
+  - ndk:         27.1.12297006
+  - kotlin:      2.1.20
+  - ksp:         2.1.20-2.0.1
+
+> Configure project :app
+ ℹ️  Applying gradle plugin 'expo-max-sdk-override-plugin'
+  [expo-max-sdk-override-plugin] This plugin will find all permissions declared with `android:maxSdkVersion`. If there exists a declaration with the `android:maxSdkVersion` annotation and another one without, the plugin will remove the annotation from the final merged manifest. In order to see a log with the changes run a clean build of the app.
+ ℹ️  Applying gradle plugin 'expo-dev-launcher-gradle-plugin'
+
+[Incubating] Problems report is available at: file:///Users/rachit/Documents/GitHub-Personal/zuse/apps/mobile/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* Where:
+Build file '/Users/rachit/Documents/GitHub-Personal/zuse/apps/mobile/android/build.gradle' line: 24
+
+* What went wrong:
+A problem occurred evaluating root project 'Zuse'.
+> Failed to apply plugin 'com.facebook.react.rootproject'.
+   > A problem occurred configuring project ':app'.
+      > SDK location not found. Define a valid SDK location with an ANDROID_HOME environment variable or by setting the sdk.dir path in your project's local properties file at '/Users/rachit/Documents/GitHub-Personal/zuse/apps/mobile/android/local.properties'.
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.3.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 16s
+32 actionable tasks: 32 up-to-date
+Error: /Users/rachit/Documents/GitHub-Personal/zuse/apps/mobile/android/gradlew app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=arm64-v8a exited with non-zero code: 1
+Error: /Users/rachit/Documents/GitHub-Personal/zuse/apps/mobile/android/gradlew app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=arm64-v8a exited with non-zero code: 1
+    at ChildProcess.completionListener (/Users/rachit/Documents/GitHub-Personal/zuse/node_modules/@expo/spawn-async/build/spawnAsync.js:113:23)
+    at Object.onceWrapper (node:events:633:26)
+    at ChildProcess.emit (node:events:518:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+    ...
+    at spawnAsync (/Users/rachit/Documents/GitHub-Personal/zuse/node_modules/@expo/spawn-async/build/spawnAsync.js:9:23)
+    at spawnGradleAsync (/Users/rachit/Documents/GitHub-Personal/zuse/node_modules/@expo/cli/build/src/start/platforms/android/gradle.js:107:48)
+    at assembleAsync (/Users/rachit/Documents/GitHub-Personal/zuse/node_modules/@expo/cli/build/src/start/platforms/android/gradle.js:82:18)
+    at runAndroidAsync (/Users/rachit/Documents/GitHub-Personal/zuse/node_modules/@expo/cli/build/src/run/android/runAndroidAsync.js:85:41)
+error: script "android" exited with code 1
