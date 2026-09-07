@@ -1,0 +1,1 @@
+Okay, settings page is working now, but few shoes. Firstly, work with sign in is not working. It's showing some redirect URL error. What should be the redirect URL that I should add in it?
