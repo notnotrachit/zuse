@@ -1,0 +1,5 @@
+one major issue. it should like this , fix it, why does it say kiro-cli in claude code popup in left sidebar usage
+
+<image name=[Image #1] path="/Users/rachit/Documents/GitHub-Personal/zuse/.context/files/s-f93caf30-d4c9-4a1b-b7ca-8cd65c115a12-bae12b19-8894-4dab-9d62-51fbd8a9ab8d.png">
+
+</image>
