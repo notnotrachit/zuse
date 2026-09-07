@@ -1,0 +1,3 @@
+tried connect manually as well, it shows couldn't reach that desktop. 
+
+the ip host is 192.168.1.8
