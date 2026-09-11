@@ -37,6 +37,7 @@ describe("supported provider CLIs", () => {
 			["grok", "grok"],
 			["gemini", "gemini"],
 			["opencode", "opencode"],
+			["opencode2", "opencode2"],
 			["pi", "pi"],
 			["kiro", "kiro-cli"],
 		]);
@@ -399,6 +400,9 @@ describe("extraWellKnownCliPaths", () => {
 	it("adds OpenCode's native installer location", () => {
 		expect(extraWellKnownCliPaths("opencode")).toEqual([
 			join(homedir(), ".opencode", "bin", "opencode"),
+		]);
+		expect(extraWellKnownCliPaths("opencode2")).toEqual([
+			join(homedir(), ".opencode", "bin", "opencode2"),
 		]);
 	});
 

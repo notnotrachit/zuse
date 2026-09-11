@@ -18,7 +18,14 @@ import {
 	ViewIcon,
 	ViewOffIcon,
 } from "@zuse/icons/solid-rounded";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	createContext,
+	useContext,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import {
@@ -50,6 +57,18 @@ import {
 	useModelCatalogStore,
 } from "~/store/model-catalog";
 
+type OpencodeChannel = "opencode" | "opencode2";
+
+const OpencodeChannelContext = createContext<OpencodeChannel>("opencode");
+
+const useOpencodeChannel = (): OpencodeChannel =>
+	useContext(OpencodeChannelContext);
+
+const opencodeRpc = (
+	channel: OpencodeChannel,
+	action: "setAuth" | "removeAuth" | "addCustom" | "removeCustom",
+) => `provider.${channel}.${action}` as const;
+
 /**
  * OpenCode is a meta-harness fronting ~150 model providers (models.dev) plus
  * any OpenAI-compatible endpoint the user brings. This panel replaces the
@@ -61,18 +80,25 @@ import {
  *  - **Models** — a searchable dialog to pick which connected models show.
  *  - **Advanced** — default model + per-provider picker visibility.
  */
-export function OpencodeProviderManager() {
-	// The server's OpenCode live listing carries the raw inventory the
-	// provider manager needs (connected + available providers, agents).
-	const opencode = useModelCatalogStore((s) => s.catalog.providers.opencode);
+export function OpencodeProviderManager({
+	channel = "opencode",
+}: {
+	readonly channel?: "opencode" | "opencode2";
+} = {}) {
+	// The server's live listing carries the raw inventory the provider
+	// manager needs (connected + available providers, agents).
+	const listing = useModelCatalogStore((s) => s.catalog.providers[channel]);
 	const invLoading = useModelCatalogStore((s) => s.loading);
 	const catalogError = useModelCatalogStore((s) => s.error);
 	const ensureLoaded = useModelCatalogStore((s) => s.ensureLoaded);
 	const refreshInventory = useModelCatalogStore((s) => s.refresh);
-	const inventory = opencode.opencode ?? null;
+	const inventory =
+		channel === "opencode2"
+			? (listing.opencode2 ?? null)
+			: (listing.opencode ?? null);
 	const invError =
 		catalogError ??
-		(opencode.live.status === "error" ? opencode.live.error : null);
+		(listing.live.status === "error" ? listing.live.error : null);
 
 	useEffect(() => {
 		void ensureLoaded();
@@ -86,22 +112,24 @@ export function OpencodeProviderManager() {
 	const refresh = () => void refreshInventory();
 
 	return (
-		<div className="flex flex-col gap-5">
-			<ProvidersSection
-				providers={providers}
-				connected={connected}
-				loading={invLoading}
-				loaded={inventory !== null}
-				error={invError}
-				onRefresh={refresh}
-			/>
-			{connected.length > 0 && (
-				<>
-					<ModelsSection connected={connected} />
-					<AdvancedSection connected={connected} />
-				</>
-			)}
-		</div>
+		<OpencodeChannelContext.Provider value={channel}>
+			<div className="flex flex-col gap-5">
+				<ProvidersSection
+					providers={providers}
+					connected={connected}
+					loading={invLoading}
+					loaded={inventory !== null}
+					error={invError}
+					onRefresh={refresh}
+				/>
+				{connected.length > 0 && (
+					<>
+						<ModelsSection connected={connected} />
+						<AdvancedSection connected={connected} />
+					</>
+				)}
+			</div>
+		</OpencodeChannelContext.Provider>
 	);
 }
 
@@ -332,16 +360,19 @@ function ConnectedProviderRow({
 	onChanged: () => void;
 }) {
 	const { message: uiMessage } = useUiMessages(["common", "providers"]);
-
+	const channel = useOpencodeChannel();
 	const [busy, setBusy] = useState(false);
 	const remove = async () => {
 		setBusy(true);
 		try {
 			await (provider.custom
-				? dispatchOpencodeProviderCommand("provider.opencode.removeCustom", {
-						id: provider.id,
-					})
-				: dispatchOpencodeProviderCommand("provider.opencode.removeAuth", {
+				? dispatchOpencodeProviderCommand(
+						opencodeRpc(channel, "removeCustom"),
+						{
+							id: provider.id,
+						},
+					)
+				: dispatchOpencodeProviderCommand(opencodeRpc(channel, "removeAuth"), {
 						providerId: provider.id,
 					}));
 			onChanged();
@@ -665,13 +696,14 @@ function ConnectKeyForm({
 	const [reveal, setReveal] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [status, setStatus] = useState<string | null>(null);
+	const channel = useOpencodeChannel();
 
 	const save = async () => {
 		if (value.trim().length === 0) return;
 		setBusy(true);
 		setStatus(null);
 		try {
-			await dispatchOpencodeProviderCommand("provider.opencode.setAuth", {
+			await dispatchOpencodeProviderCommand(opencodeRpc(channel, "setAuth"), {
 				providerId,
 				apiKey: value.trim(),
 			});
@@ -690,9 +722,12 @@ function ConnectKeyForm({
 		setBusy(true);
 		setStatus(null);
 		try {
-			await dispatchOpencodeProviderCommand("provider.opencode.removeAuth", {
-				providerId,
-			});
+			await dispatchOpencodeProviderCommand(
+				opencodeRpc(channel, "removeAuth"),
+				{
+					providerId,
+				},
+			);
 			onChanged();
 		} catch (err) {
 			setStatus(err instanceof Error ? err.message : String(err));
@@ -825,7 +860,7 @@ function CustomProviderDialog({
 	trigger: React.ReactElement;
 }) {
 	const { message: uiMessage } = useUiMessages(["common", "providers"]);
-
+	const channel = useOpencodeChannel();
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [type, setType] = useState(PROVIDER_TYPES[0]!.value);
@@ -864,7 +899,7 @@ function CustomProviderDialog({
 		setBusy(true);
 		setError(null);
 		try {
-			await dispatchOpencodeProviderCommand("provider.opencode.addCustom", {
+			await dispatchOpencodeProviderCommand(opencodeRpc(channel, "addCustom"), {
 				id,
 				name: name.trim(),
 				baseURL: baseURL.trim(),
@@ -1102,9 +1137,11 @@ function ModelsSection({
 	connected: ReadonlyArray<OpencodeInventoryProvider>;
 }) {
 	const { message: uiMessage } = useUiMessages(["common", "providers"]);
-
-	const modelVisible = useSettingsStore(
-		(s) => s.opencodeModelVisibleByProvider,
+	const channel = useOpencodeChannel();
+	const modelVisible = useSettingsStore((s) =>
+		channel === "opencode2"
+			? s.opencode2ModelVisibleByProvider
+			: s.opencodeModelVisibleByProvider,
 	);
 
 	const { selected, total } = useMemo(() => {
@@ -1144,10 +1181,17 @@ function ModelFilterDialog({
 	const { message: uiMessage } = useUiMessages(["common", "providers"]);
 
 	const [query, setQuery] = useState("");
-	const modelVisible = useSettingsStore(
-		(s) => s.opencodeModelVisibleByProvider,
+	const channel = useOpencodeChannel();
+	const modelVisible = useSettingsStore((s) =>
+		channel === "opencode2"
+			? s.opencode2ModelVisibleByProvider
+			: s.opencodeModelVisibleByProvider,
 	);
-	const setModelVisible = useSettingsStore((s) => s.setOpencodeModelVisible);
+	const setModelVisible = useSettingsStore((s) =>
+		channel === "opencode2"
+			? s.setOpencode2ModelVisible
+			: s.setOpencodeModelVisible,
+	);
 
 	const q = query.trim().toLowerCase();
 	const groups = useMemo(
@@ -1265,10 +1309,16 @@ function AdvancedSection({
 	connected: ReadonlyArray<OpencodeInventoryProvider>;
 }) {
 	const { message: uiMessage } = useUiMessages(["common", "providers"]);
-
-	const providerVisible = useSettingsStore((s) => s.opencodeProviderVisible);
-	const setProviderVisible = useSettingsStore(
-		(s) => s.setOpencodeProviderVisible,
+	const channel = useOpencodeChannel();
+	const providerVisible = useSettingsStore((s) =>
+		channel === "opencode2"
+			? s.opencode2ProviderVisible
+			: s.opencodeProviderVisible,
+	);
+	const setProviderVisible = useSettingsStore((s) =>
+		channel === "opencode2"
+			? s.setOpencode2ProviderVisible
+			: s.setOpencodeProviderVisible,
 	);
 
 	return (

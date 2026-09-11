@@ -142,6 +142,19 @@ const PROBES: ReadonlyArray<ProviderProbe> = [
 		},
 	},
 	{
+		...PROVIDER_CLI_REGISTRY.opencode2,
+		// OpenCode 2 ships as `opencode2` (`@opencode/cli@beta`). Versions are
+		// currently `0.0.0-beta-*` so we don't pin a numeric floor.
+		minVersion: null,
+		upgradeCommand: "curl -fsSL https://opencode.ai/v2/install | bash",
+		npmPackage: "@opencode/cli",
+		homebrewFormula: null,
+		nativeUpdate: {
+			command: "opencode2 upgrade",
+			matches: (p) => p.endsWith("/opencode2") || p.endsWith("/opencode2.exe"),
+		},
+	},
+	{
 		...PROVIDER_CLI_REGISTRY.kiro,
 		// ACP landed in recent Kiro CLI builds (`kiro-cli acp`). We don't pin a
 		// hard floor here — missing `acp` surfaces as a clear session-start
@@ -237,6 +250,9 @@ export const extraWellKnownCliPaths = (
 ): ReadonlyArray<string> => {
 	if (cliBinary === "opencode") {
 		return [join(homedir(), ".opencode", "bin", "opencode")];
+	}
+	if (cliBinary === "opencode2") {
+		return [join(homedir(), ".opencode", "bin", "opencode2")];
 	}
 	return [];
 };
@@ -1162,6 +1178,7 @@ const probeAccount = (
 		case "gemini":
 			return probeGeminiAccount;
 		case "opencode":
+		case "opencode2":
 			return probeOpencodeAccount;
 		case "kiro":
 			return probeKiroAccount;
