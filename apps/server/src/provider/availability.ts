@@ -151,7 +151,9 @@ const PROBES: ReadonlyArray<ProviderProbe> = [
 		homebrewFormula: null,
 		nativeUpdate: {
 			command: "opencode2 upgrade",
-			matches: (p) => p.endsWith("/opencode2") || p.endsWith("/opencode2.exe"),
+			matches: (p) =>
+				p.endsWith("/.opencode/bin/opencode2") ||
+				p.endsWith("/.opencode/bin/opencode2.exe"),
 		},
 	},
 	{

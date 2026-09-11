@@ -614,6 +614,7 @@ export const ProviderServiceLive = Layer.effect(
 							opencode2Path,
 							sessionId,
 							resumeCursor,
+							buildRequestPermission(input.folderId),
 						).pipe(Effect.provideService(AttachmentService, attachmentService));
 					} else if (input.providerId === "cursor") {
 						const userMcpServers = yield* mcp.resolveForCursorSession(cwd);

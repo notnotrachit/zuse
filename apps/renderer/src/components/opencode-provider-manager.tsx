@@ -362,8 +362,10 @@ function ConnectedProviderRow({
 	const { message: uiMessage } = useUiMessages(["common", "providers"]);
 	const channel = useOpencodeChannel();
 	const [busy, setBusy] = useState(false);
+	const [status, setStatus] = useState<string | null>(null);
 	const remove = async () => {
 		setBusy(true);
+		setStatus(null);
 		try {
 			await (provider.custom
 				? dispatchOpencodeProviderCommand(
@@ -376,57 +378,65 @@ function ConnectedProviderRow({
 						providerId: provider.id,
 					}));
 			onChanged();
+		} catch (err) {
+			setStatus(err instanceof Error ? err.message : String(err));
 		} finally {
 			setBusy(false);
 		}
 	};
 
 	return (
-		<div className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-background/40 px-3 py-2 transition-colors hover:border-border">
-			<ProviderLogo
-				id={provider.id}
-				name={provider.name}
-				custom={provider.custom}
-			/>
-			<div className="flex min-w-0 flex-1 flex-col">
-				<div className="flex items-center gap-1.5">
-					<span className="truncate text-xs font-medium text-foreground">
-						{provider.name}
+		<>
+			<div className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-background/40 px-3 py-2 transition-colors hover:border-border">
+				<ProviderLogo
+					id={provider.id}
+					name={provider.name}
+					custom={provider.custom}
+				/>
+				<div className="flex min-w-0 flex-1 flex-col">
+					<div className="flex items-center gap-1.5">
+						<span className="truncate text-xs font-medium text-foreground">
+							{provider.name}
+						</span>
+						<HugeiconsIcon
+							icon={CheckmarkCircle02Icon}
+							className="size-3 shrink-0 text-emerald-400"
+							aria-hidden
+						/>
+					</div>
+					<span className="text-[10px] text-muted-foreground/70">
+						{provider.custom
+							? uiMessage("providers:opencode_provider_manager_custom")
+							: ""}
+						{provider.models.length}
+						{uiMessage("providers:opencode_provider_manager_model")}
+						{provider.models.length === 1 ? "" : "s"}
 					</span>
+				</div>
+				<button
+					type="button"
+					onClick={() => void remove()}
+					disabled={busy}
+					aria-label={uiMessage("providers:opencode_provider_manager_remove", {
+						name: String(provider.name),
+					})}
+					title={uiMessage(
+						"providers:opencode_provider_manager_remove_credential",
+					)}
+					className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-50"
+				>
 					<HugeiconsIcon
-						icon={CheckmarkCircle02Icon}
-						className="size-3 shrink-0 text-emerald-400"
+						icon={busy ? Loading02Icon : Delete02Icon}
+						className={cn("size-3.5", busy && "animate-spin")}
 						aria-hidden
 					/>
-				</div>
-				<span className="text-[10px] text-muted-foreground/70">
-					{provider.custom
-						? uiMessage("providers:opencode_provider_manager_custom")
-						: ""}
-					{provider.models.length}
-					{uiMessage("providers:opencode_provider_manager_model")}
-					{provider.models.length === 1 ? "" : "s"}
-				</span>
+				</button>
 			</div>
-			<button
-				type="button"
-				onClick={() => void remove()}
-				disabled={busy}
-				aria-label={uiMessage("providers:opencode_provider_manager_remove", {
-					name: String(provider.name),
-				})}
-				title={uiMessage(
-					"providers:opencode_provider_manager_remove_credential",
-				)}
-				className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-50"
-			>
-				<HugeiconsIcon
-					icon={busy ? Loading02Icon : Delete02Icon}
-					className={cn("size-3.5", busy && "animate-spin")}
-					aria-hidden
-				/>
-			</button>
-		</div>
+			{status !== null ? (
+				<p className="px-3 text-[10px] text-destructive">{status}</p>
+			) : null}
+		</>
+	);
 	);
 }
 

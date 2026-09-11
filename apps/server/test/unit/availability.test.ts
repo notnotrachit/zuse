@@ -434,6 +434,23 @@ describe("buildUpdateCommand — install-method detection", () => {
 		).toBe("opencode upgrade");
 	});
 
+	it("uses the native self-updater only for a native OpenCode 2 install", () => {
+		expect(
+			buildUpdateCommand("opencode2", ["/Users/me/.opencode/bin/opencode2"]),
+		).toBe("opencode2 upgrade");
+		expect(
+			buildUpdateCommand("opencode2", ["/usr/local/bin/opencode2"]),
+		).toBeNull();
+		expect(
+			buildUpdateCommand("opencode2", [
+				"/usr/local/bin/opencode2",
+				"/usr/local/lib/node_modules/@opencode/cli/bin/opencode2.exe",
+			]),
+		).toBe(
+			"npm uninstall -g @opencode/cli || true; npm install -g @opencode/cli@latest",
+		);
+	});
+
 	it("uses npm (uninstall-then-install) for an nvm/npm-global install", () => {
 		// `which` returns the bin symlink; realpath points into node_modules.
 		const cmd = buildUpdateCommand("codex", [
