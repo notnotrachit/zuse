@@ -1042,6 +1042,55 @@ const toolContentText = (content: unknown): string => {
 		.join("");
 };
 
+const firstString = (value: unknown): string | null => {
+	if (typeof value === "string" && value.length > 0) return value;
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const found = firstString(item);
+			if (found !== null) return found;
+		}
+	}
+	return null;
+};
+
+const permissionPayload = (
+	data: Record<string, unknown>,
+): Record<string, unknown> => {
+	const nested = data["request"];
+	return nested !== null && typeof nested === "object"
+		? (nested as Record<string, unknown>)
+		: data;
+};
+
+export const extractOpencode2Permission = (
+	data: Record<string, unknown>,
+): { action: string; resource: string; sensitive: boolean } => {
+	const payload = permissionPayload(data);
+	const action =
+		asStr(payload["action"]) ??
+		asStr(payload["permission"]) ??
+		asStr(payload["type"]) ??
+		"permission";
+	const resourceList = [
+		payload["resources"],
+		payload["patterns"],
+		payload["resource"],
+	];
+	const resources = resourceList.flatMap((value) => {
+		if (typeof value === "string" && value.length > 0) return [value];
+		if (!Array.isArray(value)) return [];
+		return value.filter(
+			(item): item is string => typeof item === "string" && item.length > 0,
+		);
+	});
+	const resource = resources[0] ?? firstString(payload["metadata"]) ?? "";
+	return {
+		action,
+		resource,
+		sensitive: resources.some((item) => isSensitivePath(item)),
+	};
+};
+
 const classifyOpencode2Permission = (
 	action: string,
 	resource: string,
@@ -1342,15 +1391,13 @@ export const startOpencode2Session = (
 							case "permission.asked":
 							case "permission.updated": {
 								const permId =
-									asStr(data["id"]) ??
-									asStr((data["request"] as { id?: string } | undefined)?.id);
-								const action =
-									asStr(data["action"]) ?? asStr(data["type"]) ?? "permission";
+									asStr(permissionPayload(data)["id"]) ?? asStr(data["id"]);
+								const extracted = extractOpencode2Permission(data);
 								if (permId !== null) {
 									emit({
 										_tag: "PermissionRequest",
 										itemId: permId as AgentItemId,
-										kind: action,
+										kind: extracted.action,
 										details: data,
 									});
 									if (
@@ -1358,21 +1405,17 @@ export const startOpencode2Session = (
 										!pendingReplies.has(permId)
 									) {
 										pendingReplies.add(permId);
-										const resource =
-											asStr(data["resource"]) ??
-											asStr(
-												(data["request"] as { resource?: string } | undefined)
-													?.resource,
-											) ??
-											"";
 										void (async () => {
 											let reply: "once" | "always" | "reject" = "once";
 											if (requestPermission !== null) {
 												const decision = await requestPermission(
 													sessionId,
-													classifyOpencode2Permission(action, resource),
+													classifyOpencode2Permission(
+														extracted.action,
+														extracted.resource,
+													),
 													{
-														forcePrompt: isSensitivePath(resource),
+														forcePrompt: extracted.sensitive,
 													},
 												);
 												reply = permissionReplyFor(decision._tag);
@@ -1672,12 +1715,11 @@ export const startOpencode2Session = (
 					for (const att of attachmentRefs ?? []) {
 						const resolved = yield* attachments.readPath(att.id);
 						if (resolved === null) {
-							emit({
-								_tag: "Error",
-								message: `Could not attach ${att.originalName} to the OpenCode 2 prompt.`,
-								providerId: PROVIDER_ID,
-							});
-							return;
+							return yield* Effect.die(
+								new Error(
+									`Could not attach ${att.originalName} to the OpenCode 2 prompt.`,
+								),
+							);
 						}
 						files.push({
 							uri: pathToFileURL(resolved.path).href,

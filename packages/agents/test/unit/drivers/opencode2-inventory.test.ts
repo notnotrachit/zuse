@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	collectOpencode2Inventory,
+	extractOpencode2Permission,
 	filterOpencode2PrimaryAgents,
 	isUsableOpencode2Model,
 } from "../../../src/drivers/opencode2.ts";
@@ -121,5 +122,37 @@ describe("OpenCode 2 model inventory", () => {
 		expect(anthropic?.connected).toBe(false);
 		expect(anthropic?.models).toEqual([]);
 		expect(anthropic?.apiKeyEnv).toBe("ANTHROPIC_API_KEY");
+	});
+});
+
+describe("OpenCode 2 permission payloads", () => {
+	it("reads v2 action and resources[]", () => {
+		expect(
+			extractOpencode2Permission({
+				id: "per_1",
+				action: "edit",
+				resources: [".env", "src/app.ts"],
+			}),
+		).toEqual({
+			action: "edit",
+			resource: ".env",
+			sensitive: true,
+		});
+	});
+
+	it("falls back to nested request and permission/patterns", () => {
+		expect(
+			extractOpencode2Permission({
+				request: {
+					id: "per_2",
+					permission: "bash",
+					patterns: ["ls -la"],
+				},
+			}),
+		).toEqual({
+			action: "bash",
+			resource: "ls -la",
+			sensitive: false,
+		});
 	});
 });
