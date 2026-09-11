@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
+	PRODUCTION_API_URL,
 	STAGING_API_URL,
 	WORKOS_STAGING_PUBLIC_CLIENT_ID,
 } from "@zuse/contracts";
@@ -31,6 +32,7 @@ const apiDirectory = fileURLToPath(new URL("../..", import.meta.url));
 
 interface WranglerTarget {
 	readonly name: string;
+	readonly compatibility_flags: ReadonlyArray<string>;
 	readonly placement?: { readonly region: string };
 	readonly routes: ReadonlyArray<{ readonly pattern: string }>;
 	readonly vars: Readonly<Record<string, string>>;
@@ -79,10 +81,17 @@ describe("api deployment safety", () => {
 		) as WranglerTarget;
 
 		expect(config.name).toBe("zuse-relay-staging");
+		expect(config.compatibility_flags).toContain(
+			"global_fetch_strictly_public",
+		);
+		expect(config.compatibility_flags).not.toContain(
+			"global_fetch_private_origin",
+		);
 		expect(config.routes).toEqual([
+			{ pattern: "api-staging.zuse.sh", custom_domain: true },
 			{ pattern: "api-staging.stuff.md", custom_domain: true },
 		]);
-		expect(config.vars.API_ISSUER).toBe(STAGING_API_URL);
+		expect(config.vars.API_ISSUER).toBe("https://api-staging.stuff.md");
 		expect(config.vars.CLOUD_COMMAND_MAILBOX_ENABLED).toBe("true");
 		expect(config.vars.CLOUD_CODEX_AUTH_BROKER_ENROLLMENT_ENABLED).toBe("true");
 		expect(config.vars.CLOUD_CODEX_AUTH_BROKER_SERVING_ENABLED).toBe("true");
@@ -153,9 +162,17 @@ describe("api deployment safety", () => {
 		) as WranglerTarget;
 
 		expect(production.name).toBe("zuse-relay");
+		expect(production.compatibility_flags).toContain(
+			"global_fetch_strictly_public",
+		);
+		expect(production.compatibility_flags).not.toContain(
+			"global_fetch_private_origin",
+		);
 		expect(production.routes).toEqual([
 			{ pattern: "api.zuse.sh", custom_domain: true },
 		]);
+		expect(production.vars.API_ISSUER).toBe(PRODUCTION_API_URL);
+		expect(`https://${production.routes[0]?.pattern}`).toBe(PRODUCTION_API_URL);
 		expect(production.vars.MACHINE_PROVIDER).toBe("fake");
 		expect(production.vars.CLOUD_COMMAND_MAILBOX_ENABLED).toBe("true");
 		expect(production.vars.CLOUD_CODEX_AUTH_BROKER_ENROLLMENT_ENABLED).toBe(

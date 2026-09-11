@@ -6,7 +6,7 @@
 	"name": "zuse-relay-staging",
 	"main": "src/worker.ts",
 	"compatibility_date": "2026-06-01",
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 	"observability": { "enabled": true },
 	// The staging Postgres origin is in AWS Singapore. Cloud workspace startup
 	// performs ordered writes, so run API beside Hyperdrive's origin pool
@@ -25,7 +25,10 @@
 			"fallthrough": true
 		}
 	],
-	"routes": [{ "pattern": "api-staging.stuff.md", "custom_domain": true }],
+	"routes": [
+		{ "pattern": "api-staging.zuse.sh", "custom_domain": true },
+		{ "pattern": "api-staging.stuff.md", "custom_domain": true }
+	],
 	"triggers": { "crons": ["* * * * *"] },
 	"vars": {
 		"CLOUD_COMMAND_MAILBOX_ENABLED": "true",
@@ -33,6 +36,8 @@
 		"CLOUD_CODEX_AUTH_BROKER_SERVING_ENABLED": "true",
 		"CLOUD_PROVIDER_AUTH_BROKER_ENROLLMENT_ENABLED": "true",
 		"CLOUD_PROVIDER_AUTH_BROKER_SERVING_ENABLED": "true",
+		// Preserve existing runtime and broker credentials until the coordinated
+		// issuer cutover in docs/cloud/api-domain-cutover.md is complete.
 		"API_ISSUER": "https://api-staging.stuff.md",
 		"WORKOS_ISSUER": "https://api.workos.com",
 		"WORKOS_JWKS_URL": "https://api.workos.com/sso/jwks/client_01KW6ZEZKVMZ0G429A89XZD83Q",
