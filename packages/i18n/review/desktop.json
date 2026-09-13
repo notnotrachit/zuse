@@ -1,0 +1,49 @@
+{
+	"en": {
+		"status": "reviewed",
+		"sourceRevision": "f999124f5a95f91517db27c3ba5c9e833e55a5e99bf62ea0dd5f90793d5ebd49",
+		"reviewer": "source"
+	},
+	"fr": {
+		"status": "draft",
+		"sourceRevision": "",
+		"reviewer": null,
+		"draftSourceRevision": "3e3c030fa0e61d215185713489440bb8bbf722fa8eeea3162f32ec0ec2121990",
+		"provenance": "Machine translation draft with automated structural validation; native-speaker review pending."
+	},
+	"de": {
+		"status": "draft",
+		"sourceRevision": "",
+		"reviewer": null,
+		"draftSourceRevision": "3e3c030fa0e61d215185713489440bb8bbf722fa8eeea3162f32ec0ec2121990",
+		"provenance": "Machine translation draft with automated structural validation; native-speaker review pending."
+	},
+	"zh-Hans": {
+		"status": "draft",
+		"sourceRevision": "",
+		"reviewer": null,
+		"draftSourceRevision": "3e3c030fa0e61d215185713489440bb8bbf722fa8eeea3162f32ec0ec2121990",
+		"provenance": "Machine translation draft with automated structural validation; native-speaker review pending."
+	},
+	"zh-Hant": {
+		"status": "draft",
+		"sourceRevision": "",
+		"reviewer": null,
+		"draftSourceRevision": "3e3c030fa0e61d215185713489440bb8bbf722fa8eeea3162f32ec0ec2121990",
+		"provenance": "Machine translation draft with automated structural validation; native-speaker review pending."
+	},
+	"ja": {
+		"status": "draft",
+		"sourceRevision": "",
+		"reviewer": null,
+		"draftSourceRevision": "3e3c030fa0e61d215185713489440bb8bbf722fa8eeea3162f32ec0ec2121990",
+		"provenance": "Machine translation draft with automated structural validation; native-speaker review pending."
+	},
+	"ko": {
+		"status": "draft",
+		"sourceRevision": "",
+		"reviewer": null,
+		"draftSourceRevision": "3e3c030fa0e61d215185713489440bb8bbf722fa8eeea3162f32ec0ec2121990",
+		"provenance": "Machine translation draft with automated structural validation; native-speaker review pending."
+	}
+}
