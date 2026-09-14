@@ -437,7 +437,6 @@ function ConnectedProviderRow({
 			) : null}
 		</>
 	);
-	);
 }
 
 /* ───────────────────────── Provider browser ──────────────────────────── */

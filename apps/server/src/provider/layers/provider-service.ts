@@ -591,7 +591,10 @@ export const ProviderServiceLive = Layer.effect(
 							resumeCursor,
 						).pipe(Effect.provideService(AttachmentService, attachmentService));
 					} else if (input.providerId === "opencode2") {
-						const opencode2Path = yield* resolveCliPath("opencode2").pipe(
+						const opencode2Path = yield* resolveCliPath(
+							"opencode2",
+							binaryPaths,
+						).pipe(
 							Effect.provideService(
 								CommandExecutor.ChildProcessSpawner,
 								executor,
