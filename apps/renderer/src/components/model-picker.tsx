@@ -56,6 +56,7 @@ const PROVIDER_CHIP_LABEL: Record<ProviderId, string> = {
 	gemini: "Gemini",
 	opencode: "OpenCode",
 	kiro: "Kiro",
+	pi: "Pi",
 };
 
 interface ModelPickerEntry {

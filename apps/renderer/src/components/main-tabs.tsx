@@ -65,6 +65,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 	cursor: "Cursor",
 	gemini: "Gemini",
 	kiro: "Kiro",
+	pi: "Pi",
 	opencode: "OpenCode",
 };
 

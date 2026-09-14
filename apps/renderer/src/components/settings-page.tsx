@@ -13,6 +13,7 @@ import {
 	EnvironmentId,
 	type Folder,
 	type FolderId,
+	PROVIDER_IDS,
 	type ProviderId,
 	type RuntimeMode,
 	visibleModelsForProvider,
@@ -1579,15 +1580,7 @@ function ProvidersPane() {
 		return latest;
 	}, [availability, uiMessage]);
 
-	const providers: ReadonlyArray<ProviderId> = [
-		"claude",
-		"codex",
-		"grok",
-		"gemini",
-		"cursor",
-		"opencode",
-		"kiro",
-	];
+	const providers = PROVIDER_IDS;
 	const [selectedProvider, setSelectedProvider] =
 		useState<ProviderId>("claude");
 	const availabilityById = useMemo(() => {
