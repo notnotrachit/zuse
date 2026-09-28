@@ -2,6 +2,8 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as Path from "node:path";
 
+import { linkWorktreeFile } from "./link-file.ts";
+
 /**
  * Directories that never hold app env files and/or are huge — pruned from the
  * recursive walk so it stays fast even on large monorepos.
@@ -89,9 +91,11 @@ export const isEnvFileName = (name: string): boolean => {
 /**
  * Recursively discover env files anywhere under `repoPath` and symlink each into
  * `worktreePath` at the same relative location, so the worktree's env file *is* the
- * repo's env file (one source of truth, no drift) — mirroring how `node_modules` is
- * symlinked. Existing targets are left untouched (non-clobber). Returns a
- * human-readable summary streamed to the worktree setup UI.
+ * repo's env file. Windows without symlink privileges instead gets an explicitly
+ * reported one-time snapshot copy (not synchronized). Existing targets, including
+ * dangling links, are left untouched. Returns a summary for the setup UI.
+ * Source-side atomic replacement is followed by symlinks, but an editor replacing
+ * the worktree-side link itself can break sharing; copies never share edits.
  */
 export const linkEnvFiles = async (
 	repoPath: string,
@@ -126,11 +130,7 @@ export const linkEnvFiles = async (
 
 			const source = Path.join(repoPath, rel);
 			const target = Path.join(worktreePath, rel);
-			if (fsSync.existsSync(target)) continue;
-
-			await fs.mkdir(Path.dirname(target), { recursive: true });
-			await fs.symlink(source, target, "file");
-			output += `linked ${rel} -> ${source}\n`;
+			output += await linkWorktreeFile(source, target, toPosix(rel));
 		}
 	};
 
@@ -199,10 +199,7 @@ export const linkIncludedFiles = async (
 	for (const rel of [...new Set(matches)].sort()) {
 		const source = Path.join(repoPath, rel);
 		const target = Path.join(worktreePath, rel);
-		if (fsSync.existsSync(target)) continue;
-		await fs.mkdir(Path.dirname(target), { recursive: true });
-		await fs.symlink(source, target, "file");
-		output += `linked ${toPosix(rel)} -> ${source}\n`;
+		output += await linkWorktreeFile(source, target, toPosix(rel));
 	}
 	return output;
 };

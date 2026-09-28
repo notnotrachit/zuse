@@ -1,12 +1,5 @@
-import { randomUUID } from "node:crypto";
-import {
-	chmod,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { protectPrivateFile, writePrivateFile } from "@zuse/utils/private-permissions";
 import { join } from "node:path";
 
 type StoredProfile = {
@@ -40,6 +33,7 @@ export class AtomicProfileStore<Profile extends StoredProfile> {
 		const path = this.filePath();
 		let raw: string;
 		try {
+			await protectPrivateFile(path);
 			raw = await readFile(path, "utf8");
 		} catch (cause) {
 			if (
@@ -53,7 +47,6 @@ export class AtomicProfileStore<Profile extends StoredProfile> {
 			}
 			throw cause;
 		}
-		await chmod(path, 0o600);
 		try {
 			const parsed: unknown = JSON.parse(raw);
 			const legacy = this.options.decodeLegacy?.(parsed) ?? null;
@@ -119,19 +112,9 @@ export class AtomicProfileStore<Profile extends StoredProfile> {
 	}
 
 	private async persist(): Promise<void> {
-		await mkdir(this.userData, { recursive: true, mode: 0o700 });
-		const destination = this.filePath();
-		const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-		await writeFile(
-			temporary,
+		await writePrivateFile(
+			this.filePath(),
 			`${JSON.stringify({ schemaVersion: 1, profiles: this.list() }, null, 2)}\n`,
-			{ encoding: "utf8", mode: 0o600 },
 		);
-		try {
-			await rename(temporary, destination);
-			await chmod(destination, 0o600);
-		} finally {
-			await rm(temporary, { force: true });
-		}
 	}
 }

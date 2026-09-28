@@ -1,6 +1,6 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { extname, isAbsolute, join, win32 } from "node:path";
 import type { PlanType } from "@zuse/agents/codex-generated/PlanType";
 import type { Account } from "@zuse/agents/codex-generated/v2/Account";
 import type { GetAccountResponse } from "@zuse/agents/codex-generated/v2/GetAccountResponse";
@@ -15,6 +15,7 @@ import {
 	type ProviderHealthStatus,
 	type ProviderId,
 } from "@zuse/contracts";
+import { shellCommandForPlatform } from "@zuse/utils/shell";
 import { Duration, Effect, FileSystem, Stream } from "effect";
 import {
 	ChildProcess as Command,
@@ -92,7 +93,7 @@ const PROBES: ReadonlyArray<ProviderProbe> = [
 		// `claude update` self-updater. npm can't touch that install.
 		nativeUpdate: {
 			command: "claude update",
-			matches: (p) => p.endsWith("/.local/bin/claude"),
+			matches: (p) => /\/\.local\/bin\/claude(?:\.exe)?$/.test(p),
 		},
 	},
 	{
@@ -138,7 +139,7 @@ const PROBES: ReadonlyArray<ProviderProbe> = [
 		// ships an `opencode upgrade` self-updater.
 		nativeUpdate: {
 			command: "opencode upgrade",
-			matches: (p) => p.endsWith("/.opencode/bin/opencode"),
+			matches: (p) => /\/\.opencode\/bin\/opencode(?:\.exe)?$/.test(p),
 		},
 	},
 	{
@@ -249,14 +250,51 @@ export const selectNewestCliPathCandidate = (
  */
 export const extraWellKnownCliPaths = (
 	cliBinary: string,
+	platform: NodeJS.Platform = process.platform,
+	home: string = homedir(),
 ): ReadonlyArray<string> => {
-	if (cliBinary === "opencode") {
-		return [join(homedir(), ".opencode", "bin", "opencode")];
-	}
-	if (cliBinary === "opencode2") {
-		return [join(homedir(), ".opencode", "bin", "opencode2")];
+	if (cliBinary === "opencode" || cliBinary === "opencode2") {
+		const paths = platform === "win32" ? win32 : { join };
+		return [
+			paths.join(home, ".opencode", "bin", `${cliBinary}${platform === "win32" ? ".exe" : ""}`),
+		];
 	}
 	return [];
+};
+
+const windowsExecutableExtensions = (env: NodeJS.ProcessEnv) =>
+	(env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+		.split(";")
+		.map((extension) => extension.trim().toLowerCase())
+		.filter((extension) => extension.startsWith("."));
+
+/** `where.exe` can also return the extensionless Unix shim next to npm's .cmd. */
+export const cliPathDiscoveryCommand = (
+	cliBinary: string,
+	platform: NodeJS.Platform = process.platform,
+): Command.Command =>
+	platform === "win32"
+		? Command.make("where.exe", [cliBinary])
+		: Command.make("which", ["-a", cliBinary]);
+
+/** Batch shims need cmd.exe; native executables retain direct spawning. */
+export const cliVersionCommand = (
+	cliBinary: string,
+	platform: NodeJS.Platform = process.platform,
+	env: NodeJS.ProcessEnv = process.env,
+): Command.Command | null => {
+	if (platform !== "win32" || /\.(exe|com)$/i.test(cliBinary)) {
+		return Command.make(cliBinary, ["--version"]);
+	}
+	// A quoted Windows filename can contain spaces, & and parentheses, but
+	// expansion characters cannot safely be passed through cmd's parser.
+	if (/["%!\r\n\0]/.test(cliBinary)) return null;
+	const shell = shellCommandForPlatform(platform, env);
+	// Node's shell option supplies /d /s /c and verbatim Windows arguments.
+	// Passing cmd explicitly as a normal child would double-escape the quotes.
+	return Command.make(`"${cliBinary}"`, ["--version"], {
+		shell: shell.command,
+	});
 };
 
 /**
@@ -277,6 +315,8 @@ const CLI_BINARIES_SELECT_NEWEST = new Set(["codex", "opencode", "opencode2"]);
 export const resolveCliPath = (
 	cliBinary: string,
 	overrides: Readonly<Record<string, string>> = {},
+	platform: NodeJS.Platform = process.platform,
+	env: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<string | null, never, CommandExecutor.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		const provider = Object.values(PROVIDER_CLI_REGISTRY).find(
@@ -287,32 +327,36 @@ export const resolveCliPath = (
 			: undefined;
 		if (override) {
 			try {
-				if (!isAbsolute(override) || !statSync(override).isFile()) return null;
-				accessSync(override, constants.X_OK);
+				const absolute = platform === "win32" ? win32.isAbsolute : isAbsolute;
+				if (!absolute(override) || !statSync(override).isFile()) return null;
+				if (platform === "win32" && !windowsExecutableExtensions(env).includes(win32.extname(override).toLowerCase())) return null;
+				accessSync(override, platform === "win32" ? constants.F_OK : constants.X_OK);
 				return override;
 			} catch {
 				return null;
 			}
 		}
 		const result = yield* runCapture(
-			Command.make("which", ["-a", cliBinary]),
+			cliPathDiscoveryCommand(cliBinary, platform),
 		).pipe(
 			Effect.timeoutOption(PROBE_TIMEOUT),
 			Effect.catch(() => Effect.succeedNone),
 		);
-		const fromWhich =
+		const fromPath =
 			result._tag === "Some" && result.value.exitCode === 0
-				? splitCommandPaths(result.value.stdout)
+				? splitCommandPaths(result.value.stdout).filter((path) =>
+					platform !== "win32" || windowsExecutableExtensions(env).includes(extname(path).toLowerCase()),
+				)
 				: [];
 		const candidates = [
-			...new Set([...fromWhich, ...extraWellKnownCliPaths(cliBinary)]),
+			...new Set([...fromPath, ...extraWellKnownCliPaths(cliBinary, platform)]),
 		];
 		if (candidates.length === 0) return null;
 		if (!CLI_BINARIES_SELECT_NEWEST.has(cliBinary)) {
 			return selectCliPathCandidate(cliBinary, candidates);
 		}
 
-		const fromWhichSet = new Set(fromWhich);
+		const fromPathSet = new Set(fromPath);
 		const eligible =
 			cliBinary === "codex"
 				? candidates.filter(
@@ -323,7 +367,7 @@ export const resolveCliPath = (
 		const versioned = yield* Effect.forEach(
 			eligible,
 			(path) =>
-				probeCliVersion(path).pipe(
+				probeCliVersion(path, platform, env).pipe(
 					Effect.map((version) => ({ path, version })),
 				),
 			{ concurrency: "unbounded" },
@@ -331,7 +375,7 @@ export const resolveCliPath = (
 		// Well-known extras that aren't on PATH and don't actually run are noise.
 		const usable = versioned.filter(
 			(candidate) =>
-				candidate.version !== null || fromWhichSet.has(candidate.path),
+				candidate.version !== null || fromPathSet.has(candidate.path),
 		);
 		return selectNewestCliPathCandidate(usable);
 	});
@@ -426,15 +470,17 @@ export const compareCliVersion = (a: CliVersion, b: CliVersion): number => {
  */
 export const probeCliVersion = (
 	cliBinary: string,
+	platform: NodeJS.Platform = process.platform,
+	env: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<
 	CliVersion | null,
 	never,
 	CommandExecutor.ChildProcessSpawner
 > =>
 	Effect.gen(function* () {
-		const result = yield* runCapture(
-			Command.make(cliBinary, ["--version"]),
-		).pipe(
+		const command = cliVersionCommand(cliBinary, platform, env);
+		if (command === null) return null;
+		const result = yield* runCapture(command).pipe(
 			Effect.timeoutOption(PROBE_TIMEOUT),
 			Effect.catch(() => Effect.succeedNone),
 		);
@@ -573,8 +619,10 @@ const isManagedCodexShimPath = (p: string): boolean =>
 // with packages shipping optional per-platform binaries, e.g.
 // @anthropic-ai/claude-code). Uninstall first so install lays down a clean
 // tree; `|| true` keeps a not-installed case from aborting the chain.
-const npmGlobalUpdate = (pkg: string): string =>
-	`npm uninstall -g ${pkg} || true; npm install -g ${pkg}@latest`;
+const npmGlobalUpdate = (pkg: string, platform: NodeJS.Platform): string =>
+	platform === "win32"
+		? `call npm uninstall -g ${pkg} & call npm install -g ${pkg}@latest`
+		: `npm uninstall -g ${pkg} || true; npm install -g ${pkg}@latest`;
 
 /**
  * Pure resolver: pick the update command for a provider given the candidate
@@ -586,9 +634,12 @@ const npmGlobalUpdate = (pkg: string): string =>
 export const buildUpdateCommand = (
 	providerId: ProviderId,
 	candidatePaths: ReadonlyArray<string>,
+	platform: NodeJS.Platform = process.platform,
 ): string | null => {
 	const probe = PROBES.find((p) => p.providerId === providerId);
 	if (probe === undefined) return null;
+	// These providers only document Unix native CLI installers/updaters.
+	if (platform === "win32" && (providerId === "grok" || providerId === "kiro")) return null;
 
 	const norms = candidatePaths
 		.filter((p) => p.length > 0)
@@ -605,11 +656,11 @@ export const buildUpdateCommand = (
 		if (norms.some(isBunGlobalPath)) {
 			return `bun i -g ${probe.npmPackage}@latest`;
 		}
-		if (norms.some(isPnpmGlobalPath)) {
+		if (norms.some((p) => isPnpmGlobalPath(p) || (platform === "win32" && p.includes("/appdata/local/pnpm/")))) {
 			return `pnpm add -g ${probe.npmPackage}@latest`;
 		}
-		if (norms.some(isNpmGlobalPath)) {
-			return npmGlobalUpdate(probe.npmPackage);
+		if (norms.some((p) => isNpmGlobalPath(p) || (platform === "win32" && /\/appdata\/roaming\/npm\/[^/]+$/.test(p)))) {
+			return npmGlobalUpdate(probe.npmPackage, platform);
 		}
 		if (probe.homebrewFormula !== null && norms.some(isHomebrewPath)) {
 			return `brew upgrade ${probe.homebrewFormula}`;
@@ -620,7 +671,7 @@ export const buildUpdateCommand = (
 		// No path available: default to npm, which is how these packages are most
 		// commonly installed. Unknown absolute paths stay manual-only so we don't
 		// update a different install than the one being probed.
-		return npmGlobalUpdate(probe.npmPackage);
+		return npmGlobalUpdate(probe.npmPackage, platform);
 	}
 
 	// Non-npm providers reinstall via their official one-liner.

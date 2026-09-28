@@ -9,6 +9,7 @@ import {
   PtySpawnError,
 	PtySummary,
 } from "@zuse/contracts";
+import { shellCommandForPlatform } from "@zuse/utils/shell";
 import { Effect, Layer, PubSub, Ref, Semaphore, Stream } from "effect";
 import * as pty from "node-pty";
 import { ensureNodePtySpawnHelperExecutable } from "../node-pty-helper.ts";
@@ -38,13 +39,6 @@ interface ActivePty {
 const OUTPUT_REPLAY_BYTES = 1024 * 1024;
 const LIVE_OUTPUT_CHUNKS = 1024;
 const MOBILE_TERMINAL_LIMIT = 4;
-
-const defaultShell = (): string => {
-  if (process.platform === "win32") {
-    return process.env.COMSPEC ?? "cmd.exe";
-  }
-  return process.env.SHELL ?? "/bin/bash";
-};
 
 export const PtyServiceLive = Layer.effect(
   PtyService,
@@ -81,8 +75,11 @@ export const PtyServiceLive = Layer.effect(
 						yield* PubSub.sliding<PtyBroadcast>(LIVE_OUTPUT_CHUNKS);
         const journal = new PtyEventJournal(OUTPUT_REPLAY_BYTES);
 
-        const cmd = command?.cmd ?? defaultShell();
-        const args = command?.args ?? [];
+        const shell = shellCommandForPlatform(process.platform, process.env);
+        const cmd = command?.cmd ?? shell.command;
+        const args = command?.script !== undefined
+          ? [...shell.args, command.script]
+          : command?.args ?? [];
 
         const child = yield* Effect.try({
           try: () => {

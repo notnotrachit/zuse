@@ -137,7 +137,7 @@ const maybeAutoRun = async (projectId: FolderId, wt: Worktree) => {
 		},
 		cwd: run.cwd,
 		title: "Run",
-		command: { cmd: "/bin/zsh", args: ["-lc", run.script], env: run.env },
+		command: { script: run.script, env: run.env },
 	});
 };
 

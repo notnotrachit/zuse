@@ -29,6 +29,16 @@ describe("qualified terminals store", () => {
 		]);
 	});
 
+	it("retains a script-only run request for the remote execution host", () => {
+		const ref = { environmentId: EnvironmentId.make("remote-linux"), chatId: "run-chat" as ChatId };
+		const command = { script: 'echo "hello world" && npm run dev', env: { PORT: "3000" } };
+		const slot = useTerminalsStore.getState().add(ref, ref.environmentId, "/workspace", "Run", command);
+		const terminal = useTerminalsStore.getState().byKey[terminalsKey(ref)]?.[slot];
+		expect(terminal?.command).toEqual(command);
+		expect(terminal?.command).not.toHaveProperty("cmd");
+		expect(terminal?.environmentId).toBe(ref.environmentId);
+	});
+
 	it("keeps a local shell owned by its cloud chat", () => {
 		const ref = {
 			environmentId: EnvironmentId.make("cloud-workspace"),

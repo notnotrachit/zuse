@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 export const expandHome = (path: string): string =>
 	path === "~"
 		? homedir()
-		: path.startsWith("~/")
+		: path.startsWith("~/") || path.startsWith("~\\")
 			? join(homedir(), path.slice(2))
 			: path;
 

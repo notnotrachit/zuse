@@ -2,7 +2,7 @@ import {
 	type ChatRef,
 	resourceRefKey,
 } from "@zuse/client-runtime/resource-ref";
-import { type EnvironmentId, PtyId } from "@zuse/contracts";
+import { type EnvironmentId, type PtyCommand, PtyId } from "@zuse/contracts";
 import { createAtomStore as create } from "../state/atom-store.ts";
 
 const disposeTerminal = (environmentId: EnvironmentId, id: PtyId): void => {
@@ -26,11 +26,7 @@ export type TerminalInstance = {
 	readonly id: PtyId;
 	readonly title: string;
 	readonly cwd: string;
-	readonly command?: {
-		readonly cmd: string;
-		readonly args: ReadonlyArray<string>;
-		readonly env?: Readonly<Record<string, string>>;
-	};
+	readonly command?: PtyCommand;
 };
 
 type TerminalsState = {

@@ -1003,7 +1003,7 @@ function RunButton() {
 			chatRef: { environmentId: ctx.environmentId, chatId },
 			cwd: run.cwd,
 			title: uiMessage("chat:top_bar_run"),
-			command: { cmd: "/bin/zsh", args: ["-lc", run.script], env: run.env },
+			command: { script: run.script, env: run.env },
 		});
 	};
 

@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 
+const markerCommand = (delay: number): string =>
+	`"${process.execPath}" -e "process.stdout.write('ready');setTimeout(() => require('node:fs').writeFileSync('marker', 'orphan'), ${delay})"`;
+
 it("terminates command descendants when the owning server is killed", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "zuse-supervisor-"));
 	const moduleUrl = new URL(
@@ -12,7 +15,7 @@ it("terminates command descendants when the owning server is killed", async () =
 		import.meta.url,
 	).href;
 	const source = `import { spawnSupervisedCommand } from ${JSON.stringify(moduleUrl)};
- const child = spawnSupervisedCommand('printf ready; sleep 1; printf orphan > marker', ${JSON.stringify(directory)});
+ const child = spawnSupervisedCommand(${JSON.stringify(markerCommand(1000))}, ${JSON.stringify(directory)});
  child.stdout.on('data', data => process.stdout.write(data));
  setInterval(() => {}, 1000);`;
 	const parent = spawn(
@@ -43,7 +46,7 @@ it("enforces the lease independently while the parent stays alive", async () => 
 	);
 	const directory = await mkdtemp(join(tmpdir(), "zuse-watchdog-"));
 	const child = spawnSupervisedCommand(
-		"printf ready; sleep 5; printf orphan > marker",
+		markerCommand(5000),
 		directory,
 		Date.now() + 500,
 	);
@@ -60,7 +63,7 @@ it("accepts fresh leases through the private pipe without restarting the command
 		"../../src/process/process-group.ts"
 	);
 	const child = spawnSupervisedCommand(
-		"printf ready; sleep 1; exit 7",
+		`"${process.execPath}" -e "process.stdout.write('ready');setTimeout(() => process.exit(7), 1000)"`,
 		tmpdir(),
 		Date.now() + 500,
 	);

@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writePrivateFile } from "@zuse/utils/private-permissions";
 import { promisify } from "node:util";
 import {
 	Context,

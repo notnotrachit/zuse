@@ -84,16 +84,24 @@ export class PtySummary extends Schema.Class<PtySummary>("PtySummary")({
 }) {}
 
 /**
- * Optional override for what process the PTY hosts. Omitted → host the user's
- * default login shell (Phase 1 behavior). Present → spawn `cmd` with `args` as
- * the PTY's foreground process, used by spawn-CLI agent launches so closing
- * the pane terminates the agent rather than just one shell among many.
+ * Omitted → an interactive host shell. A script is resolved by the execution
+ * backend using its own platform and shell, including for remote terminals.
+ * Direct executable launches retain `cmd`/`args` without an intervening shell.
  */
-export const PtyCommand = Schema.Struct({
-  cmd: Schema.String,
-  args: Schema.Array(Schema.String),
-  env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-});
+export const PtyCommand = Schema.Union([
+	Schema.Struct({
+		cmd: Schema.String,
+		args: Schema.Array(Schema.String),
+		script: Schema.optional(Schema.Never),
+		env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+	}),
+	Schema.Struct({
+		script: Schema.String,
+		cmd: Schema.optional(Schema.Never),
+		args: Schema.optional(Schema.Never),
+		env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+	}),
+]);
 export type PtyCommand = typeof PtyCommand.Type;
 
 export const PtyOpenRpc = Rpc.make("pty.open", {

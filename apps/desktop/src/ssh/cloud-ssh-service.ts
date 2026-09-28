@@ -44,7 +44,8 @@ const ticketsDir = (): string => join(sshRoot(), "tickets");
 const bridgeDir = (): string => join(sshRoot(), "bridge");
 const installedBridgePath = (): string =>
 	join(bridgeDir(), "ssh-bridge-child.cjs");
-const bridgeLauncherPath = (): string => join(bridgeDir(), "launch");
+const bridgeLauncherPath = (): string =>
+	join(bridgeDir(), process.platform === "win32" ? "launch.ps1" : "launch");
 let infrastructureSetup: Promise<string> | null = null;
 
 /** The managed ssh config that declares every `zuse-*` cloud host alias. */
@@ -75,7 +76,28 @@ export interface CloudSshBridgeRuntime {
 export const cloudSshBridgeLauncher = (
 	runtime: CloudSshBridgeRuntime,
 	bridgePath: string,
+	platform: NodeJS.Platform = process.platform,
 ): string => {
+	if (platform === "win32") {
+		// PowerShell launches the executable directly; no cmd expansion, sh, or
+		// dependence on the parent editor inheriting ELECTRON_RUN_AS_NODE.
+		const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+		return [
+			"$ErrorActionPreference = 'Stop'",
+			...(runtime.electronRunAsNode ? ["$env:ELECTRON_RUN_AS_NODE = '1'"] : []),
+			"if ($args.Count -ne 1 -or $args[0] -notmatch '^zuse-[A-Za-z0-9_-]+$') { exit 1 }",
+			"$start = New-Object System.Diagnostics.ProcessStartInfo",
+			`$start.FileName = ${quote(runtime.executable)}`,
+			`$start.Arguments = ${quote(`"${bridgePath}" `)} + $args[0]`,
+			"$start.UseShellExecute = $false",
+			// Inherit the raw standard handles. PowerShell's native pipeline would
+			// decode/re-encode the binary SSH stream on Windows PowerShell 5.1.
+			"$child = [System.Diagnostics.Process]::Start($start)",
+			"$child.WaitForExit()",
+			"exit $child.ExitCode",
+			"",
+		].join("\r\n");
+	}
 	const environment = runtime.electronRunAsNode
 		? "env ELECTRON_RUN_AS_NODE=1 "
 		: "";
@@ -162,16 +184,28 @@ export const ensureCloudSshKeypair = async (): Promise<string> => {
 	return (await readFile(`${key}.pub`, "utf8")).trim();
 };
 
+/** OpenSSH config paths use forward slashes, including on Windows. */
+export const sshConfigPathToken = (path: string): string =>
+	`"${path.replaceAll("\\", "/").replaceAll('"', '\\"')}"`;
+
+export const cloudSshProxyCommand = (
+	launcherPath: string,
+	platform: NodeJS.Platform = process.platform,
+): string =>
+	platform === "win32"
+		? `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${sshConfigPathToken(launcherPath)}`
+		: shellQuote(launcherPath);
+
 export const managedSshConfig = (bridgeCommand: string): string =>
 	[
 		"# Managed by Zuse. Do not edit — this file is regenerated on demand.",
 		"Host zuse-*",
 		"\tUser zuse",
-		`\tIdentityFile ${keyPath()}`,
+		`\tIdentityFile ${sshConfigPathToken(keyPath())}`,
 		"\tIdentitiesOnly yes",
 		"\tConnectTimeout 15",
 		"\tStrictHostKeyChecking accept-new",
-		`\tUserKnownHostsFile ${join(sshRoot(), "known_hosts")}`,
+		`\tUserKnownHostsFile ${sshConfigPathToken(join(sshRoot(), "known_hosts"))}`,
 		`\tProxyCommand ${bridgeCommand} %n`,
 		"",
 	].join("\n");
@@ -180,10 +214,15 @@ export const managedSshConfig = (bridgeCommand: string): string =>
 export const withUserConfigInclude = (
 	existing: string,
 	includedPath: string,
-): string | null =>
-	existing.includes(includedPath)
-		? null
-		: `${INCLUDE_MARKER}\nInclude ${includedPath}\n\n${existing}`;
+): string | null => {
+	const include = `Include ${sshConfigPathToken(includedPath)}`;
+	if (existing.split(/\r?\n/u).includes(include)) return null;
+	// Upgrade our old unquoted include (not arbitrary user-authored entries).
+	const legacy = `${INCLUDE_MARKER}\nInclude ${includedPath}`;
+	if (existing.includes(legacy))
+		return existing.replace(legacy, `${INCLUDE_MARKER}\n${include}`);
+	return `${INCLUDE_MARKER}\n${include}\n\n${existing}`;
+};
 
 const ensureUserConfigInclude = async (): Promise<void> => {
 	const userSshDir = join(homedir(), ".ssh");
@@ -229,7 +268,7 @@ export const prepareCloudSshAccess = async (
 			);
 			await atomicWritePrivateFile(
 				cloudSshConfigPath(),
-				managedSshConfig(shellQuote(bridgeLauncherPath())),
+				managedSshConfig(cloudSshProxyCommand(bridgeLauncherPath())),
 				0o600,
 			);
 			await ensureUserConfigInclude();
@@ -263,7 +302,12 @@ export const prepareCloudSshAccess = async (
 
 export type SshTargetLaunch =
 	| { readonly kind: "uri"; readonly uri: string }
-	| { readonly kind: "terminal"; readonly command: string };
+	| {
+			readonly kind: "terminal";
+			readonly command: string;
+			readonly executable: string;
+			readonly args: ReadonlyArray<string>;
+		};
 
 /** How to launch each editor/terminal against a `zuse-*` ssh host alias. */
 export const sshTargetLaunch = (

@@ -25,6 +25,7 @@ import {
 	type WorktreeSetupStatus,
 	WorktreeSetupStatusEvent,
 } from "@zuse/contracts";
+import { shellCommandForPlatform } from "@zuse/utils/shell";
 import {
 	type Cause,
 	DateTime,
@@ -127,22 +128,7 @@ const truncateOutput = (value: string): string =>
 		? value
 		: value.slice(value.length - MAX_SETUP_OUTPUT);
 
-export const shellCommandForPlatform = (
-	platform: NodeJS.Platform,
-	env: NodeJS.ProcessEnv,
-): { readonly command: string; readonly args: ReadonlyArray<string> } => {
-	if (platform === "win32") {
-		return {
-			command: env.COMSPEC?.trim() || "cmd.exe",
-			args: ["/d", "/s", "/c"],
-		};
-	}
-	return {
-		command:
-			env.SHELL?.trim() || (platform === "darwin" ? "/bin/zsh" : "/bin/sh"),
-		args: ["-lc"],
-	};
-};
+export { shellCommandForPlatform } from "@zuse/utils/shell";
 
 const readIfExists = async (path: string): Promise<Buffer | null> => {
 	try {
@@ -228,7 +214,11 @@ const prepareLocalFiles = async (
 			}
 		}
 		if (canLink) {
-			await fs.symlink(sourceNodeModules, targetNodeModules, "dir");
+			await fs.symlink(
+				Path.resolve(sourceNodeModules),
+				targetNodeModules,
+				process.platform === "win32" ? "junction" : "dir",
+			);
 			output += `linked node_modules -> ${sourceNodeModules}\n`;
 		}
 	}

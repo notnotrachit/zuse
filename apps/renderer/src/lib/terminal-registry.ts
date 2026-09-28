@@ -360,14 +360,7 @@ async function openPty(
 			cwd: opts.cwd,
 			cols: live.term.cols,
 			rows: live.term.rows,
-			command:
-				opts.command === undefined
-					? undefined
-					: {
-							cmd: opts.command.cmd,
-							args: [...opts.command.args],
-							env: opts.command.env,
-						},
+			command: opts.command,
 		});
 		if (live.disposed) {
 			void dispatchTerminalClose({

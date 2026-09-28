@@ -1,5 +1,5 @@
 import { Effect, Stream } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -48,6 +48,37 @@ describe("PtyService", () => {
     fakePty = makeFakePty();
     spawnMock.mockReset();
     spawnMock.mockReturnValue(fakePty);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["win32", "C:\\Windows\\cmd.exe", ["/d", "/s", "/c"]],
+    ["linux", "/usr/bin/fish", ["-lc"]],
+    ["darwin", "/usr/bin/fish", ["-lc"]],
+  ] as const)("resolves script-only requests on the %s execution host", async (platform, executable, args) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    vi.stubEnv("COMSPEC", "C:\\Windows\\cmd.exe");
+    vi.stubEnv("SHELL", "/usr/bin/fish");
+    const script = 'echo "hello world" && echo done';
+    await Effect.runPromise(Effect.gen(function* () {
+      const service = yield* PtyService;
+      yield* service.open("workspace", 80, 24, { script, env: { CUSTOM: "value", SHELL: "renderer-shell" } });
+    }).pipe(Effect.provide(PtyServiceLive)));
+    expect(spawnMock).toHaveBeenCalledWith(executable, [...args, script], expect.objectContaining({
+      env: expect.objectContaining({ CUSTOM: "value" }),
+    }));
+  });
+
+  it("preserves direct executables without shell wrapping", async () => {
+    await Effect.runPromise(Effect.gen(function* () {
+      const service = yield* PtyService;
+      yield* service.open("workspace", 80, 24, { cmd: "agent", args: ["--prompt", "hello world"] });
+    }).pipe(Effect.provide(PtyServiceLive)));
+    expect(spawnMock).toHaveBeenCalledWith("agent", ["--prompt", "hello world"], expect.any(Object));
   });
 
   it("hands a subscriber gap-free output after the previous cursor", async () => {

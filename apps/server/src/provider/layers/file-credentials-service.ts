@@ -1,5 +1,6 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { protectPrivateFile, writePrivateFile } from "@zuse/utils/private-permissions";
 
 import { ProviderId } from "@zuse/contracts";
 import { Effect, Layer, Schema } from "effect";
@@ -96,6 +97,7 @@ export const makeFileCredentialsService = (
 
 		const read = async (): Promise<CredentialFileV2> => {
 			try {
+				await protectPrivateFile(filePath);
 				const raw = await readFile(filePath, "utf8");
 				return normalizeCredentialFile(JSON.parse(raw) as unknown);
 			} catch (cause) {
@@ -111,17 +113,7 @@ export const makeFileCredentialsService = (
 		};
 
 		const write = async (contents: CredentialFileV2): Promise<void> => {
-			const directory = dirname(filePath);
-			await mkdir(directory, { recursive: true, mode: 0o700 });
-			await chmod(directory, 0o700);
-			const temporary = `${filePath}.${process.pid}.tmp`;
-			await writeFile(temporary, `${JSON.stringify(contents)}\n`, {
-				encoding: "utf8",
-				mode: 0o600,
-			});
-			await chmod(temporary, 0o600);
-			await rename(temporary, filePath);
-			await chmod(filePath, 0o600);
+			await writePrivateFile(filePath, `${JSON.stringify(contents)}\n`);
 		};
 
 		const operation = <A>(
