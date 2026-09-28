@@ -1,4 +1,5 @@
-import { copyFile, rename, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import type * as NodeSqlite from "node:sqlite";
@@ -129,7 +130,36 @@ const newestNonEmptyLegacyDb = (
 		return Option.fromNullishOr(nonEmpty[0]?.path);
 	});
 
-const copyLegacyDb = (
+/**
+ * Create a standalone, transactionally consistent snapshot of a legacy SQLite
+ * database. Never copy the main file directly: in WAL mode committed rows may
+ * still live in the `-wal` sidecar, and a raw file copy silently drops them.
+ * `VACUUM INTO` reads the database through SQLite so the snapshot includes the
+ * WAL, then a same-directory rename prevents a partial snapshot from becoming
+ * the active database if the process is interrupted.
+ */
+const snapshotSqlite = async (
+	source: string,
+	destination: string,
+): Promise<void> => {
+	const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		const { DatabaseSync } = require("node:sqlite") as typeof NodeSqlite;
+		const db = new DatabaseSync(source);
+		try {
+			const quotedPath = temporary.replaceAll("'", "''");
+			db.exec(`VACUUM INTO '${quotedPath}'`);
+		} finally {
+			db.close();
+		}
+		await rename(temporary, destination);
+	} catch (cause) {
+		await rm(temporary, { force: true }).catch(() => {});
+		throw cause;
+	}
+};
+
+const snapshotLegacyDb = (
 	userData: string,
 	legacy: string,
 	current: string,
@@ -137,9 +167,9 @@ const copyLegacyDb = (
 ): Effect.Effect<void, Error> =>
 	Effect.gen(function* () {
 		yield* Effect.tryPromise({
-			try: () => copyFile(legacy, current),
+			try: () => snapshotSqlite(legacy, current),
 			catch: (cause) =>
-				new Error(`Failed to copy legacy sqlite from ${legacy}`, { cause }),
+				new Error(`Failed to snapshot legacy sqlite from ${legacy}`, { cause }),
 		});
 		yield* Effect.tryPromise({
 			try: () =>
@@ -178,7 +208,7 @@ export const ensureSqliteRenameCompatibility = (
 				catch: (cause) =>
 					new Error(`Failed to back up empty sqlite to ${backup}`, { cause }),
 			});
-			yield* copyLegacyDb(
+			yield* snapshotLegacyDb(
 				userData,
 				legacySibling.value,
 				current,
@@ -189,7 +219,7 @@ export const ensureSqliteRenameCompatibility = (
 
 		const legacy = legacySqliteDbPath(userData);
 		if (yield* exists(legacy)) {
-			yield* copyLegacyDb(
+			yield* snapshotLegacyDb(
 				userData,
 				legacy,
 				current,
@@ -201,7 +231,7 @@ export const ensureSqliteRenameCompatibility = (
 		const legacySibling = yield* newestNonEmptyLegacyDb(userData);
 		if (Option.isNone(legacySibling)) return;
 
-		yield* copyLegacyDb(
+		yield* snapshotLegacyDb(
 			userData,
 			legacySibling.value,
 			current,
