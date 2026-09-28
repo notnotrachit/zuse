@@ -135,15 +135,19 @@ const newestNonEmptyLegacyDb = (
  * database. Never copy the main file directly: in WAL mode committed rows may
  * still live in the `-wal` sidecar, and a raw file copy silently drops them.
  * `VACUUM INTO` reads the database through SQLite so the snapshot includes the
- * WAL, then a same-directory rename prevents a partial snapshot from becoming
- * the active database if the process is interrupted.
+ * WAL. The temporary output is exclusively created with private permissions,
+ * then renamed into place only after completion so interruption cannot publish
+ * a partial database or expose migrated data through a permissive umask.
  */
 const snapshotSqlite = async (
 	source: string,
 	destination: string,
 ): Promise<void> => {
 	const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+	let ownsTemporary = false;
 	try {
+		await writeFile(temporary, "", { mode: 0o600, flag: "wx" });
+		ownsTemporary = true;
 		const { DatabaseSync } = require("node:sqlite") as typeof NodeSqlite;
 		const db = new DatabaseSync(source);
 		try {
@@ -154,7 +158,7 @@ const snapshotSqlite = async (
 		}
 		await rename(temporary, destination);
 	} catch (cause) {
-		await rm(temporary, { force: true }).catch(() => {});
+		if (ownsTemporary) await rm(temporary, { force: true }).catch(() => {});
 		throw cause;
 	}
 };

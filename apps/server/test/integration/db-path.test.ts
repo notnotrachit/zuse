@@ -185,6 +185,11 @@ describe("ensureSqliteRenameCompatibility", () => {
 			expect(fsSync.statSync(walPath).size).toBeGreaterThan(0);
 			await ensureSqliteRenameCompatibility(zuseDir);
 
+			if (process.platform !== "win32") {
+				const mode = (await fs.stat(sqliteDbPath(zuseDir))).mode & 0o777;
+				expect(mode).toBe(0o600);
+			}
+
 			const migrated = new DatabaseSync(sqliteDbPath(zuseDir), {
 				readOnly: true,
 			});
