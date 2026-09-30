@@ -135,11 +135,10 @@ describe("mobile UI contracts", () => {
 			"utf8",
 		);
 		expect(appConfig.expo.userInterfaceStyle).toBe("automatic");
+		expect(nativeTheme).toContain('Platform.OS === "ios"');
+		expect(nativeTheme).toContain('iosDynamicColor("#f7f7f5", "hsl(0 0% 6%)")');
 		expect(nativeTheme).toContain(
-			'DynamicColorIOS({ light: "#f7f7f5", dark: "hsl(0 0% 6%)" })',
-		);
-		expect(nativeTheme).toContain(
-			'DynamicColorIOS({ light: "#171716", dark: "hsl(0 0% 93%)" })',
+			'iosDynamicColor("#171716", "hsl(0 0% 93%)")',
 		);
 		for (const source of [layout, thread, glass]) {
 			expect(source).toContain("useUniwind");

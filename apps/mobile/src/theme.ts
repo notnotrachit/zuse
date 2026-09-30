@@ -20,15 +20,20 @@ const platformColor = <T>(ios: T, android: T | undefined, fallback: T): T =>
 	Platform.select({ ios, android: android ?? fallback, default: fallback }) ??
 	fallback;
 
+// Arguments are evaluated before Platform.select runs, so iOS-only color
+// constructors must be skipped on Android or every route module fails to load.
+const iosDynamicColor = (light: string, dark: string): ColorValue =>
+	Platform.OS === "ios" ? DynamicColorIOS({ light, dark }) : light;
+
 /** Native semantic colors. UIKit/Material re-resolve these for light/dark mode. */
 export const colors = {
 	bg: platformColor(
-		DynamicColorIOS({ light: "#f7f7f5", dark: "hsl(0 0% 6%)" }),
+		iosDynamicColor("#f7f7f5", "hsl(0 0% 6%)"),
 		Color.android.dynamic.surface,
 		"#ffffff",
 	),
 	fg: platformColor(
-		DynamicColorIOS({ light: "#171716", dark: "hsl(0 0% 93%)" }),
+		iosDynamicColor("#171716", "hsl(0 0% 93%)"),
 		Color.android.dynamic.onSurface,
 		"#262626",
 	),
@@ -48,12 +53,12 @@ export const colors = {
 		"#686868",
 	),
 	card: platformColor(
-		DynamicColorIOS({ light: "#ffffff", dark: "hsl(0 0% 12%)" }),
+		iosDynamicColor("#ffffff", "hsl(0 0% 12%)"),
 		Color.android.dynamic.surfaceContainer,
 		"#ffffff",
 	),
 	cardElevated: platformColor(
-		DynamicColorIOS({ light: "#f0f0ed", dark: "hsl(0 0% 13%)" }),
+		iosDynamicColor("#f0f0ed", "hsl(0 0% 13%)"),
 		Color.android.dynamic.surfaceContainerHigh,
 		"rgba(0,0,0,0.04)",
 	),
@@ -63,7 +68,7 @@ export const colors = {
 		"rgba(0,0,0,0.08)",
 	),
 	accent: platformColor<ColorValue>(
-		DynamicColorIOS({ light: "#486900", dark: "hsl(83 72% 46%)" }),
+		iosDynamicColor("#486900", "hsl(83 72% 46%)"),
 		undefined,
 		APP_TINT,
 	),
