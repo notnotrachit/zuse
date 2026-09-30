@@ -2001,6 +2001,7 @@ export const routeCloudWorkspaceRequest = (
 					recipientKeyThumbprint: keyThumbprint,
 					requestId: body.requestId,
 					reason: body.reason,
+					...(body.acceptsApiKey === true ? { acceptsApiKey: true } : {}),
 					...(body.previousChatgptAccountId === undefined
 						? {}
 						: {
