@@ -1,9 +1,10 @@
 import { GitBranch } from "lucide-react-native";
-import { Alert, Pressable } from "react-native";
+import { View } from "react-native";
 
+import { AnchoredMenu } from "~/components/ui/anchored-menu";
 import { colors } from "~/theme";
 
-/** Non-iOS fallback for the iOS-native anchored fork menu. */
+/** Non-iOS counterpart of the native message fork menu. */
 export function ForkFromMessageMenu({
 	onForkInChat,
 	onForkInCurrentWorktree,
@@ -13,24 +14,31 @@ export function ForkFromMessageMenu({
 	onForkInCurrentWorktree: () => void;
 	onForkInNewWorktree: () => void;
 }) {
-	const openMenu = () => {
-		Alert.alert("Fork from here", "Where should the new session live?", [
-			{ text: "Cancel", style: "cancel" },
-			{ text: "This chat", onPress: onForkInChat },
-			{ text: "New chat · current worktree", onPress: onForkInCurrentWorktree },
-			{ text: "New chat · isolated worktree", onPress: onForkInNewWorktree },
-		]);
-	};
-
 	return (
-		<Pressable
-			accessibilityRole="button"
+		<AnchoredMenu
 			accessibilityLabel="Fork from here"
-			hitSlop={8}
-			className="h-9 w-9 items-center justify-center active:opacity-60"
-			onPress={openMenu}
-		>
-			<GitBranch size={16} color={colors.secondaryFg} />
-		</Pressable>
+			trigger={
+				<View className="h-9 w-9 items-center justify-center">
+					<GitBranch size={16} color={colors.secondaryFg} />
+				</View>
+			}
+			items={[
+				{
+					key: "chat",
+					label: "Fork in this chat",
+					onPress: onForkInChat,
+				},
+				{
+					key: "worktree",
+					label: "New chat · current worktree",
+					onPress: onForkInCurrentWorktree,
+				},
+				{
+					key: "isolated",
+					label: "New chat · isolated worktree",
+					onPress: onForkInNewWorktree,
+				},
+			]}
+		/>
 	);
 }

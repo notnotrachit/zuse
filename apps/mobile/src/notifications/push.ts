@@ -51,6 +51,12 @@ const getExpoPushToken = async (): Promise<string | null> => {
 		decision: finalStatus === "granted" ? "granted" : "denied",
 	});
 	if (finalStatus !== "granted") return null;
+	if (Platform.OS === "android") {
+		await Notifications.setNotificationChannelAsync("default", {
+			name: "Zuse",
+			importance: Notifications.AndroidImportance.DEFAULT,
+		});
+	}
 	logConnectionDiagnostic("push.native_token.start");
 	const devicePushToken = await withPushTimeout(
 		Notifications.getDevicePushTokenAsync(),

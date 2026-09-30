@@ -38,7 +38,10 @@ import { readWorkspaceFile } from "~/rpc/actions";
 import { allConnectionsAtom as connectionsAtom } from "~/store/connections";
 import { connectionBundlesAtom, selectSessionChat } from "~/store/sessions";
 import { colors } from "~/theme";
-import { presentQuickLook } from "../../../../../modules/mobile-platform";
+import {
+	presentQuickLook,
+	shareLocalFile,
+} from "../../../../../modules/mobile-platform";
 
 export default function WorkspaceFileScreen() {
 	const { width } = useWindowDimensions();
@@ -219,9 +222,11 @@ export default function WorkspaceFileScreen() {
 									accessibilityLabel={`Preview ${basename(path)}`}
 									className="min-h-11 flex-row items-center gap-2 rounded-xl bg-primary px-4 active:opacity-60"
 									onPress={() => {
-										if (!presentQuickLook(binaryPreviewUri)) {
-											void Share.share({ url: binaryPreviewUri });
+										if (presentQuickLook(binaryPreviewUri)) return;
+										if (shareLocalFile(binaryPreviewUri, basename(path))) {
+											return;
 										}
+										void Share.share({ url: binaryPreviewUri });
 									}}
 								>
 									<Eye size={17} color={colors.primaryForeground} />
@@ -233,7 +238,12 @@ export default function WorkspaceFileScreen() {
 									accessibilityRole="button"
 									accessibilityLabel={`Share ${basename(path)}`}
 									className="min-h-11 flex-row items-center gap-2 rounded-xl border border-border bg-card px-4 active:opacity-60"
-									onPress={() => void Share.share({ url: binaryPreviewUri })}
+									onPress={() => {
+										if (shareLocalFile(binaryPreviewUri, basename(path))) {
+											return;
+										}
+										void Share.share({ url: binaryPreviewUri });
+									}}
 								>
 									<Share2 size={17} color={colors.fg} />
 									<Text className="font-sans-medium text-foreground">

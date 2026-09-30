@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { saveImageToPhotos } from "../modules/mobile-platform";
+import { saveImageToPhotos, shareLocalFile } from "../modules/mobile-platform";
 
 export default function MediaViewerScreen() {
 	const { width, height } = useWindowDimensions();
@@ -30,6 +30,7 @@ export default function MediaViewerScreen() {
 
 	const share = useCallback(async () => {
 		try {
+			if (shareLocalFile(uri, name)) return;
 			await Share.share({ url: uri, title: name });
 		} catch (cause) {
 			Alert.alert(
@@ -44,9 +45,7 @@ export default function MediaViewerScreen() {
 			const saved = await saveImageToPhotos(uri);
 			Alert.alert(
 				saved ? "Saved to Photos" : "Couldn’t save image",
-				saved
-					? undefined
-					: "Allow photo-library access in iPhone Settings and try again.",
+				saved ? undefined : "Allow photo access in Settings and try again.",
 			);
 		} catch {
 			Alert.alert("Couldn’t save image", "The image could not be saved.");

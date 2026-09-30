@@ -5,6 +5,7 @@ import { Monitor, Radio, ShieldCheck } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	Platform,
 	Pressable,
 	ScrollView,
 	Text,
@@ -345,7 +346,9 @@ export default function NearbyConnectScreen() {
 										<Text className="max-w-72 text-center font-sans text-sm leading-5 text-muted-foreground">
 											{discoveryState.state === "waiting" ||
 											discoveryState.state === "failed"
-												? "Nearby access is unavailable. Check Local Network access for Zuse in iPhone Settings."
+												? Platform.OS === "android"
+													? "Nearby access is unavailable. Allow nearby devices for Zuse in Settings, and stay on the same Wi-Fi as the Mac."
+													: "Nearby access is unavailable. Check Local Network access for Zuse in iPhone Settings."
 												: "Keep Zuse open on the Mac and make sure both devices have Wi-Fi enabled."}
 										</Text>
 										<Button

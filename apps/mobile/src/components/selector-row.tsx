@@ -1,6 +1,7 @@
 import { ChevronsUpDown } from "lucide-react-native";
 import { Text, View } from "react-native";
 
+import { AnchoredMenu } from "~/components/ui/anchored-menu";
 import { colors } from "~/theme";
 
 export type SelectorOption = {
@@ -11,11 +12,14 @@ export type SelectorOption = {
 };
 
 /**
- * Non-iOS stub of the selector row: renders the current label + chevron without
- * the native menu (this app is iOS-first).
+ * Non-iOS selector. Opens the same choices as the SwiftUI menu, anchored to
+ * the row, including while the keyboard is up.
  */
 export function SelectorRow({
 	label,
+	options,
+	disabled = false,
+	emptyLabel = "None",
 	compact = false,
 }: {
 	symbol: string;
@@ -25,15 +29,40 @@ export function SelectorRow({
 	emptyLabel?: string;
 	compact?: boolean;
 }) {
+	const items =
+		disabled || options.length === 0
+			? [
+					{
+						key: "empty",
+						label: emptyLabel,
+						disabled: true,
+						onPress: () => {},
+					},
+				]
+			: options.map((option) => ({
+					key: option.key,
+					label: option.label,
+					selected: option.selected,
+					onPress: option.onSelect,
+				}));
+
 	return (
-		<View className={`${compact ? "h-7" : "h-11"} flex-row items-center gap-2`}>
-			<Text
-				className="font-sans-medium text-[15px] text-foreground"
-				numberOfLines={1}
-			>
-				{label}
-			</Text>
-			<ChevronsUpDown size={11} color={colors.tertiaryFg} />
-		</View>
+		<AnchoredMenu
+			accessibilityLabel={label}
+			trigger={
+				<View
+					className={`${compact ? "h-7" : "h-11"} flex-row items-center gap-2`}
+				>
+					<Text
+						className="font-sans-medium text-[15px] text-foreground"
+						numberOfLines={1}
+					>
+						{label}
+					</Text>
+					<ChevronsUpDown size={11} color={colors.tertiaryFg} />
+				</View>
+			}
+			items={items}
+		/>
 	);
 }

@@ -1,4 +1,5 @@
 import { requireOptionalNativeModule } from "expo";
+import { PermissionsAndroid, Platform } from "react-native";
 
 import {
 	type NearbyService,
@@ -60,8 +61,38 @@ const Native = requireOptionalNativeModule<LocalConnectivityNativeModule>(
 
 export const localConnectivityAvailable = Native !== null;
 
+let askedForNearbyPermission = false;
+
+/**
+ * Android 13+ discovers Wi-Fi services with nearby-devices access. Older
+ * releases still require location access for the same NSD browse. Ask once
+ * per process so a denial does not reopen the dialog on every path change.
+ */
+const ensureAndroidNearbyPermission = async (): Promise<void> => {
+	if (Platform.OS !== "android") return;
+	const version =
+		typeof Platform.Version === "number" ? Platform.Version : Number.NaN;
+	const permission =
+		version >= 33
+			? PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES
+			: PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION;
+	if (permission === undefined) return;
+	if (await PermissionsAndroid.check(permission)) return;
+	if (askedForNearbyPermission) return;
+	askedForNearbyPermission = true;
+	await PermissionsAndroid.request(permission, {
+		title: "Find nearby computers",
+		message:
+			"Zuse looks for a Mac on this Wi-Fi network so you can pair without scanning a QR code.",
+		buttonPositive: "Allow",
+		buttonNegative: "Not now",
+	});
+};
+
 export const startLocalDiscovery = async (): Promise<void> => {
-	await Native?.startDiscovery();
+	if (Native === null) return;
+	await ensureAndroidNearbyPermission();
+	await Native.startDiscovery();
 };
 
 export const stopLocalDiscovery = async (): Promise<void> => {
