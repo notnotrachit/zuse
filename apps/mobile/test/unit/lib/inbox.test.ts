@@ -331,8 +331,9 @@ test("cloud chats without threads use the searchable normal feed without a fake 
 		searching: false,
 	});
 	expect(
-		feed.filter((item) => item.type === "chat" && item.context === "recent"),
+		feed.filter((item) => item.type === "chat" && item.context === "project"),
 	).toHaveLength(1);
+	expect(feed.some((item) => item.type === "project-header")).toBe(true);
 	expect(
 		buildInboxGroups({ ...input, query: "Mobile polish" })[0]?.rows,
 	).toHaveLength(1);

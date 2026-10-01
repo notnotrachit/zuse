@@ -6,6 +6,7 @@ import {
 import { cloudFailurePresentation } from "@zuse/client-runtime/cloud-failure-presentation";
 import {
 	type CapabilityManifest,
+	Chat,
 	type CloudAccountImage,
 	type CloudAuthStatus,
 	type CloudChatSummary,
@@ -115,15 +116,19 @@ export const cloudCatalogBundles = (
 					return bundle;
 				return {
 					...bundle,
-					chats: bundle.chats.map((item) =>
-						item !== chat
-							? item
-							: {
-									...item,
-									title: row.title,
-									activeSessionId: row.activeSessionId ?? null,
-								},
-					),
+					chats: bundle.chats.map((item) => {
+						if (item !== chat) return item;
+						const next = {
+							...item,
+							title: row.title,
+							activeSessionId: row.activeSessionId ?? null,
+						};
+						try {
+							return Chat.make(next);
+						} catch {
+							return next as Chat;
+						}
+					}),
 					sessions:
 						row.activeSessionId !== null &&
 						!bundle.sessions.some(

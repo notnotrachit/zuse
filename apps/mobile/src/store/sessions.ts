@@ -1,13 +1,13 @@
-import type {
+import {
 	Chat,
-	Folder,
-	Message,
-	PermissionMode,
-	ProviderId,
-	RuntimeMode,
+	type Folder,
+	type Message,
+	type PermissionMode,
+	type ProviderId,
+	type RuntimeMode,
 	Session,
-	SessionStatus,
-	WorktreeId,
+	type SessionStatus,
+	type WorktreeId,
 } from "@zuse/contracts";
 import { Effect, Fiber, Stream } from "effect";
 import { Atom } from "effect/unstable/reactivity";
@@ -855,6 +855,22 @@ const patchChat = (
 				},
 	);
 
+const withClassFields = <A>(
+	value: A,
+	fields: Partial<A>,
+	make: (value: A) => A,
+): A => {
+	const next = { ...value, ...fields };
+	// Spread drops Schema.Class identity. Rebuild it, but keep the plain
+	// object when `make` rejects a partial fixture or a row that is not a
+	// full Chat/Session — that throw used to redbox mark-read and mode edits.
+	try {
+		return make(next);
+	} catch {
+		return next as A;
+	}
+};
+
 const patchChatFields = (
 	bundles: readonly ProjectBundle[],
 	chatId: Chat["id"],
@@ -863,7 +879,9 @@ const patchChatFields = (
 	bundles.map((bundle) => ({
 		...bundle,
 		chats: bundle.chats.map((chat) =>
-			chat.id === chatId ? ({ ...chat, ...fields } as Chat) : chat,
+			chat.id === chatId
+				? withClassFields(chat, fields, (value) => Chat.make(value))
+				: chat,
 		),
 	}));
 
@@ -938,7 +956,7 @@ const patchSessionFields = (
 		...bundle,
 		sessions: bundle.sessions.map((session) =>
 			session.id === sessionId
-				? ({ ...session, ...fields } as Session)
+				? withClassFields(session, fields, (value) => Session.make(value))
 				: session,
 		),
 	}));

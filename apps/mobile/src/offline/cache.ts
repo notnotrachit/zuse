@@ -18,7 +18,7 @@ import * as FileSystem from "expo-file-system/legacy";
 
 import { CacheCorrupt } from "../rpc/errors";
 import { slugConnectionKey } from "./cache-utils";
-import { SessionsSnapshot } from "./sessions-snapshot";
+import { encodeSessionsSnapshot, SessionsSnapshot } from "./sessions-snapshot";
 
 export type { SessionsSnapshot } from "./sessions-snapshot";
 
@@ -178,12 +178,10 @@ export const writeSessionsSnapshot = (
 	snapshot: SessionsSnapshot,
 ) =>
 	ensureDir(`${ROOT}/${slugConnectionKey(connKey)}`).pipe(
-		Effect.andThen(
-			writeJson(
-				sessionsPath(connKey),
-				Schema.encodeSync(SessionsSnapshot)(snapshot),
-			),
-		),
+		// Encode lazily. Calling encode while building this Effect throws out of
+		// the promise chain and surfaces as an uncaught redbox on device.
+		Effect.andThen(() => Effect.sync(() => encodeSessionsSnapshot(snapshot))),
+		Effect.andThen((encoded) => writeJson(sessionsPath(connKey), encoded)),
 	);
 
 const EncodedMessagesSnapshot = Schema.Struct({

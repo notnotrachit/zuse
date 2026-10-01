@@ -17,12 +17,17 @@ import {
 } from "react-native";
 
 import { ConnectionRecoveryBanner } from "~/components/connection-recovery-banner";
-import { HomeChatRow } from "~/components/home/home-chat-row";
+import {
+	closeOpenChatSwipes,
+	HomeChatRow,
+} from "~/components/home/home-chat-row";
+import { HomeGroupHeader } from "~/components/home/home-group-header";
 import { HomeProjectHeader } from "~/components/home/home-project-header";
 import { HomeSectionHeader } from "~/components/home/home-section-header";
 import { HomeSkeleton } from "~/components/home/home-skeleton";
 import { ProjectDragRow } from "~/components/home/project-drag-row";
-import { useProjectOrder } from "~/components/home/use-project-order";
+import { ProjectGroupNameDialog } from "~/components/home/project-group-name-dialog";
+import { useProjectLayout } from "~/components/home/use-project-order";
 import { Button } from "~/components/ui/button";
 import { EmptyState } from "~/components/ui/empty-state";
 import { GlassSurface } from "~/components/ui/glass-surface";
@@ -43,7 +48,6 @@ import {
 	nextInboxGroupDisplay,
 } from "~/lib/inbox";
 import { startLoadingDeadline } from "~/lib/loading-deadline";
-import { moveProject, orderProjects } from "~/lib/project-order";
 import {
 	authAccountAtom,
 	authBusyAtom,
@@ -132,9 +136,17 @@ export default function HomeScreen() {
 	const errorByConnection = useAtomValue(errorByConnectionAtom);
 	const pinnedHydrated = useAtomValue(pinnedChatsHydratedAtom);
 	const pinnedKeys = useAtomValue(pinnedChatKeysAtom);
-	const projectOrder = useProjectOrder();
+	const projectLayout = useProjectLayout();
+	const [groupDraft, setGroupDraft] = useState<
+		| { mode: "create"; projectKey?: string }
+		| { mode: "rename"; id: string; name: string }
+		| null
+	>(null);
 	const projectViews = useRef(new Map<string, View>());
 	const projectPositions = useRef(new Map<string, number>());
+	const projectDragEngaged = useRef(false);
+	const listRef = useRef<FlatList<HomeFeedItem>>(null);
+	const scrollToGroupId = useRef<string | null>(null);
 	const [dragging, setDragging] = useState(false);
 	const onboardingHydrated = useAtomValue(onboardingHydratedAtom);
 	const onboardingComplete = useAtomValue(onboardingCompleteAtom);
@@ -264,7 +276,7 @@ export default function HomeScreen() {
 			),
 		[reachableConnections, account, connectionSnapshots, bundlesByConnection],
 	);
-	const unorderedGroups = useMemo(
+	const groups = useMemo(
 		() =>
 			buildInboxGroups({
 				connections: feedConnections,
@@ -276,7 +288,7 @@ export default function HomeScreen() {
 		[bundlesByConnection, pinnedKeys, feedConnections, search, statusBySession],
 	);
 	const projectOrderKey = useCallback(
-		(group: (typeof unorderedGroups)[number]) =>
+		(group: (typeof groups)[number]) =>
 			JSON.stringify([
 				connections.find((connection) => connection.key === group.connectionKey)
 					?.environmentId ?? group.connectionKey,
@@ -284,14 +296,30 @@ export default function HomeScreen() {
 			]),
 		[connections],
 	);
-	const groups = useMemo(
-		() => orderProjects(unorderedGroups, projectOrder.order, projectOrderKey),
-		[unorderedGroups, projectOrder.order, projectOrderKey],
-	);
 	const feed = useMemo(
-		() => buildHomeFeed({ groups, displayStates, searching }),
-		[displayStates, groups, searching],
+		() =>
+			buildHomeFeed({
+				groups,
+				displayStates,
+				searching,
+				layout: projectLayout.layout,
+				projectKey: projectOrderKey,
+			}),
+		[displayStates, projectLayout.layout, projectOrderKey, searching, groups],
 	);
+	useEffect(() => {
+		const id = scrollToGroupId.current;
+		if (id === null) return;
+		const index = feed.findIndex(
+			(item) => item.type === "group-header" && item.id === id,
+		);
+		if (index < 0) {
+			if (!searching) scrollToGroupId.current = null;
+			return;
+		}
+		scrollToGroupId.current = null;
+		listRef.current?.scrollToIndex({ index, viewPosition: 0 });
+	}, [feed, searching]);
 	const loading =
 		!authHydrated ||
 		!connectionsHydrated ||
@@ -402,16 +430,54 @@ export default function HomeScreen() {
 	const renderItem = ({ item }: { item: HomeFeedItem }) => {
 		switch (item.type) {
 			case "section-header":
-				return <HomeSectionHeader title={item.title} />;
-			case "project-header":
+				return (
+					<HomeSectionHeader
+						title={item.title}
+						actionLabel={
+							item.title === "Projects" && !searching ? "New group" : undefined
+						}
+						onAction={
+							item.title === "Projects" && !searching
+								? () => setGroupDraft({ mode: "create" })
+								: undefined
+						}
+					/>
+				);
+			case "group-header":
+				return (
+					<HomeGroupHeader
+						name={item.name}
+						projectCount={item.projectCount}
+						collapsed={item.collapsed}
+						onToggle={() => projectLayout.toggleCollapsed(item.id)}
+						onRename={() =>
+							setGroupDraft({
+								mode: "rename",
+								id: item.id,
+								name: item.name,
+							})
+						}
+						onDissolve={() => projectLayout.dissolveGroup(item.id)}
+					/>
+				);
+			case "group-empty":
+				return (
+					<Text className="px-8 py-2 font-sans text-[13px] text-muted-foreground">
+						No projects in this group yet. Use a project's menu to move one
+						here.
+					</Text>
+				);
+			case "project-header": {
+				const projectKey = projectOrderKey(item.group);
 				return (
 					<ProjectDragRow
-						enabled={!searching && projectOrder.ready}
+						enabled={!searching && projectLayout.ready}
 						register={(view) => {
 							if (view) projectViews.current.set(item.group.key, view);
 							else projectViews.current.delete(item.group.key);
 						}}
 						onStart={() => {
+							projectDragEngaged.current = true;
 							setDragging(true);
 							projectPositions.current.clear();
 							for (const [key, view] of projectViews.current)
@@ -420,7 +486,12 @@ export default function HomeScreen() {
 										projectPositions.current.set(key, y + height / 2);
 								});
 						}}
-						onFinish={() => setDragging(false)}
+						onFinish={() => {
+							setDragging(false);
+							setTimeout(() => {
+								projectDragEngaged.current = false;
+							}, 300);
+						}}
 						onDrop={(screenY) => {
 							const targets = groups.filter((group) =>
 								projectPositions.current.has(group.key),
@@ -440,31 +511,69 @@ export default function HomeScreen() {
 										: best,
 								undefined,
 							);
-							if (!target) return;
-							const keys = groups.map(projectOrderKey);
-							const from = keys.indexOf(projectOrderKey(item.group));
-							const next = moveProject(
-								keys,
-								from,
-								keys.indexOf(projectOrderKey(target)) - from,
+							if (!target || target.key === item.group.key) return;
+							const targetItem = feed.find(
+								(entry) =>
+									entry.type === "project-header" &&
+									entry.group.key === target.key,
 							);
-							projectOrder.save([
-								...next,
-								...projectOrder.order.filter((key) => !keys.includes(key)),
-							]);
+							if (
+								targetItem?.type !== "project-header" ||
+								targetItem.containerKey !== item.containerKey
+							) {
+								return;
+							}
+							projectLayout.moveWithin(
+								groups.map(projectOrderKey),
+								projectKey,
+								projectOrderKey(target),
+							);
 						}}
 					>
 						<HomeProjectHeader
 							group={item.group}
 							collapsed={item.collapsed}
+							nested={item.nested}
 							connections={reachableConnections}
-							onToggle={() => updateGroup(item.group.key, "toggle-collapsed")}
+							onToggle={() => {
+								if (projectDragEngaged.current) return;
+								updateGroup(item.group.key, "toggle-collapsed");
+							}}
+							menuItems={[
+								...projectLayout.layout.groups
+									.filter((group) => group.id !== item.containerKey)
+									.map((group) => ({
+										key: `move-${group.id}`,
+										label: `Move to ${group.name}`,
+										onPress: () =>
+											projectLayout.assignProject(projectKey, group.id),
+									})),
+								...(item.containerKey === "root"
+									? []
+									: [
+											{
+												key: "remove",
+												label: "Remove from group",
+												onPress: () =>
+													projectLayout.assignProject(projectKey, null),
+											},
+										]),
+								{
+									key: "new-group",
+									label: "New group with this project",
+									onPress: () => setGroupDraft({ mode: "create", projectKey }),
+								},
+							]}
 						/>
 					</ProjectDragRow>
 				);
+			}
 			case "show-more":
 				return (
-					<View className="flex-row gap-1 px-3 py-1 pl-10">
+					<View
+						className="flex-row gap-1 px-3 py-1 pl-10"
+						style={item.nested ? { marginLeft: 12 } : undefined}
+					>
 						{item.hiddenCount > 0 ? (
 							<Button
 								size="sm"
@@ -489,6 +598,7 @@ export default function HomeScreen() {
 				return (
 					<HomeChatRow
 						item={item}
+						swipeEnabled={!dragging}
 						onArchive={onArchiveRow}
 						onTogglePin={onTogglePinRow}
 					/>
@@ -605,6 +715,7 @@ export default function HomeScreen() {
 				/>
 			</Stack.Toolbar>
 			<FlatList
+				ref={listRef}
 				scrollEnabled={!dragging}
 				className="flex-1 bg-background"
 				data={feed}
@@ -612,9 +723,16 @@ export default function HomeScreen() {
 				renderItem={renderItem}
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerClassName="px-4 pb-28 pt-2"
-				initialNumToRender={12}
+				initialNumToRender={16}
 				windowSize={7}
-				removeClippedSubviews={!dragging}
+				removeClippedSubviews={false}
+				onScrollBeginDrag={closeOpenChatSwipes}
+				onScrollToIndexFailed={(info) => {
+					listRef.current?.scrollToOffset({
+						offset: info.averageItemLength * info.index,
+						animated: true,
+					});
+				}}
 				keyboardDismissMode="on-drag"
 				keyboardShouldPersistTaps="handled"
 				refreshControl={
@@ -775,6 +893,26 @@ export default function HomeScreen() {
 						</View>
 					)
 				}
+			/>
+			<ProjectGroupNameDialog
+				visible={groupDraft !== null}
+				title={groupDraft?.mode === "rename" ? "Rename group" : "New group"}
+				initialName={groupDraft?.mode === "rename" ? groupDraft.name : ""}
+				confirmLabel={groupDraft?.mode === "rename" ? "Rename" : "Create"}
+				onCancel={() => setGroupDraft(null)}
+				onSubmit={(name) => {
+					if (groupDraft?.mode === "rename") {
+						projectLayout.renameGroup(groupDraft.id, name);
+					} else if (groupDraft?.mode === "create") {
+						scrollToGroupId.current = projectLayout.createGroup(
+							name,
+							groupDraft.projectKey === undefined
+								? []
+								: [groupDraft.projectKey],
+						);
+					}
+					setGroupDraft(null);
+				}}
 			/>
 		</>
 	);
